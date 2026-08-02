@@ -31,6 +31,10 @@ export function markdownToTiptap(markdown: string): ConversionResult {
     source = source.slice(fm[0].length);
   }
   source = source
+    // Keep Ygdria's spoiler mark through Markdown source editing. Markdown
+    // itself has no standard spoiler syntax, so use a private token while
+    // parsing, then restore it as an inline mark below.
+    .replace(/<span\b[^>]*\bdata-ygdria-redacted\b[^>]*>([\s\S]*?)<\/span>/gi, (_match, text) => `[[ygdria:redacted:${encodeURIComponent(text)}]]`)
     .replace(/^\$\$\s*\n([\s\S]*?)\n\$\$\s*$/gm, (_match, formula) => `<div data-ygdria-math-block data-formula="${encodeURIComponent(formula.trim())}"></div>`)
     .replace(/^\$\$([^\n]+?)\$\$\s*$/gm, (_match, formula) => `<div data-ygdria-math-block data-formula="${encodeURIComponent(formula.trim())}"></div>`)
     // MathJax/Typora/Obsidian also use \[ ... \] for display math.
@@ -292,11 +296,16 @@ function inlineNodes(tokens: any[] = [], marks: any[] = [], warnings: string[] =
 }
 function referenceTextNodes(value: string, marks: any[]) {
   const output: any[] = [];
-  const referencesAndMath = /(!?)\[\[note:([^|\]]+)(?:\|([^\]]+))?\]\]|(?<!\\)\$([^$\n]+?)\$/g;
+  const referencesAndMath = /(!?)\[\[note:([^|\]]+)(?:\|([^\]]+))?\]\]|(?<!\\)\$([^$\n]+?)\$|\[\[ygdria:redacted:([^\]]*)\]\]/g;
   let p = 0; let match: RegExpExecArray | null;
   while ((match = referencesAndMath.exec(value))) {
     if (match.index > p) output.push({ type: "text", text: value.slice(p, match.index), ...(marks.length ? { marks } : {}) });
     if (match[4]) output.push({ type: "mathInline", attrs: { formula: match[4].trim() } });
+    else if (match[5] !== undefined) {
+      let text = match[5];
+      try { text = decodeURIComponent(text); } catch { /* retain malformed encoded text */ }
+      output.push({ type: "text", text, marks: [...marks, { type: "redacted" }] });
+    }
     else output.push(match[1] ? { type: "text", text: match[0], ...(marks.length ? { marks } : {}) } : { type: "noteReference", attrs: { noteId: match[2], title: match[3] || match[2] } });
     p = match.index + match[0].length;
   }
@@ -329,8 +338,12 @@ export function tiptapToMarkdown(document: NoteContent): { markdown: string; war
         return kids;
       case "paragraph":
         return kids + "\n\n";
-      case "text":
-        return node.text || "";
+      case "text": {
+        const text = node.text || "";
+        return node.marks?.some((mark: any) => mark.type === "redacted")
+          ? `<span data-ygdria-redacted>${text}</span>`
+          : text;
+      }
       case "heading":
         return "#".repeat(node.attrs?.level || 1) + " " + kids + "\n\n";
       case "codeBlock":

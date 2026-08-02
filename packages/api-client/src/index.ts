@@ -8,6 +8,12 @@ export class YgdriaClient {
   setDeviceToken(deviceToken?: string) {
     this.deviceToken = deviceToken;
   }
+  getDeviceToken() {
+    return this.deviceToken;
+  }
+  getServerUrl() {
+    return this.baseUrl;
+  }
   peerId() {
     return this.baseUrl;
   }
@@ -34,6 +40,12 @@ export class YgdriaClient {
       throw error;
     }
     if (r.status === 204) return undefined as T;
+    const contentType = r.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      throw new Error(
+        `API 未返回 JSON（${r.status} ${r.statusText}，Content-Type: ${contentType || "unknown"}）。请检查服务地址是否指向 Ygdria 服务。`,
+      );
+    }
     return r.json();
   }
   private async requestBinary(path: string): Promise<Response> {

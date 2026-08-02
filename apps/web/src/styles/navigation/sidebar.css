@@ -32,6 +32,12 @@
   margin-bottom: 9px;
   color: #171819;
 }
+.quickbar-brand img {
+  display: block;
+  width: 29px;
+  height: 29px;
+  object-fit: contain;
+}
 .quickbar-button:hover,
 .quickbar-button:focus-visible {
   background: #e1e8eb;
@@ -148,3 +154,8 @@ button {
   color: #92959c;
 }
 .file-import-input { display: none; }
+
+/* Mobile-only surfaces: hidden on desktop, revealed by the phone media query
+   in breakpoints.css / the native shell rules in capacitor.css. */
+.mobile-tab-bar { display: none; }
+.mobile-tree-actions { display: none; }

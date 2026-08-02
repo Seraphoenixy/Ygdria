@@ -13,6 +13,7 @@ import {
   ClipboardPaste,
   Code,
   Edit3,
+  EyeOff,
   Highlighter,
   Image,
   IndentIncrease,
@@ -67,6 +68,7 @@ const EMPTY_EDITOR_STATE = {
   isUnderline: false,
   isStrike: false,
   isCode: false,
+  isRedacted: false,
   isBlockquote: false,
   isCodeBlock: false,
   isBulletList: false,
@@ -204,6 +206,7 @@ function EditorTools({
         isUnderline: currentEditor.isActive("underline"),
         isStrike: currentEditor.isActive("strike"),
         isCode: currentEditor.isActive("code"),
+        isRedacted: currentEditor.isActive("redacted"),
         isBlockquote: currentEditor.isActive("blockquote"),
         isCodeBlock: currentEditor.isActive("codeBlock"),
         isBulletList: currentEditor.isActive("bulletList"),
@@ -498,6 +501,7 @@ function EditorTools({
           <ToolbarDropdown active={openDropdown === "decoration"} compact label={labels.textDecoration} icon={<Type size={16} />} onToggle={() => toggleDropdown("decoration")}><ToolbarGroup>
             <ToolbarButton active={state.isUnderline} label={labels.underline} icon={<Underline size={16} />} onClick={() => run(() => editor.chain().focus().toggleUnderline().run())} />
             <ToolbarButton active={state.isStrike} label={labels.strikethrough} icon={<Strikethrough size={16} />} onClick={() => run(() => editor.chain().focus().toggleStrike().run())} />
+            <ToolbarButton active={state.isRedacted} label={labels.redacted} icon={<EyeOff size={16} />} onClick={() => run(() => (editor.chain().focus() as any).toggleRedacted().run())} />
           </ToolbarGroup></ToolbarDropdown>
           <ColorButton type="text" color={state.color || DEFAULT_TEXT_COLOR} label={labels.textColor} locale={locale} onChange={(color) => editor.chain().focus().setColor(color).run()} onReset={() => editor.chain().focus().unsetColor().run()} />
           <ColorButton type="highlight" color={state.highlight || DEFAULT_HIGHLIGHT_COLOR} label={labels.highlight} locale={locale} onChange={(color) => editor.chain().focus().setHighlight({ color }).run()} onReset={() => editor.chain().focus().unsetHighlight().run()} />
@@ -544,6 +548,7 @@ function EditorTools({
               <ToolbarGroup>
                 <ToolbarButton active={state.isUnderline} label={labels.underline} icon={<Underline size={16} />} onClick={() => run(() => editor.chain().focus().toggleUnderline().run())} />
                 <ToolbarButton active={state.isStrike} label={labels.strikethrough} icon={<Strikethrough size={16} />} onClick={() => run(() => editor.chain().focus().toggleStrike().run())} />
+                <ToolbarButton active={state.isRedacted} label={labels.redacted} icon={<EyeOff size={16} />} onClick={() => run(() => (editor.chain().focus() as any).toggleRedacted().run())} />
               </ToolbarGroup>
             </ToolbarDropdown>
             <ColorButton type="text" color={state.color || DEFAULT_TEXT_COLOR} label={labels.textColor} locale={locale} onChange={(color) => editor.chain().focus().setColor(color).run()} onReset={() => editor.chain().focus().unsetColor().run()} />
@@ -837,6 +842,7 @@ const TOOLBAR_LABELS = {
     italic: "斜体",
     underline: "下划线",
     strikethrough: "删除线",
+    redacted: "黑幕（点击文字显示）",
     textColor: "文字颜色",
     highlight: "高亮",
     formatPainter: "格式刷（选择要应用的文本）",
@@ -875,6 +881,7 @@ const TOOLBAR_LABELS = {
     italic: "Italic",
     underline: "Underline",
     strikethrough: "Strikethrough",
+    redacted: "Spoiler mask (click text to reveal)",
     textColor: "Text color",
     highlight: "Highlight",
     formatPainter: "Format painter (select text to apply)",

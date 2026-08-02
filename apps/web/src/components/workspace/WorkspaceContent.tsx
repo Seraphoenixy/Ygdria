@@ -14,6 +14,7 @@ import { NoteContent } from "../../features/note/NoteContent";
 import type { NoteContentData } from "../../features/note/NoteContent";
 import { SettingsPage } from "../../features/settings/SettingsPage";
 import type { ProtectedClientSession } from "../../lib/client-crypto";
+import { isPhoneLayout } from "../../lib/mobileLayout";
 
 export interface WorkspaceContentProps {
   // Tab management
@@ -39,6 +40,10 @@ export interface WorkspaceContentProps {
   onToggleTree?: () => void;
   toggleMarkdownView?: () => void;
   markdownView: boolean;
+  protectedSession?: { configured: boolean; unlocked: boolean };
+  onProtectedSessionToggle?: () => void;
+  readingMode?: boolean;
+  onToggleReadingMode?: () => void;
   convertNote: { mutate: (type: "text" | "code") => void };
   onViewRevisionHistory: () => void;
 
@@ -131,6 +136,10 @@ export function WorkspaceContent({
   onToggleTree,
   toggleMarkdownView,
   markdownView,
+  protectedSession,
+  onProtectedSessionToggle,
+  readingMode,
+  onToggleReadingMode,
   convertNote,
   onViewRevisionHistory,
   activeEditor,
@@ -184,8 +193,13 @@ export function WorkspaceContent({
   createNewNote,
   decryptedTitles,
 }: WorkspaceContentProps) {
+  // On phones the tab strip is collapsed by default so the document reclaims
+  // the vertical space taken by the stacked fixed bars (tab strip + toolbar +
+  // editor toolbar). The user can expand it on demand via the chevron.
+  const [tabsCollapsed, setTabsCollapsed] = React.useState(() => isPhoneLayout());
+  const phone = isPhoneLayout();
   return (
-    <section className="content">
+    <section className={`content${tabsCollapsed ? " tabs-collapsed" : ""}`}>
       <TabBar
         tabs={tabs}
         activeTabId={activeTabId}
@@ -196,6 +210,9 @@ export function WorkspaceContent({
         onClose={closeTab}
         onNewTab={openNewTab}
         onContextMenu={onTabContextMenu}
+        collapsible={phone}
+        collapsed={tabsCollapsed}
+        onToggleCollapsed={() => setTabsCollapsed((value) => !value)}
       />
       <Toolbar
         breadcrumb={noteBreadCrumb}
@@ -222,9 +239,13 @@ export function WorkspaceContent({
         )}
         onViewRevisionHistory={onViewRevisionHistory}
         onToggleMarkdownView={
-          noteData?.type === "text" && !selectedTrashed && editing ? toggleMarkdownView : undefined
+          noteData?.type === "text" && !noteData.isProtected && !selectedTrashed && editing ? toggleMarkdownView : undefined
         }
         markdownView={markdownView}
+        protectedSession={protectedSession}
+        onProtectedSessionToggle={onProtectedSessionToggle}
+        readingMode={readingMode}
+        onToggleReadingMode={onToggleReadingMode}
       />
       {noteData && !selectedTrashed && (
         <EditorToolbar

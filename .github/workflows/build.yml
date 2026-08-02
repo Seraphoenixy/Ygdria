@@ -109,6 +109,7 @@ jobs:
         run: |
           pnpm --filter @ygdria/mobile exec cap add android
           pnpm --filter @ygdria/mobile exec cap sync android
+          node scripts/apply-android-icon.mjs
           sed -i -E \
             -e "s/versionName \"[^\"]+\"/versionName \"$VERSION\"/" \
             apps/mobile/android/app/build.gradle
@@ -297,6 +298,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
       - name: Download release assets
         uses: actions/download-artifact@v6
         with:

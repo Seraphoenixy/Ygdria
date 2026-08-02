@@ -1037,6 +1037,27 @@
   padding: 0.05em 0.15em;
 }
 
+/* Sensitive-text curtain. The mark stays in the document, while the
+   revealed class is a local, temporary display state added by a click. */
+.ygdria-document .ygdria-redacted,
+.ygdria-document [data-ygdria-redacted] {
+  display: inline;
+  padding: 0.05em 0.14em;
+  border-radius: 2px;
+  background: #111;
+  color: #111 !important;
+  cursor: pointer;
+  user-select: none;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.ygdria-document .ygdria-redacted.is-revealed,
+.ygdria-document [data-ygdria-redacted].is-revealed {
+  background: transparent;
+  color: inherit !important;
+  user-select: text;
+}
+
 /* ── Markdown view ── */
 .ygdria-markdown-view {
   display: flex;

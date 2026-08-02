@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { YgdriaClient } from "@ygdria/api-client";
 import { useQueryClient } from "@tanstack/react-query";
+import { Capacitor } from "@capacitor/core";
+import { BookOpen } from "lucide-react";
 import { SYSTEM_ROOT_NOTE_ID } from "@ygdria/shared";
 import { create } from "zustand";
 import { t, type Locale } from "../lib/i18n";
@@ -15,6 +17,7 @@ import { PasswordDialog } from "../components/chrome/PasswordDialog";
 import { MigrationToServerDialog } from "../components/chrome/MigrationToServerDialog";
 import { DeviceAccessGate } from "../components/chrome/DeviceAccessGate";
 import { WindowControls } from "../components/chrome/WindowControls";
+import { MobileTabBar } from "../components/chrome/MobileTabBar";
 import { WorkspaceLayout } from "../components/workspace/WorkspaceLayout";
 import { WorkspaceContent } from "../components/workspace/WorkspaceContent";
 import {
@@ -43,15 +46,41 @@ import { useSync } from "../hooks/useSync";
 import { useWorkspaceSelection } from "../hooks/useWorkspaceSelection";
 import { useWorkspaceTabs } from "../hooks/useWorkspaceTabs";
 import { useMaintenance } from "../hooks/useMaintenance";
-import { saveRemoteCredential } from "../lib/credentialStorage";
+import { useMobileGestures } from "../hooks/useMobileGestures";
+import { saveRemoteCredential, clearRemoteCredential } from "../lib/credentialStorage";
+import { isPhoneLayout, isNativePhone } from "../lib/mobileLayout";
+import { configureShareReceiver } from "../lib/shareReceiver";
 
 // Local development uses Vite's same-origin proxy; deployments can set VITE_API_URL.
 const SESSION_DEVICE_TOKEN_KEY = "ygdria.device-token";
 const DESKTOP_ONBOARDING_COMPLETE_KEY = "ygdria.desktop-onboarding-complete";
-const initialDeviceToken =
-  typeof window === "undefined"
-    ? undefined
-    : (window.sessionStorage.getItem(SESSION_DEVICE_TOKEN_KEY) ?? undefined);
+
+/** Persist the freshly issued device token to every location a later launch
+ *  might read from. `sessionStorage` is enough for the same-tab refresh path
+ *  used by browsers; the OS-secure-store copy is what survives a cold start of
+ *  the native WebView, which is exactly when the user should NOT be prompted
+ *  for their master password again. */
+function persistDeviceToken(client: YgdriaClient, deviceToken: string) {
+  client.setDeviceToken(deviceToken);
+  window.sessionStorage.setItem(SESSION_DEVICE_TOKEN_KEY, deviceToken);
+  if (Capacitor.isNativePlatform()) {
+    const serverUrl = client.getServerUrl();
+    if (serverUrl) {
+      void saveRemoteCredential({ serverUrl, deviceToken });
+    }
+  }
+}
+
+/** Drop every cached copy of the device token. Used when the server rejects
+ *  the stored token (e.g. revoked, expired, or rotated) so the next launch
+ *  falls back to the password prompt instead of looping on a bad credential. */
+function discardDeviceToken(client: YgdriaClient) {
+  client.setDeviceToken(undefined);
+  window.sessionStorage.removeItem(SESSION_DEVICE_TOKEN_KEY);
+  if (Capacitor.isNativePlatform()) {
+    void clearRemoteCredential();
+  }
+}
 
 const useUi = create<{
   selected?: string;
@@ -85,12 +114,102 @@ import { RemoteProxyClient } from "./RemoteProxyClient";
 
 export function App({ client }: { client: YgdriaClient }) {
   const { selected, selectedTrashed, editing, locale, set } = useUi();
-  const [treeCollapsed, setTreeCollapsed] = useState(false);
+  // On phones the note tree is an off-canvas drawer, so it starts collapsed to
+  // keep the document visible on launch (otherwise the fixed drawer + scrim
+  // cover the editor). On desktop it is an inline column and stays expanded.
+  // `Capacitor.isNativePlatform()` covers the native shell; a narrow viewport
+  // covers browser/PWA device-emulation so the same default applies there.
+  const [treeCollapsed, setTreeCollapsed] = useState(
+    () => typeof window !== "undefined" && (isNativePhone() || window.innerWidth <= 680),
+  );
   const [treePanelWidth, setTreePanelWidth] = useState(
     () => Math.min(360, Math.max(180, Math.round(window.innerWidth * 0.18))),
   );
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  // On the phone / compact layout the inspector is an off-canvas drawer, so it
+  // starts collapsed too — otherwise, the moment `note.data` resolves,
+  // `showInspector` flips true and the right drawer would cover the document
+  // on first open. On desktop it is an inline column and stays expanded.
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(
+    () => typeof window !== "undefined" && (isNativePhone() || window.innerWidth <= 900),
+  );
   const [inspectorPanelWidth, setInspectorPanelWidth] = useState(200);
+  const [readingMode, setReadingMode] = useState(false);
+  useEffect(() => {
+    document.body.classList.toggle("reading-mode", readingMode);
+  }, [readingMode]);
+
+  // Hand the authenticated API client to the share receiver so images shared
+  // from other apps (captured by initShareReceiver at startup) can be persisted
+  // as a new note. Re-runs if the locale changes so queued shares use it.
+  useEffect(() => {
+    configureShareReceiver(client, locale);
+  }, [client, locale]);
+
+  // Keep the `.phone` class (the phone-layout trigger in breakpoints.css) in
+  // sync with the viewport for browser/PWA device-emulation and native
+  // handset↔tablet transitions (rotation, window resize). The decision is
+  // routed through `isPhoneLayout()` so a native *tablet* (short side > 680px
+  // or a fine pointer) always gets the larger inline layout, never the single
+  // column + bottom tab bar.
+  useEffect(() => {
+    const apply = () => document.documentElement.classList.toggle("phone", isPhoneLayout());
+    apply();
+    const onResize = () => apply();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Keep the inspector's collapsed state in sync with the layout mode. In the
+  // compact range (≤ 900px, covering both the phone and the tablet-intermediate
+  // inspector-as-drawer breakpoint) it is a drawer and must start collapsed so
+  // it never auto-covers the document. On a wide viewport it is an inline
+  // column and must be expanded. We drive it from the media query so a
+  // desktop→compact→desktop resize round-trip restores the inline column.
+  // Crucially, this may only *close* the inspector (collapse) or restore the
+  // inline column — it must never *open* a drawer, so it can't race the
+  // drawer mutual-exclusion invariant that `toggleTree`/`toggleInspector` hold.
+  useEffect(() => {
+    const compact = window.matchMedia("(max-width: 900px)");
+    const apply = () => setInspectorCollapsed((current) => compact.matches ? true : current);
+    apply();
+    compact.addEventListener("change", apply);
+    return () => compact.removeEventListener("change", apply);
+  }, []);
+
+  // Drawers are mutually exclusive: opening one dismisses the other.
+  const toggleTree = () => {
+    if (treeCollapsed) {
+      setInspectorCollapsed(true);
+      setTreeCollapsed(false);
+    } else {
+      setTreeCollapsed(true);
+    }
+  };
+  const toggleInspector = () => {
+    if (inspectorCollapsed) {
+      setTreeCollapsed(true);
+      setInspectorCollapsed(false);
+    } else {
+      setInspectorCollapsed(true);
+    }
+  };
+  // Single source of truth for "open the tree drawer": always closes the
+  // inspector first so the two drawers can never be open at once. Both the
+  // bottom-tab-bar button (toggleTree) and the left-edge swipe gesture must
+  // go through this to keep the mutual-exclusion invariant.
+  const openTree = useCallback(() => {
+    setInspectorCollapsed(true);
+    setTreeCollapsed(false);
+  }, []);
+
+  // Escape + focus management for drawers live further down, after
+  // `showInspector` is declared (see the effect near the inspector gate).
+
+  useMobileGestures({
+    treeOpen: !treeCollapsed,
+    onOpenTree: openTree,
+    onCloseTree: () => setTreeCollapsed(true),
+  });
   const [selectedPlacementIds, setSelectedPlacementIds] = useState<Set<string>>(new Set());
   const [selectedPlacementId, setSelectedPlacementId] = useState<string>();
   const [selectionParentId, setSelectionParentId] = useState<string | null | undefined>();
@@ -365,18 +484,24 @@ export function App({ client }: { client: YgdriaClient }) {
           setDeviceAccess("ready");
           return;
         }
-        if (initialDeviceToken) {
+        // Token sources, in order of authority:
+        //   1. The client constructor may already have been given a token
+        //      (native shells hydrate it from the OS secure store in main.tsx
+        //      so cold launches skip the master-password prompt).
+        //   2. The sessionStorage copy covers the browser/desktop refresh
+        //      path; native shells lose it on every cold start.
+        // We validate before trusting either — a stale or revoked token must
+        // not silently leave the user on the login screen.
+        const storedToken = window.sessionStorage.getItem(SESSION_DEVICE_TOKEN_KEY) ?? undefined;
+        const candidate = client.getDeviceToken() ?? storedToken;
+        if (candidate) {
           try {
-            // sessionStorage survives a page refresh, but a new API client is
-            // created for each page load. Restore its bearer token before
-            // validating the saved device session.
-            client.setDeviceToken(initialDeviceToken);
+            if (client.getDeviceToken() !== candidate) client.setDeviceToken(candidate);
             await client.currentDevice();
             if (!cancelled) setDeviceAccess("ready");
             return;
           } catch {
-            client.setDeviceToken(undefined);
-            window.sessionStorage.removeItem(SESSION_DEVICE_TOKEN_KEY);
+            discardDeviceToken(client);
           }
         }
         if (!cancelled) setDeviceAccess(health.authInitialized ? "login" : "initialize");
@@ -612,6 +737,109 @@ export function App({ client }: { client: YgdriaClient }) {
     document.addEventListener("pointerup", onPointerUp);
   };
 
+  // `showInspector` drives both the inspector column and the drawer-scrim.
+  // These declarations/hooks MUST run unconditionally — they sit before every
+  // early return in this component. There are two gates below ("checking" and
+  // the device-access gate); if these hooks ran only after one of them, the
+  // hook count would change when `deviceAccess`/`desktopOnboarding` transition
+  // and React would throw "rendered more hooks than during the previous render".
+  const showInspector = settingsOpen || Boolean(note.data);
+
+  // Escape closes whichever drawer is open (phone layout only).
+  useEffect(() => {
+    if (!document.documentElement.classList.contains("phone")) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (!treeCollapsed) setTreeCollapsed(true);
+      else if (showInspector && !inspectorCollapsed) setInspectorCollapsed(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [treeCollapsed, showInspector, inspectorCollapsed]);
+
+  // Move focus into a drawer when it opens and restore it to the trigger on
+  // close, so keyboard / screen-reader users aren't stranded. Dialog semantics
+  // (role="dialog" + aria-modal="true") are applied only while a drawer is open
+  // (removed on close) so the desktop tree/inspector keep their normal
+  // navigation semantics. While open, Tab / Shift+Tab cycle focus within the
+  // panel to match the aria-modal contract. Phone layout only.
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!document.documentElement.classList.contains("phone")) {
+      for (const sel of [".note-tree-panel", ".note-inspector"]) {
+        const panel = document.querySelector<HTMLElement>(sel);
+        panel?.removeAttribute("role");
+        panel?.removeAttribute("aria-modal");
+        panel?.removeAttribute("tabindex");
+      }
+      return;
+    }
+    const open =
+      !treeCollapsed
+        ? ".note-tree-panel"
+        : showInspector && !inspectorCollapsed
+          ? ".note-inspector"
+          : null;
+    if (open) {
+      lastFocusedRef.current = (document.activeElement as HTMLElement) ?? null;
+      const el = document.querySelector<HTMLElement>(open);
+      if (el) {
+        el.setAttribute("role", "dialog");
+        el.setAttribute("aria-modal", "true");
+        el.setAttribute("tabindex", "-1");
+        requestAnimationFrame(() => el.focus());
+      }
+      // Trap Tab / Shift+Tab inside the open drawer so keyboard users can't
+      // escape into the (now inert) document behind the modal.
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.key !== "Tab") return;
+        const panel = document.querySelector<HTMLElement>(open);
+        if (!panel) return;
+        const focusables = Array.from(
+          panel.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ),
+        ).filter((node) => node.offsetParent !== null || node === document.activeElement);
+        if (focusables.length === 0) {
+          event.preventDefault();
+          panel.focus();
+          return;
+        }
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const activeEl = document.activeElement as HTMLElement | null;
+        if (event.shiftKey) {
+          if (activeEl === first || !panel.contains(activeEl)) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (activeEl === last || !panel.contains(activeEl)) {
+          event.preventDefault();
+          first.focus();
+        }
+      };
+      document.addEventListener("keydown", onKeyDown);
+      return () => document.removeEventListener("keydown", onKeyDown);
+    }
+    // Drawer closed: restore focus to the trigger if focus was still inside the
+    // drawer we just closed (the common Escape / scrim-tap case), so it isn't
+    // stranded on an aria-hidden panel.
+    if (lastFocusedRef.current) {
+      const active = document.activeElement as HTMLElement | null;
+      const stillInside =
+        active && (active.closest(".note-tree-panel") || active.closest(".note-inspector"));
+      if (stillInside) lastFocusedRef.current.focus?.();
+      lastFocusedRef.current = null;
+    }
+    // Restore non-dialog semantics on both panels.
+    for (const sel of [".note-tree-panel", ".note-inspector"]) {
+      const panel = document.querySelector<HTMLElement>(sel);
+      panel?.removeAttribute("role");
+      panel?.removeAttribute("aria-modal");
+      panel?.removeAttribute("tabindex");
+    }
+  }, [treeCollapsed, inspectorCollapsed, showInspector]);
+
   if (deviceAccess === "checking" || desktopOnboarding === "checking") {
     return (
       <main className="device-access-shell">
@@ -619,6 +847,7 @@ export function App({ client }: { client: YgdriaClient }) {
       </main>
     );
   }
+
   const desktopMigration = desktopOnboarding === "required";
   if (desktopMigration || deviceAccess === "initialize" || deviceAccess === "login") {
     return (
@@ -652,8 +881,7 @@ export function App({ client }: { client: YgdriaClient }) {
               session.verifier!,
               label,
             );
-            client.setDeviceToken(credential.deviceToken);
-            window.sessionStorage.setItem(SESSION_DEVICE_TOKEN_KEY, credential.deviceToken);
+            persistDeviceToken(client, credential.deviceToken);
             setProtectedSession((current) => ({ ...current, configured: true, unlocked: true }));
           } else {
             // Login: PAKE challenge-response. No password or static hash is
@@ -679,8 +907,7 @@ export function App({ client }: { client: YgdriaClient }) {
             );
             // Verify the server's proof; a forged/MITM response fails here.
             srpVerifyServer(clientEphemeral, clientSession, result.serverSessionProof);
-            client.setDeviceToken(result.deviceToken);
-            window.sessionStorage.setItem(SESSION_DEVICE_TOKEN_KEY, result.deviceToken);
+            persistDeviceToken(client, result.deviceToken);
           }
           setDeviceAccess("ready");
           refreshTree();
@@ -789,14 +1016,10 @@ export function App({ client }: { client: YgdriaClient }) {
                   session.verifier!,
                   label,
                 );
-                client.setDeviceToken(localCredential.deviceToken);
-                window.sessionStorage.setItem(
-                  SESSION_DEVICE_TOKEN_KEY,
-                  localCredential.deviceToken,
-                );
-                // Desktop: main process already holds the remote token.
-                // Browser: persist remote credential in sessionStorage; native
-                // apps use @capacitor/preferences via saveRemoteCredential.
+                persistDeviceToken(client, localCredential.deviceToken);
+                // The remote client (used for sync) needs its own token copy. On
+                // desktop the main process already holds it; on native shells
+                // the secure store is the source of truth for both clients.
                 if (!isDesktopApp && remoteCredential.deviceToken) {
                   void saveRemoteCredential({
                     serverUrl,
@@ -828,8 +1051,6 @@ export function App({ client }: { client: YgdriaClient }) {
       />
     );
   }
-
-  const showInspector = settingsOpen || Boolean(note.data);
 
   return (
     <>
@@ -938,10 +1159,14 @@ export function App({ client }: { client: YgdriaClient }) {
           restoreNote={restoreNote}
           showInspector={showInspector}
           inspectorCollapsed={inspectorCollapsed}
-          onToggleInspector={() => setInspectorCollapsed((collapsed) => !collapsed)}
-          onToggleTree={() => setTreeCollapsed((collapsed) => !collapsed)}
+          onToggleInspector={toggleInspector}
+          onToggleTree={toggleTree}
           toggleMarkdownView={toggleMarkdownView}
           markdownView={markdownView}
+          protectedSession={protectedSession}
+          onProtectedSessionToggle={handleProtectedSessionToggle}
+          readingMode={readingMode}
+          onToggleReadingMode={() => setReadingMode((value) => !value)}
           convertNote={convertNote}
           onViewRevisionHistory={() => setRevisionHistoryOpen(true)}
           activeEditor={activeEditor}
@@ -1000,8 +1225,28 @@ export function App({ client }: { client: YgdriaClient }) {
           createNewNote={createNewNote}
           decryptedTitles={decryptedTitles}
         />
+        <MobileTabBar
+          locale={locale}
+          treeOpen={!treeCollapsed}
+          onToggleTree={toggleTree}
+          searchActive={activeTabId === "search"}
+          onToggleSearch={() =>
+            activeTabId === "search" ? closeTab("search") : openSearch()
+          }
+          historyActive={activeTabId === "history"}
+          onToggleHistory={() =>
+            activeTabId === "history" ? closeTab("history") : openHistory()
+          }
+          archiveActive={activeTabId === "archive"}
+          onToggleArchive={() =>
+            activeTabId === "archive" ? closeTab("archive") : openArchive()
+          }
+          settingsActive={settingsOpen}
+          onToggleSettings={() =>
+            settingsOpen ? closeTab("settings") : openSettings()
+          }
+        />
         {showInspector &&
-          !inspectorCollapsed &&
           (settingsOpen ? (
             <SettingsOutline locale={locale} />
           ) : (
@@ -1177,12 +1422,27 @@ export function App({ client }: { client: YgdriaClient }) {
             onSubmit={migrateToEmptyServer}
           />
         )}
-        {!treeCollapsed && (
+        <div
+          className="tree-drawer-scrim"
+          aria-hidden="true"
+          onClick={() => setTreeCollapsed(true)}
+        />
+        {showInspector && (
           <div
-            className="tree-drawer-scrim"
+            className="inspector-drawer-scrim"
             aria-hidden="true"
-            onClick={() => setTreeCollapsed(true)}
+            onClick={() => setInspectorCollapsed(true)}
           />
+        )}
+        {readingMode && (
+          <button
+            type="button"
+            className="reading-mode-exit"
+            onClick={() => setReadingMode(false)}
+          >
+            <BookOpen size={16} />
+            {t(locale, "exitReadingMode")}
+          </button>
         )}
       </WorkspaceLayout>
     </>

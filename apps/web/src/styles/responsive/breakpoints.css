@@ -1,83 +1,552 @@
+/* ───────────────────────────────────────────────────────────────────────
+   SHARED MOBILE TOKENS (single source of truth)
+   These values are consumed by the phone layout below and used to be
+   duplicated verbatim in capacitor.css. Changing a drawer width, animation
+   timing, tab-bar height or safe-area var here updates BOTH the browser
+   device-emulation path and the native Capacitor shell at once. capacitor.css
+   now only carries native-shell-specific bits (see that file).
+   ─────────────────────────────────────────────────────────────────────── */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --mt-drawer-w: min(82vw, 320px);
+  --mt-inspector-w: min(86vw, 360px);
+  --mt-anim: 0.28s;
+  --mt-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --mt-tabbar-h: 56px;
+  --mt-scrim: rgba(0, 0, 0, 0.42);
+}
+
+/* Drawer scrims are only meaningful on phones; keep them out of the desktop
+   (where the inspector is an inline column and the tree is a fixed rail, not
+   overlays). They are always rendered so CSS can fade them; visibility is
+   controlled by the panel collapse state inside the phone rules. */
+.tree-drawer-scrim,
+.inspector-drawer-scrim {
+  display: none;
+}
+
+/* Tablet intermediate (681–900px): the right inspector becomes a drawer so
+   the document reclaims the column it used to occupy. The 48px rail and the
+   note tree stay as inline columns here; the full bottom-tab-bar phone layout
+   only kicks in at ≤ 680px (see `.phone` below). */
 @media (max-width: 900px) {
   article {
     max-width: 100%;
     padding-inline: 24px;
   }
-}
-@media (max-width: 680px) {
-  main {
-    grid-template-columns: 1fr;
-  }
-  .quickbar {
+  .inspector-resizer {
     display: none;
   }
-  .sidebar-resizer {
-    display: none;
+  /* The right inspector is now a fixed drawer (below), so the grid must drop
+     its 200px inspector column and let the document reclaim that width. With
+     the inspector out of flow, main is just 48px rail + tree + document. */
+  main:not(.device-access-shell) {
+    grid-template-columns: 48px var(--tree-panel-width, 240px) minmax(0, 1fr) 0;
   }
-  .note-inspector {
-    display: none;
+  main:not(.device-access-shell).tree-panel-collapsed {
+    grid-template-columns: 48px minmax(0, 0) minmax(0, 1fr) 0;
   }
-  /* Hamburger that opens the note-tree drawer on phones. */
-  .mobile-tree-toggle {
-    display: inline-flex;
-  }
-  /* Note tree becomes an off-canvas drawer instead of a hidden column. */
-  .note-tree-panel {
+  main:not(.device-access-shell) > .note-inspector {
     position: fixed;
-    top: var(--sat, 0px);
-    left: 0;
-    bottom: var(--sab, 0px);
-    width: min(82vw, 320px);
-    z-index: 40;
-    background: #f2f3f5;
-    box-shadow: 2px 0 16px rgba(0, 0, 0, 0.22);
-    transform: translateX(-105%);
-    transition: transform 0.22s ease;
+    inset: 0 0 0 auto;
+    width: min(var(--mt-inspector-w), calc(100vw - var(--sal) - var(--sar)));
+    z-index: 50;
+    margin-top: 0;
+    padding: calc(18px + var(--sat)) max(16px, var(--sar)) calc(18px + var(--sab)) max(16px, var(--sal));
+    border-left: 1px solid #d9dce1;
+    background: #f7f8f9;
+    box-shadow: -2px 0 18px rgba(0, 0, 0, 0.24);
+    transform: translateX(100%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform var(--mt-anim) var(--mt-ease), visibility 0s linear var(--mt-anim);
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
   }
-  main:not(.tree-panel-collapsed) .note-tree-panel {
+  main:not(.inspector-panel-collapsed) > .note-inspector {
     transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition: transform var(--mt-anim) var(--mt-ease), visibility 0s;
   }
-  .tree-drawer-scrim {
+  .inspector-drawer-scrim {
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 35;
-    background: rgba(0, 0, 0, 0.35);
+    z-index: 48;
+    background: var(--mt-scrim);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity var(--mt-anim) ease, visibility 0s linear var(--mt-anim);
   }
-  :root[data-theme="dark"] .note-tree-panel {
-    background: #1c2128;
+  main:not(.inspector-panel-collapsed) .inspector-drawer-scrim {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity var(--mt-anim) ease, visibility 0s;
   }
-  article {
-    margin: 28px auto;
-    padding-inline: 18px;
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   PHONE LAYOUT (native shell OR a viewport ≤ 680px)
+   Triggered by the `.phone` class on <html>, which main.tsx adds synchronously
+   for a native platform or a narrow viewport, and App.tsx keeps in sync on
+   resize. Using a class instead of `@media (max-width: 680px)` lets a native
+   WebView that reports a desktop-sized viewport share ONE rule set with
+   browser device-emulation — the duplicate block that used to live in
+   capacitor.css is gone.
+
+   Specificity note: application-shell.css defines the grid columns via
+   compound state classes (e.g. `.tree-panel-collapsed.inspector-panel-collapsed`,
+   specificity 0,2,0). On phones the layout is ALWAYS a single column with the
+   panels as fixed overlays, so we force it with !important regardless of the
+   collapse state or stylesheet load order.
+   ─────────────────────────────────────────────────────────────────────── */
+.phone main:not(.device-access-shell) > .quickbar {
+  display: none !important;
+}
+/* Single full-width column: the document owns the whole viewport. */
+.phone main:not(.device-access-shell) {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: 100% !important;
+  height: 100dvh;
+  /* Native shells overlay the status bar; browsers report --sat as 0. */
+  padding-top: var(--sat);
+}
+.phone main:not(.device-access-shell) > .content {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  /* Reserve room for the fixed bottom tab bar (incl. home-indicator safe area). */
+  padding-bottom: calc(var(--mt-tabbar-h) + var(--sab));
+}
+.phone .sidebar-resizer,
+.phone .inspector-resizer {
+  display: none;
+}
+
+/* ── Note tree drawer: full-height sheet sliding from the LEFT edge ──
+   Closed state uses visibility/pointer-events (not display:none) so the
+   slide-out transition can finish before the panel is removed from paint. */
+.phone .note-tree-panel {
+  position: fixed;
+  /* Full-bleed box (inset: 0) then reserve every safe-area inset as padding so
+     the scrolling content never sits under a notch, rounded corner, or the
+     home indicator in ANY orientation (portrait notch, landscape side notch,
+     iPad corners). This is the uniform safe-area strategy shared by all fixed
+     layers below. */
+  inset: 0;
+  width: min(var(--mt-drawer-w), calc(100vw - var(--sal) - var(--sar)));
+  padding: var(--sat) var(--sar) var(--sab) var(--sal);
+  z-index: 50;
+  background: #f2f3f5;
+  box-shadow: 2px 0 18px rgba(0, 0, 0, 0.24);
+  transform: translateX(calc(-100% - var(--sal)));
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform var(--mt-anim) var(--mt-ease), visibility 0s linear var(--mt-anim);
+  overflow-y: auto;
+}
+.phone main:not(.tree-panel-collapsed) .note-tree-panel {
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition: transform var(--mt-anim) var(--mt-ease), visibility 0s;
+}
+/* Mobile-only action row inside the tree drawer — a single horizontal
+   scroll strip of square, icon-only touch targets (no duplicates of the
+   bottom tab bar: search / history / archive / settings / drawer toggle). */
+.phone .mobile-tree-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin: 0 3px 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.phone .mobile-tree-actions::-webkit-scrollbar {
+  display: none;
+}
+.phone .mobile-tree-actions button {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 44px square touch target (Apple HIG / Material). */
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: #e7eaed;
+  color: #3c3f46;
+  font: inherit;
+  cursor: pointer;
+}
+.phone .mobile-tree-actions button:active {
+  background: #dde1e5;
+}
+.phone .mobile-tree-actions button.active {
+  color: #0f6cbd;
+  background: #e5f1fb;
+}
+.phone .mobile-tree-actions button.sync-shortcut.sync-synced {
+  color: #16794b;
+  background: #ddf4e7;
+}
+.phone .mobile-tree-actions button.sync-shortcut.sync-pending {
+  color: #a45a00;
+  background: #fff0d6;
+}
+.phone .mobile-tree-actions button.sync-shortcut.sync-syncing {
+  color: #0f6cbd;
+  background: #e5f1fb;
+}
+.phone .mobile-tree-actions button.sync-shortcut.sync-syncing svg {
+  animation: quickbar-sync-spin 1s linear infinite;
+}
+
+/* ── Right info panel drawer: full-height sheet from the RIGHT edge ── */
+.phone main:not(.device-access-shell) > .note-inspector {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(var(--mt-inspector-w), calc(100vw - var(--sal) - var(--sar)));
+  padding-top: calc(18px + var(--sat));
+  padding-bottom: calc(18px + var(--sab));
+  padding-left: max(16px, var(--sal));
+  padding-right: max(16px, var(--sar));
+  z-index: 50;
+  margin-top: 0;
+  border-left: 1px solid #d9dce1;
+  background: #f7f8f9;
+  box-shadow: -2px 0 18px rgba(0, 0, 0, 0.24);
+  transform: translateX(calc(100% + var(--sar)));
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform var(--mt-anim) var(--mt-ease), visibility 0s linear var(--mt-anim);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.phone main:not(.inspector-panel-collapsed) > .note-inspector {
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+  transition: transform var(--mt-anim) var(--mt-ease), visibility 0s;
+}
+
+/* ── Drawers scrims (tap / swipe to dismiss) ──
+   Always rendered; opacity/visibility are toggled by the panel collapse
+   state so they fade in/out together with the drawers. */
+.phone .tree-drawer-scrim,
+.phone .inspector-drawer-scrim {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 48;
+  background: var(--mt-scrim);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--mt-anim) ease, visibility 0s linear var(--mt-anim);
+}
+.phone main:not(.tree-panel-collapsed) .tree-drawer-scrim,
+.phone main:not(.inspector-panel-collapsed) .inspector-drawer-scrim {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity var(--mt-anim) ease, visibility 0s;
+}
+
+/* ── Bottom tab bar (replaces the 48px rail) ──
+   height includes the bottom safe area (home indicator); with box-sizing
+   border-box the 56px content box sits ABOVE the indicator, and the extra
+   --sab height is blank space within the bar. */
+.phone .mobile-tab-bar {
+  display: flex;
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 45;
+  height: calc(var(--mt-tabbar-h) + var(--sab));
+  /* Reserve the bottom home-indicator zone and the left/right rounded-corner
+     safe areas so the edge tabs (Notes / Settings) never sit under the
+     hardware corner or get clipped in landscape. The safe-area padding scales
+     with orientation while the content box keeps its 56px height. */
+  padding-left: var(--sal);
+  padding-right: var(--sar);
+  padding-bottom: var(--sab);
+  background: #f7f8f9;
+  border-top: 1px solid #e2e4e8;
+}
+.phone .mobile-tab {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #5b5e66;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.phone .mobile-tab svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 2;
+}
+.phone .mobile-tab.active {
+  color: #0f6cbd;
+  font-weight: 600;
+}
+.phone .mobile-tab:active {
+  background: #eceef0;
+}
+
+/* ── Hamburger that opens the note-tree drawer on phones ── */
+.phone .mobile-tree-toggle {
+  display: inline-flex;
+}
+
+/* ── Slimmer top toolbar: shorter, no wide side padding ── */
+.phone .content header {
+  padding: 0 12px;
+}
+.phone .content .note-toolbar {
+  height: 48px;
+  min-height: 48px;
+  gap: 8px;
+}
+/* Collapse the breadcrumb to just the current title on phones. */
+.phone .note-toolbar .crumb .crumb-link:not(.crumb-root),
+.phone .note-toolbar .crumb .crumb-separator {
+  display: none;
+}
+.phone .note-toolbar .crumb {
+  font-size: 14px;
+}
+
+/* ── Editing toolbar: scroll horizontally on phones instead of clipping the
+   trailing buttons (the "More" trigger and the read/edit toggle were being
+   cut off because the base rule uses overflow:hidden + nowrap). The secondary
+   group already collapses into the "More" panel via overflow-level-2 (toolbar
+   width < 720), so only the primary buttons + mode toggle remain. ── */
+.phone .editor-toolbar {
+  flex-wrap: nowrap;
+  padding: 6px 10px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.phone .editor-toolbar::-webkit-scrollbar {
+  display: none;
+}
+/* The base rule sets `min-width: 0` on .editor-toolbar-group so it can shrink
+   on narrow viewports. On a scrolling toolbar that would collapse each group
+   to 0 width and stack its `flex: 0 0 auto` children at the same X position,
+   visibly overlapping the icons. Pin each direct child to its content width
+   so the inner 2px gap is preserved while the whole row scrolls. */
+.phone .editor-toolbar > .editor-toolbar-group,
+.phone .editor-toolbar > .editor-toolbar-dropdown,
+.phone .editor-toolbar > .editor-toolbar-separator,
+.phone .editor-toolbar > .editor-toolbar-md-btn {
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+.phone .editor-toolbar-group {
+  min-width: max-content;
+  flex: 0 0 auto;
+}
+/* Keep the read/edit toggle pinned to the visible right edge while the rest
+   scrolls, so it's always reachable on a narrow screen. It must carry the
+   toolbar's own background (inherited, so it follows light/dark) and sit
+   above the scrolling icons — otherwise they bleed through it and the icons
+   look stacked/overlapping. */
+.phone .editor-toolbar .mode-toggle {
+  position: sticky;
+  right: 0;
+  z-index: 6;
+  flex: 0 0 auto;
+  background: #f8f9fa;
+  backdrop-filter: none;
+}
+:root[data-theme="dark"] .phone .editor-toolbar .mode-toggle {
+  background: #1c2128;
+}
+.phone .editor-toolbar .mode-btn {
+  padding: 5px 12px;
+}
+
+/* ── Top tab strip: horizontal scroll instead of crushing the content ── */
+.phone .note-tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.phone .note-tabs::-webkit-scrollbar {
+  display: none;
+}
+.phone .note-tabs-list {
+  width: max-content;
+  min-width: 100%;
+}
+
+/* ── Collapsible tab strip (phone) ──
+   When collapsed, the full multi-tab strip is replaced by a single slim row
+   that shows only the active tab; tapping it expands the strip again. This
+   stops a tall stack of fixed bars (tab strip + toolbar + editor toolbar) from
+   eating the narrow portrait viewport. The compact row keeps the 42px height
+   so the sticky toolbar below it stays aligned. */
+.phone .note-tabs-compact {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background: #f4f5f6;
+  border-bottom: 1px solid #d9dce1;
+}
+.phone .note-tabs-compact-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #3c3f46;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  max-width: 100%;
+}
+.phone .note-tabs-compact-toggle:active {
+  background: #e6e9ec;
+}
+.phone .note-tabs-compact-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.phone .note-tab-collapse {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  margin: 0 0 3px 4px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  place-items: center;
+  color: #62646b;
+  background: transparent;
+  cursor: pointer;
+}
+.phone .note-tab-collapse:hover {
+  color: #33353a;
+  background: #e3eaed;
+}
+
+/* ── Immersive reading comfort ── */
+.phone article {
+  margin: 0;
+  padding: 16px 16px 28px;
+}
+.phone article h1,
+.phone .note-title-input {
+  font-size: 26px;
+  margin-bottom: 20px;
+}
+.phone .ygdria-document {
+  font-size: 17px;
+  line-height: 1.7;
+}
+.phone .ygdria-document h1 { font-size: 1.6rem; }
+.phone .ygdria-document h2 { font-size: 1.35rem; }
+.phone .ygdria-document h3 { font-size: 1.18rem; }
+.phone .ygdria-editor { min-height: 220px; }
+.phone .ygdria-document pre,
+.phone .ygdria-document .tableWrapper {
+  margin-inline: -8px;
+}
+
+/* ── Dark theme ── */
+:root[data-theme="dark"] .phone .note-tree-panel {
+  background: #1c2128;
+}
+:root[data-theme="dark"] .phone main:not(.device-access-shell) > .note-inspector {
+  background: #1c2128;
+}
+:root[data-theme="dark"] .phone .mobile-tab-bar {
+  background: #1c2128;
+  border-top-color: #2a2f37;
+}
+:root[data-theme="dark"] .phone .mobile-tab {
+  color: #9aa0a8;
+}
+:root[data-theme="dark"] .phone .mobile-tab.active {
+  color: #4ea1ff;
+}
+:root[data-theme="dark"] .phone .mobile-tab:active {
+  background: #262c34;
+}
+:root[data-theme="dark"] .phone .mobile-tree-actions button {
+  background: #2a2f37;
+  color: #c9ced6;
+}
+:root[data-theme="dark"] .phone .mobile-tree-actions button.active {
+  color: #4ea1ff;
+  background: #1b2b3d;
+}
+:root[data-theme="dark"] .phone .mobile-tree-actions button.sync-shortcut.sync-synced {
+  color: #4cc38a;
+  background: #14301f;
+}
+:root[data-theme="dark"] .phone .mobile-tree-actions button.sync-shortcut.sync-pending {
+  color: #e3a85b;
+  background: #332512;
+}
+:root[data-theme="dark"] .phone .mobile-tree-actions button.sync-shortcut.sync-syncing {
+  color: #4ea1ff;
+  background: #1b2b3d;
+}
+
+/* Dark theme for the desktop inline tree / inspector (kept global so the
+   phone-scoped rules above don't regress desktop dark mode). */
+:root[data-theme="dark"] .note-tree-panel {
+  background: #1c2128;
+}
+:root[data-theme="dark"] .note-inspector {
+  background: #1c2128;
+}
+
+/* ── Respect reduced-motion: drop the slide/fade so drawers snap ── */
+@media (prefers-reduced-motion: reduce) {
+  /* The tree is an off-canvas drawer only on phones. */
+  .phone .note-tree-panel,
+  .phone .tree-drawer-scrim,
+  .phone .inspector-drawer-scrim {
+    transition-duration: 0.001ms !important;
   }
-  article h1,
-  .note-title-input {
-    font-size: 28px;
-    margin-bottom: 24px;
-  }
-  .ygdria-document {
-    font-size: 16px;
-    line-height: 1.68;
-  }
-  .ygdria-document h1 {
-    font-size: 1.6rem;
-  }
-  .ygdria-document h2 {
-    font-size: 1.35rem;
-  }
-  .ygdria-document h3 {
-    font-size: 1.18rem;
-  }
-  .ygdria-editor {
-    min-height: 220px;
-  }
-  .ygdria-document pre,
-  .ygdria-document .tableWrapper {
-    margin-inline: -8px;
-  }
-  .content header {
-    padding: 0 16px;
+  /* The inspector becomes a fixed drawer across the whole ≤900px compact
+     range (phone AND tablet-intermediate), so its slide must be suppressed
+     there too — not just on phones. */
+  @media (max-width: 900px) {
+    main:not(.device-access-shell) > .note-inspector,
+    .inspector-drawer-scrim {
+      transition-duration: 0.001ms !important;
+    }
   }
 }

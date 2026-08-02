@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Search, ChevronsLeft, FilePlus2, History, Settings, Archive, Sprout, Calendar, Lock, Unlock, RefreshCw, CloudCheck, CloudUpload, Paperclip } from "lucide-react";
+import { Search, ChevronsLeft, FilePlus2, History, Settings, Archive, Calendar, Lock, Unlock, RefreshCw, CloudCheck, CloudUpload, Paperclip, Home } from "lucide-react";
 import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement, WorkspaceTab } from "../../types/workspace";
@@ -207,7 +207,7 @@ export function TreePanel({
             title={t(locale, "quickHome")}
             onClick={onClearTabs}
           >
-            <Sprout size={29} strokeWidth={2.25} />
+            <img src="/ygdria-forest-mark.png" alt="" aria-hidden="true" />
           </button>
           <QuickButton
             label={t(locale, "quickNewNote")}
@@ -290,7 +290,63 @@ export function TreePanel({
           </QuickButton>
         </div>
       </nav>
-      <aside className="note-tree-panel">
+      <aside id="note-tree-panel" className="note-tree-panel">
+        <div className="mobile-tree-actions">
+          <button
+            type="button"
+            aria-label={t(locale, "quickHome")}
+            title={t(locale, "quickHome")}
+            onClick={onClearTabs}
+          >
+            <Home size={20} />
+          </button>
+          <button
+            type="button"
+            disabled={creatingNote}
+            aria-label={t(locale, "quickNewNote")}
+            title={t(locale, "quickNewNote")}
+            onClick={() => onCreateNote()}
+          >
+            <FilePlus2 size={20} />
+          </button>
+          <button
+            type="button"
+            aria-label={t(locale, "quickTodayNote")}
+            title={t(locale, "quickTodayNote")}
+            onClick={onOpenTodayNote}
+          >
+            <Calendar size={20} />
+          </button>
+          <button
+            type="button"
+            aria-label={protectedSession.unlocked
+              ? t(locale, "lockProtectedSession")
+              : protectedSession.configured
+                ? t(locale, "unlockProtectedSession")
+                : t(locale, "setupProtectedSession")}
+            title={protectedSession.unlocked
+              ? t(locale, "lockProtectedSession")
+              : protectedSession.configured
+                ? t(locale, "unlockProtectedSession")
+                : t(locale, "setupProtectedSession")}
+            className={protectedSession.unlocked ? "active" : ""}
+            onClick={onProtectedSessionToggle}
+          >
+            {protectedSession.unlocked ? <Unlock size={20} /> : <Lock size={20} />}
+          </button>
+          {window.ygdria && (
+            <button
+              type="button"
+              disabled={syncing}
+              aria-label={`${syncing ? t(locale, "syncInProgress") : syncState === "pending" ? t(locale, "syncNeeded") : syncState === "synced" ? t(locale, "syncUpToDate") : t(locale, "syncServer")}${syncProgress ? ` · ${syncProgress}` : ""}`}
+              title={`${syncing ? t(locale, "syncInProgress") : syncState === "pending" ? t(locale, "syncNeeded") : syncState === "synced" ? t(locale, "syncUpToDate") : t(locale, "syncServer")}${syncProgress ? ` · ${syncProgress}` : ""}`}
+              className={`sync-shortcut sync-${syncing ? "syncing" : syncState}`}
+              onClick={onSync}
+            >
+              {syncing ? <RefreshCw size={20} /> : syncState === "synced" ? <CloudCheck size={20} /> : syncState === "pending" ? <CloudUpload size={20} /> : <RefreshCw size={20} />}
+            </button>
+          )}
+        </div>
         <div className="tree-search">
           <Search size={18} />
           <input

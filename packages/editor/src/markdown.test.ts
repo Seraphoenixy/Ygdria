@@ -6,6 +6,12 @@ describe("Markdown conversion", () => {
     expect(JSON.stringify(d)).toContain("noteReference");
     expect(tiptapToMarkdown(d).markdown).toContain("[[note:abc|RAIM]]");
   });
+  it("round-trips redacted text through Markdown source", () => {
+    const source = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "secret", marks: [{ type: "redacted" }] }] }] } as any;
+    const markdown = tiptapToMarkdown(source).markdown;
+    expect(markdown).toContain("data-ygdria-redacted");
+    expect(markdownToTiptap(markdown).document).toMatchObject({ content: [{ content: [{ text: "secret", marks: [{ type: "redacted" }] }] }] });
+  });
   it("parses a GFM table", () =>
     expect(JSON.stringify(markdownToTiptap("| A | B |\n| - | - |\n| 1 | 2 |").document)).toContain(
       "table",

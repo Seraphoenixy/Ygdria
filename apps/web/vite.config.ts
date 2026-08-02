@@ -34,7 +34,16 @@ export default defineConfig(({ mode }) => ({
             },
             preload: {
               input: path.resolve(import.meta.dirname, "../desktop/src/preload.ts"),
-              vite: { build: { outDir: path.resolve(import.meta.dirname, "../desktop/out/preload") } },
+              // Electron's isolated, sandboxed preload is CommonJS. Use a
+              // matching extension as well: a `.mjs` filename can make the
+              // packaged runtime treat this CommonJS bundle as ESM, leaving
+              // the renderer without its local-API credential bridge.
+              vite: {
+                build: {
+                  outDir: path.resolve(import.meta.dirname, "../desktop/out/preload"),
+                  rolldownOptions: { output: { entryFileNames: "[name].cjs", format: "cjs" } },
+                },
+              },
             },
           }),
         ]

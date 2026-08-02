@@ -272,3 +272,41 @@
 .saved + button {
   margin-left: 0;
 }
+
+/* ── Reading mode (works on every viewport) ── */
+body.reading-mode .note-toolbar,
+body.reading-mode .note-tabs,
+body.reading-mode .mobile-tab-bar {
+  display: none !important;
+}
+body.reading-mode .document-scroll {
+  /* Reading mode hides the bottom tab bar; reserve a comfortable bottom margin
+     that also clears the home-indicator safe area on native shells. */
+  padding-bottom: calc(24px + var(--sab));
+}
+.reading-mode-exit {
+  position: fixed;
+  /* Clear the status-bar / notch safe area on every platform (not just native
+     — env() degrades to 0 where unsupported), so the exit button is never
+     tucked under a notch in landscape. */
+  top: calc(10px + var(--sat));
+  right: calc(10px + var(--sar));
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 19px;
+  background: rgba(20, 22, 26, 0.78);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+:root[data-theme="dark"] .reading-mode-exit {
+  background: rgba(220, 224, 230, 0.92);
+  color: #1c2128;
+}

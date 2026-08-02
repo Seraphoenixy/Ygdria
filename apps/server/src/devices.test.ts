@@ -118,7 +118,7 @@ describe("device auth (SRP-6a)", () => {
     expect(config.srpSalt).toBeUndefined();
   });
 
-  it("does not allow the packaged desktop loopback origin or arbitrary CORS origins", async () => {
+  it("allows Capacitor origins but not the packaged desktop loopback or arbitrary origins", async () => {
     // Desktop Electron does NOT need CORS: the main process proxies all
     // remote requests via Node fetch (not subject to CORS). Only the
     // configured server origin is allowed.
@@ -131,6 +131,15 @@ describe("device auth (SRP-6a)", () => {
       },
     });
     expect(desktop.headers["access-control-allow-origin"]).toBeUndefined();
+    const capacitor = await app.inject({
+      method: "OPTIONS",
+      url: "/api/v1/auth/config",
+      headers: {
+        origin: "https://localhost",
+        "access-control-request-method": "GET",
+      },
+    });
+    expect(capacitor.headers["access-control-allow-origin"]).toBe("https://localhost");
     const untrusted = await app.inject({
       method: "OPTIONS",
       url: "/api/v1/auth/config",

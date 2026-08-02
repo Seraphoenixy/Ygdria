@@ -5,9 +5,9 @@
   "scripts": {
     "dev": "corepack pnpm --filter @ygdria/web dev",
     "build": "corepack pnpm --filter @ygdria/web build",
-    "android": "corepack pnpm run build && cap sync android",
+    "android": "corepack pnpm run build && cap sync android && node ../../scripts/apply-android-icon.mjs",
     "ios": "corepack pnpm run build && cap sync ios",
-    "sync": "cap sync",
+    "sync": "cap sync && node ../../scripts/apply-android-icon.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -15,12 +15,14 @@
     "@capacitor/android": "^7.4.2",
     "@capacitor/app": "^7.0.1",
     "@capacitor/core": "^7.4.2",
+    "@capacitor/filesystem": "^7.0.1",
     "@capacitor/haptics": "^7.0.1",
     "@capacitor/keyboard": "^7.0.1",
     "@capacitor/preferences": "^7.0.1",
     "capacitor-secure-storage-plugin": "^0.12.0",
     "@capacitor/splash-screen": "^7.0.1",
     "@capacitor/status-bar": "^7.0.1",
+    "@capgo/capacitor-share-target": "^7.0.0",
     "@ygdria/web": "workspace:*",
     "vite": "^8.0.0"
   },

@@ -34,8 +34,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "../../assets/icons/ygdria-forest.ico",
+        "to": "icon.ico"
       }
     ],
+    "icon": "../../assets/icons/ygdria-forest.ico",
     "win": {
       "target": [
         "nsis"

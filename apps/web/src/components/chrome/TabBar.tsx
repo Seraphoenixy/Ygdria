@@ -1,5 +1,16 @@
 import React from "react";
-import { Plus, Settings, Search, History, Archive, FileText, Paperclip, X } from "lucide-react";
+import {
+  Plus,
+  Settings,
+  Search,
+  History,
+  Archive,
+  FileText,
+  Paperclip,
+  X,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement, WorkspaceTab } from "../../types/workspace";
 
@@ -14,12 +25,59 @@ type TabBarProps = {
   onClose: (tabId: string) => void;
   onNewTab: () => void;
   onContextMenu: (tabId: string, x: number, y: number) => void;
+  /** Phone-only: render the strip in its collapsed (active-tab-only) form. */
+  collapsible?: boolean;
+  /** Phone-only: when true the strip is collapsed to a single active-tab row. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 };
 
 export function TabBar({
-  tabs, activeTabId, pinnedTabIds, noteTitleForTab, locale,
-  onActivate, onClose, onNewTab, onContextMenu,
+  tabs,
+  activeTabId,
+  pinnedTabIds,
+  noteTitleForTab,
+  locale,
+  onActivate,
+  onClose,
+  onNewTab,
+  onContextMenu,
+  collapsible,
+  collapsed,
+  onToggleCollapsed,
 }: TabBarProps) {
+  const activeTitle = (() => {
+    const tab = tabs.find((x) => x.id === activeTabId);
+    if (!tab) return undefined;
+    if (tab.kind === "settings") return t(locale, "settingsTitle");
+    if (tab.kind === "search") return t(locale, "searchTitle");
+    if (tab.kind === "history") return t(locale, "recentChanges");
+    if (tab.kind === "archive") return t(locale, "archivedNotes");
+    if (tab.kind === "attachments") return t(locale, "attachments");
+    if (tab.kind === "new") return t(locale, "newTab");
+    return noteTitleForTab(tab) ?? t(locale, "loading");
+  })();
+
+  // Collapsed (phone): a single slim row showing the active tab, tappable to
+  // expand the full multi-tab strip again. Keeps the tall stack of fixed bars
+  // (tab strip + toolbar + editor toolbar) from eating the narrow viewport.
+  if (collapsible && collapsed) {
+    return (
+      <div className="note-tabs-compact" role="tablist" aria-label={t(locale, "notes")}>
+        <button
+          type="button"
+          className="note-tabs-compact-toggle"
+          aria-expanded={false}
+          aria-label={t(locale, "expandTabs")}
+          onClick={onToggleCollapsed}
+        >
+          <ChevronDown size={16} />
+          <span className="note-tabs-compact-title">{activeTitle}</span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="note-tabs" role="tablist" aria-label={t(locale, "notes")}>
       <div
@@ -38,13 +96,13 @@ export function TabBar({
               ? t(locale, "searchTitle")
             : tab.kind === "history"
               ? t(locale, "recentChanges")
-            : tab.kind === "archive"
-              ? t(locale, "archivedNotes")
-              : tab.kind === "attachments"
-                ? t(locale, "attachments")
-              : tab.kind === "new"
-                  ? t(locale, "newTab")
-                  : noteTitleForTab(tab) ?? t(locale, "loading");
+              : tab.kind === "archive"
+                ? t(locale, "archivedNotes")
+                : tab.kind === "attachments"
+                  ? t(locale, "attachments")
+                  : tab.kind === "new"
+                    ? t(locale, "newTab")
+                    : noteTitleForTab(tab) ?? t(locale, "loading");
           return (
             <div
               className={`note-tab ${activeTabId === tab.id ? "active" : ""}`}
@@ -85,6 +143,17 @@ export function TabBar({
       >
         <Plus size={17} />
       </button>
+      {collapsible && (
+        <button
+          type="button"
+          className="note-tab-collapse"
+          aria-label={t(locale, "collapseTabs")}
+          title={t(locale, "collapseTabs")}
+          onClick={onToggleCollapsed}
+        >
+          <ChevronUp size={16} />
+        </button>
+      )}
     </div>
   );
 }

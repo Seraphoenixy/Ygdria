@@ -216,6 +216,11 @@
   background: #fff;
   box-shadow: 0 20px 55px rgba(24, 27, 32, 0.15);
 }
+.device-access-card > form {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
 .device-access-icon {
   display: grid;
   width: 44px;

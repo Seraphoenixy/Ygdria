@@ -19,6 +19,7 @@ import { normalizePastedHtml } from "./clipboard.js";
 import { markdownToTiptap, tiptapToMarkdown } from "./markdown.js";
 import { YgdriaCodeBlock } from "./CodeBlock.js";
 import { SearchReplace, SearchReplaceBar } from "./SearchReplaceBar.js";
+import { Redacted } from "./Redacted.js";
 import katex from "katex";
 // @ts-ignore
 import "katex/dist/katex.min.css";
@@ -225,6 +226,7 @@ export function YgdriaEditor({
       ClipboardShortcuts,
       Indent,
       NoteReference,
+      Redacted,
       SearchReplace,
     ],
     content: normalizedContent as any,
@@ -276,6 +278,14 @@ export function YgdriaEditor({
         view.dispatch(view.state.tr.deleteSelection());
         return true;
       },
+      handleClick: (_view, _pos, event) => {
+        const target = event.target as HTMLElement | null;
+        const redacted = target?.closest<HTMLElement>("[data-ygdria-redacted]");
+        const wasRevealed = redacted?.classList.contains("is-revealed");
+        editor?.view.dom.querySelectorAll("[data-ygdria-redacted].is-revealed").forEach((element) => element.classList.remove("is-revealed"));
+        if (redacted && !wasRevealed) redacted.classList.add("is-revealed");
+        return false;
+      },
       handleDOMEvents: {
         contextmenu: (view, event) => {
           if (!view.editable) return false;
@@ -299,6 +309,15 @@ export function YgdriaEditor({
     editor?.setEditable(!readOnly);
     if (readOnly) setContextMenu(null);
   }, [editor, readOnly]);
+  useEffect(() => {
+    if (!editor) return;
+    const hideOnOutsidePointer = (event: PointerEvent) => {
+      if (!(event.target instanceof globalThis.Node) || editor.view.dom.contains(event.target)) return;
+      editor.view.dom.querySelectorAll("[data-ygdria-redacted].is-revealed").forEach((element) => element.classList.remove("is-revealed"));
+    };
+    document.addEventListener("pointerdown", hideOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", hideOnOutsidePointer);
+  }, [editor]);
   useEffect(() => {
     if (!editor || editor.isDestroyed || documentIdRef.current === documentId) return;
     documentIdRef.current = documentId;

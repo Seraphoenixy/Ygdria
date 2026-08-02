@@ -16,6 +16,9 @@ const appDataPath = app.getPath("appData");
 // This entry is bundled as CommonJS for Electron.  Do not use
 // `import.meta.dirname` here: Vite's CJS output does not define it.
 const desktopAppPath = app.getAppPath();
+const desktopWindowIconPath = app.isPackaged
+  ? path.join(process.resourcesPath, "icon.ico")
+  : path.resolve(desktopAppPath, "../../assets/icons/ygdria-forest.ico");
 
 function closeLocalApi() {
   if (closeLocalApiPromise) return closeLocalApiPromise;
@@ -96,7 +99,9 @@ function assertTrustedIpcSender(event: IpcMainInvokeEvent) {
 
 app.setName("Ygdria");
 app.setPath("userData", path.join(appDataPath, "Ygdria"));
-app.setPath("sessionData", path.join(appDataPath, "Ygdria Cache"));
+// Keep Electron's disposable session cache alongside the app data. This avoids
+// creating a second top-level "Ygdria Cache" folder in the user's profile.
+app.setPath("sessionData", path.join(appDataPath, "Ygdria", "session-data"));
 
 function databasePath() {
   const dataPath = path.join(app.getPath("userData"), "data");
@@ -197,6 +202,7 @@ function isAllowedRemotePath(method: string, requestPath: string): boolean {
 
 async function createWindow(initialTab?: unknown) {
   window = new BrowserWindow({
+    icon: desktopWindowIconPath,
     width: 1280,
     height: 820,
     minWidth: 900,
@@ -204,7 +210,7 @@ async function createWindow(initialTab?: unknown) {
     frame: false,
     backgroundColor: "#fbfbfc",
     webPreferences: {
-      preload: path.join(desktopAppPath, "out", "preload", "preload.mjs"),
+      preload: path.join(desktopAppPath, "out", "preload", "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,

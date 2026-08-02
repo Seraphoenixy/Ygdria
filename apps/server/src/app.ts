@@ -87,7 +87,12 @@ export function buildApp(
   const origin = options.origin ?? "http://localhost:5173";
   const webDist = options.webDist ?? resolve(import.meta.dirname, "../../web/dist");
   const allowedOrigins = new Set([origin]);
-  if (!options.enableDeviceAuth) {
+  if (options.enableDeviceAuth) {
+    // Capacitor uses fixed WebView origins. Device authentication still
+    // protects every private endpoint with a bearer credential.
+    allowedOrigins.add("https://localhost");
+    allowedOrigins.add("capacitor://localhost");
+  } else {
     allowedOrigins.add("http://localhost:5173");
     allowedOrigins.add("http://127.0.0.1:5173");
   }

@@ -48,6 +48,11 @@ function tableDocument(colwidths: (number | null)[][]): NoteContent {
 }
 
 describe("static table rendering", () => {
+  it("renders redacted text as an interactive spoiler mark", () => {
+    const markup = renderToStaticMarkup(<StaticDocument document={{ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "secret", marks: [{ type: "redacted" }] }] }] }} />);
+    expect(markup).toContain("ygdria-redacted");
+    expect(markup).toContain("data-ygdria-redacted");
+  });
   it("renders a <colgroup> from the first row's colwidth attributes", () => {
     const markup = renderToStaticMarkup(
       <StaticDocument document={tableDocument([[120], [240]])} />,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { YgdriaClient } from "@ygdria/api-client";
+import { Capacitor } from "@capacitor/core";
 import {
   DEFAULT_PROTECTED_SESSION_TIMEOUT_MS,
   MIN_PROTECTED_SESSION_TIMEOUT_MS,
@@ -15,9 +16,23 @@ import {
 } from "../lib/client-crypto";
 import type { Locale } from "../lib/i18n";
 import { t } from "../lib/i18n";
+import { clearRemoteCredential } from "../lib/credentialStorage";
 import type { TreePlacement } from "../types/workspace";
 
 const SESSION_DEVICE_TOKEN_KEY = "ygdria.device-token";
+
+/** Drop every cached copy of the device token (see App.persistDeviceToken for
+ *  the symmetric write). Used after protected-session setup/change because the
+ *  server issues a brand-new SRP verifier, which invalidates the previously
+ *  issued device token — failing to clear it would leave a stale token in
+ *  storage that 401s on the very next request. */
+function discardDeviceToken(client: YgdriaClient) {
+  client.setDeviceToken(undefined);
+  window.sessionStorage.removeItem(SESSION_DEVICE_TOKEN_KEY);
+  if (Capacitor.isNativePlatform()) {
+    void clearRemoteCredential();
+  }
+}
 
 export type PasswordDialogMode = "setup" | "unlock" | "change" | null;
 
@@ -210,8 +225,7 @@ export function useProtectedSession({
             reauthToken,
           );
           session.lock();
-          client.setDeviceToken(undefined);
-          window.sessionStorage.removeItem(SESSION_DEVICE_TOKEN_KEY);
+          discardDeviceToken(client);
           setProtectedSession((current) => ({
             ...current,
             configured: true,
@@ -240,8 +254,7 @@ export function useProtectedSession({
               },
             );
             session.lock();
-            client.setDeviceToken(undefined);
-            window.sessionStorage.removeItem(SESSION_DEVICE_TOKEN_KEY);
+            discardDeviceToken(client);
             setProtectedSession((current) => ({
               ...current,
               configured: true,

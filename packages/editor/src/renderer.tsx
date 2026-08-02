@@ -1,11 +1,28 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import type { NoteContent } from "@ygdria/shared";
 import { StaticCodeBlock } from "./code-highlighting.js";
 import { YgdriaEditor } from "./YgdriaEditor.js";
 import katex from "katex";
 export function StaticDocument({ document }: { document: NoteContent }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const hideAll = () => rootRef.current?.querySelectorAll("[data-ygdria-redacted].is-revealed").forEach((element) => element.classList.remove("is-revealed"));
+
+  useEffect(() => {
+    const hideOnOutsidePointer = (event: PointerEvent) => {
+      if (!(event.target instanceof globalThis.Node) || rootRef.current?.contains(event.target)) return;
+      hideAll();
+    };
+    window.document.addEventListener("pointerdown", hideOnOutsidePointer);
+    return () => window.document.removeEventListener("pointerdown", hideOnOutsidePointer);
+  }, []);
+
   return (
-    <div className="ygdria-document">
+    <div ref={rootRef} className="ygdria-document" onClick={(event) => {
+      const redacted = (event.target as HTMLElement).closest<HTMLElement>("[data-ygdria-redacted]");
+      const wasRevealed = redacted?.classList.contains("is-revealed");
+      hideAll();
+      if (redacted && !wasRevealed) redacted.classList.add("is-revealed");
+    }}>
       {(document.content ?? []).map((node: any, i) => (
         <Node node={node} key={i} />
       ))}
@@ -157,6 +174,9 @@ function renderText(node: any): React.ReactNode {
         }
         break;
       }
+      case "redacted":
+        content = <span className="ygdria-redacted" data-ygdria-redacted="" role="button" tabIndex={0} aria-label="Reveal sensitive text">{content}</span>;
+        break;
     }
   }
   return content;

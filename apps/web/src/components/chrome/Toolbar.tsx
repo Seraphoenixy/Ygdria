@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ChevronsLeft, ChevronsRight, Ellipsis, FileCode2, FileText, History, Home, Menu, RotateCcw } from "lucide-react";
+import { BookOpen, Ellipsis, FileCode2, FileText, History, Home, Lock, Menu, PanelRight, RotateCcw, Unlock } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 
 type BreadcrumbSegment =
@@ -27,6 +27,10 @@ type ToolbarProps = {
   onViewRevisionHistory?: () => void;
   onToggleMarkdownView?: () => void;
   markdownView?: boolean;
+  protectedSession?: { configured: boolean; unlocked: boolean };
+  onProtectedSessionToggle?: () => void;
+  readingMode?: boolean;
+  onToggleReadingMode?: () => void;
 };
 
 export function Toolbar({
@@ -35,6 +39,7 @@ export function Toolbar({
   showInspector, inspectorCollapsed, onToggleInspector, onToggleTree,
   noteType, canConvertNote, onConvertNote, canViewRevisionHistory, onViewRevisionHistory,
   onToggleMarkdownView, markdownView,
+  protectedSession, onProtectedSessionToggle, readingMode, onToggleReadingMode,
 }: ToolbarProps) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
@@ -112,7 +117,7 @@ export function Toolbar({
             <RotateCcw size={17} /> {t(locale, "restoreNote")}
           </button>
         )}
-        {((canConvertNote && onConvertNote) || (canViewRevisionHistory && onViewRevisionHistory)) && (
+        {((canConvertNote && onConvertNote) || (canViewRevisionHistory && onViewRevisionHistory) || onProtectedSessionToggle || onToggleReadingMode) && (
           <div ref={moreMenuRef} className="toolbar-more">
             <button
               type="button"
@@ -130,6 +135,23 @@ export function Toolbar({
                 {canConvertNote && onConvertNote && <button role="menuitem" onClick={() => { onConvertNote(); setMoreOpen(false); }}>
                   {noteType === "code" ? <FileText size={16} /> : <FileCode2 size={16} />} <span>{convertLabel}</span>
                 </button>}
+                {onProtectedSessionToggle && (
+                  <button role="menuitem" onClick={() => { onProtectedSessionToggle(); setMoreOpen(false); }}>
+                    {protectedSession?.unlocked ? <Unlock size={16} /> : <Lock size={16} />}{" "}
+                    <span>
+                      {protectedSession?.unlocked
+                        ? t(locale, "lockProtectedSession")
+                        : protectedSession?.configured
+                          ? t(locale, "unlockProtectedSession")
+                          : t(locale, "setupProtectedSession")}
+                    </span>
+                  </button>
+                )}
+                {onToggleReadingMode && (
+                  <button role="menuitem" onClick={() => { onToggleReadingMode(); setMoreOpen(false); }}>
+                    <BookOpen size={16} /> <span>{readingMode ? t(locale, "exitReadingMode") : t(locale, "readingMode")}</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -142,7 +164,7 @@ export function Toolbar({
             aria-label={inspectorCollapsed ? "展开右侧栏" : "收起右侧栏"}
             onClick={onToggleInspector}
           >
-            {inspectorCollapsed ? <ChevronsLeft size={18} /> : <ChevronsRight size={18} />}
+            <PanelRight size={18} />
           </button>
         )}
       </div>

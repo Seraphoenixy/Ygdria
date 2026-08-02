@@ -1,31 +1,33 @@
 /* Capacitor-native shell adjustments. Only active when the web bundle runs
-   inside a native WebView (body.capacitor-native is added by lib/capacitor.ts). */
+   inside a native WebView (body.capacitor-native is added by lib/capacitor.ts
+   and, synchronously, in main.tsx before first paint).
 
-:root {
-  --sat: env(safe-area-inset-top, 0px);
-  --sab: env(safe-area-inset-bottom, 0px);
-  --sal: env(safe-area-inset-left, 0px);
-  --sar: env(safe-area-inset-right, 0px);
-}
+   The phone LAYOUT itself no longer lives here: it is defined once under the
+   `.phone` class in breakpoints.css and triggered for both native and narrow
+   viewports (main.tsx adds `.phone` to <html> for native or narrow widths,
+   App.tsx keeps it in sync on resize). This file now only carries tweaks that
+   are genuinely native-only. Safe-area variables (--sat/--sab/…) are defined
+   globally in breakpoints.css so the browser build can use them too. */
 
 body.capacitor-native {
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior-y: none;
 }
 
-/* Keep content clear of the status bar (top) and home indicator (bottom). */
-body.capacitor-native main {
-  box-sizing: border-box;
-  height: 100dvh;
-  padding-top: var(--sat);
-  padding-bottom: var(--sab);
+/* Authentication screens are not workspace grids. Keep the card centered even
+   when an Android WebView reports a wide viewport (the `.phone` layout would
+   otherwise still apply, which is fine — but the auth screen is its own shell
+   and must stay centered regardless). */
+body.capacitor-native main.device-access-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
+  min-height: 100dvh;
+  place-items: center;
 }
-
-body.capacitor-native .note-toolbar {
-  padding-top: var(--sat);
-}
-
-body.capacitor-native .tree-drawer-scrim {
-  top: var(--sat);
-  bottom: var(--sab);
+body.capacitor-native .device-access-card {
+  width: min(100%, 430px);
+  max-width: 430px;
+  min-width: 0;
 }

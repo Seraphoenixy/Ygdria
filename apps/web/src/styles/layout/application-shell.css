@@ -28,7 +28,10 @@ main {
   position: relative;
   display: grid;
   grid-template-columns: 48px var(--tree-panel-width, 240px) minmax(0, 1fr) var(--inspector-panel-width, 200px);
+  /* Dynamic viewport unit so mobile browser chrome (URL bar)伸缩 doesn't
+     leave a gap or clip content. Falls back to 100vh where dvh is unsupported. */
   height: 100vh;
+  height: 100dvh;
   min-height: 0;
   overflow: hidden;
 }
