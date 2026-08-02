@@ -74,6 +74,9 @@ jobs:
       VERSION: ${{ needs.metadata.outputs.version }}
       SHORT_HASH: ${{ needs.metadata.outputs.short_hash }}
       VITE_APP_VERSION: ${{ needs.metadata.outputs.version }}
+      # GitHub Actions does not expose the `secrets` context in `if`.
+      # Map it to the job environment, then test it from the step condition.
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
 
     steps:
       - name: Checkout
@@ -115,9 +118,8 @@ jobs:
         run: ./gradlew assembleRelease
 
       - name: Sign release APK
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
