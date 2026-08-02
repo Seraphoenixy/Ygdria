@@ -1,0 +1,83 @@
+@media (max-width: 900px) {
+  article {
+    max-width: 100%;
+    padding-inline: 24px;
+  }
+}
+@media (max-width: 680px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+  .quickbar {
+    display: none;
+  }
+  .sidebar-resizer {
+    display: none;
+  }
+  .note-inspector {
+    display: none;
+  }
+  /* Hamburger that opens the note-tree drawer on phones. */
+  .mobile-tree-toggle {
+    display: inline-flex;
+  }
+  /* Note tree becomes an off-canvas drawer instead of a hidden column. */
+  .note-tree-panel {
+    position: fixed;
+    top: var(--sat, 0px);
+    left: 0;
+    bottom: var(--sab, 0px);
+    width: min(82vw, 320px);
+    z-index: 40;
+    background: #f2f3f5;
+    box-shadow: 2px 0 16px rgba(0, 0, 0, 0.22);
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    overflow-y: auto;
+  }
+  main:not(.tree-panel-collapsed) .note-tree-panel {
+    transform: translateX(0);
+  }
+  .tree-drawer-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    background: rgba(0, 0, 0, 0.35);
+  }
+  :root[data-theme="dark"] .note-tree-panel {
+    background: #1c2128;
+  }
+  article {
+    margin: 28px auto;
+    padding-inline: 18px;
+  }
+  article h1,
+  .note-title-input {
+    font-size: 28px;
+    margin-bottom: 24px;
+  }
+  .ygdria-document {
+    font-size: 16px;
+    line-height: 1.68;
+  }
+  .ygdria-document h1 {
+    font-size: 1.6rem;
+  }
+  .ygdria-document h2 {
+    font-size: 1.35rem;
+  }
+  .ygdria-document h3 {
+    font-size: 1.18rem;
+  }
+  .ygdria-editor {
+    min-height: 220px;
+  }
+  .ygdria-document pre,
+  .ygdria-document .tableWrapper {
+    margin-inline: -8px;
+  }
+  .content header {
+    padding: 0 16px;
+  }
+}

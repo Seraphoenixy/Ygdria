@@ -1,0 +1,15 @@
+:root {
+  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+  color: #333;
+  background: #f2f3f5;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+}
+#root {
+  height: 100vh;
+}

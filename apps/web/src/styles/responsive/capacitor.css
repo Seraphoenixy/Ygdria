@@ -1,0 +1,31 @@
+/* Capacitor-native shell adjustments. Only active when the web bundle runs
+   inside a native WebView (body.capacitor-native is added by lib/capacitor.ts). */
+
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+body.capacitor-native {
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+/* Keep content clear of the status bar (top) and home indicator (bottom). */
+body.capacitor-native main {
+  box-sizing: border-box;
+  height: 100dvh;
+  padding-top: var(--sat);
+  padding-bottom: var(--sab);
+}
+
+body.capacitor-native .note-toolbar {
+  padding-top: var(--sat);
+}
+
+body.capacitor-native .tree-drawer-scrim {
+  top: var(--sat);
+  bottom: var(--sab);
+}

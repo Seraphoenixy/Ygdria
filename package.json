@@ -1,0 +1,38 @@
+{
+  "name": "ygdria",
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0 <25.0.0"
+  },
+  "packageManager": "pnpm@10.16.1",
+  "scripts": {
+    "dev": "corepack pnpm --filter @ygdria/web dev",
+    "dev:server": "corepack pnpm --filter @ygdria/server dev",
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm -r test",
+    "build": "corepack pnpm -r build",
+    "rebuild-search-index": "corepack pnpm --filter @ygdria/database rebuild-search-index",
+    "check-search-index": "corepack pnpm --filter @ygdria/database check-search-index",
+    "doctor": "corepack pnpm --filter @ygdria/database doctor",
+    "ygdria": "corepack pnpm --filter @ygdria/database ygdria"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "0.25.9",
+    "eslint": "^9.30.0",
+    "postject": "1.0.0-alpha.6",
+    "prettier": "^3.6.2",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "better-sqlite3@13.0.1": "patches/better-sqlite3@13.0.1.patch"
+    },
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "esbuild"
+    ]
+  }
+}

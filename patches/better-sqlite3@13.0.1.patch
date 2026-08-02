@@ -1,0 +1,43 @@
+diff --git a/package.json b/package.json
+index 6f35bb3..3ea3bf8 100644
+--- a/package.json
++++ b/package.json
+@@ -35,5 +35,6 @@
+   },
+   "scripts": {
++    "install": "node lib/install.js",
+     "build-release": "node-gyp clean && node-gyp rebuild --release --force_build=1",
+     "build-debug": "node-gyp clean && node-gyp rebuild --debug --force_build=1",
+     "test": "mocha --exit --slow=75 --timeout=5000",
+diff --git a/lib/install.js b/lib/install.js
+new file mode 100644
+index 0000000..b99f8cc
+--- /dev/null
++++ b/lib/install.js
+@@ -0,0 +1,26 @@
++'use strict';
++
++const childProcess = require('child_process');
++const fs = require('fs');
++const path = require('path');
++
++const platform = process.platform === 'linux' && !process.report.getReport().header.glibcVersionRuntime
++  ? 'linuxmusl'
++  : process.platform;
++const prebuild = path.join(__dirname, '..', 'prebuilds', `${platform}-${process.arch}.node`);
++
++// An explicit install script prevents npm from implicitly running `node-gyp
++// rebuild` merely because binding.gyp is present.  Native compilation is only
++// needed for platforms or architectures without an included Node-API binary.
++if (fs.existsSync(prebuild)) {
++  process.exit(0);
++}
++
++const command = process.platform === 'win32' ? 'node-gyp.cmd' : 'node-gyp';
++const result = childProcess.spawnSync(command, ['rebuild'], {
++  cwd: path.join(__dirname, '..'),
++  stdio: 'inherit',
++});
++
++if (result.error) throw result.error;
++process.exit(result.status === null ? 1 : result.status);

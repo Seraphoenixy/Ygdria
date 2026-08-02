@@ -1,0 +1,313 @@
+name: Build and Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+jobs:
+  metadata:
+    name: Determine release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      short_hash: ${{ steps.metadata.outputs.short_hash }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Determine version and commit
+        id: metadata
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(date +'%Y.%-m.%-d')"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_hash=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.16.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+  android:
+    name: Build Android APK
+    needs: [metadata, verify]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.metadata.outputs.version }}
+      SHORT_HASH: ${{ needs.metadata.outputs.short_hash }}
+      VITE_APP_VERSION: ${{ needs.metadata.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.16.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web application
+        run: pnpm --filter @ygdria/web build
+
+      - name: Create and sync Capacitor Android project
+        run: |
+          pnpm --filter @ygdria/mobile exec cap add android
+          pnpm --filter @ygdria/mobile exec cap sync android
+          sed -i -E \
+            -e "s/versionName \"[^\"]+\"/versionName \"$VERSION\"/" \
+            apps/mobile/android/app/build.gradle
+
+      - name: Build release APK (unsigned; signed below if secret present)
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease
+
+      - name: Sign release APK
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        working-directory: apps/mobile/android
+        run: |
+          set -euo pipefail
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          APKSIGNER="$(ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner not found in ANDROID_HOME; cannot sign." >&2
+            exit 1
+          fi
+          "$APKSIGNER" sign \
+            --ks "$RUNNER_TEMP/release.keystore" \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_STORE_PASSWORD \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --out app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/apk/release/app-release-unsigned.apk
+          rm -f "$RUNNER_TEMP/release.keystore"
+
+      - name: Stage APK
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          SIGNED=apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+          UNSIGNED=apps/mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if [ -f "$SIGNED" ]; then
+            cp "$SIGNED" "release/Ygdria-android-v${VERSION}-${SHORT_HASH}.apk"
+            echo "Produced SIGNED release APK: release/Ygdria-android-v${VERSION}-${SHORT_HASH}.apk"
+          else
+            cp "$UNSIGNED" "release/Ygdria-android-v${VERSION}-${SHORT_HASH}-unsigned.apk"
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret configured; produced UNSIGNED APK (not installable on Android)."
+          fi
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: Ygdria-android
+          path: release/Ygdria-android*.apk
+          if-no-files-found: error
+
+  windows:
+    name: Build Windows desktop client
+    needs: [metadata, verify]
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.metadata.outputs.version }}
+      SHORT_HASH: ${{ needs.metadata.outputs.short_hash }}
+      VITE_APP_VERSION: ${{ needs.metadata.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.16.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: pnpm --filter @ygdria/desktop dist:win -- --config.extraMetadata.version=$env:VERSION
+
+      - name: Stage installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          $installer = Get-ChildItem apps/desktop/dist -Filter *.exe | Select-Object -First 1
+          if ($null -eq $installer) { throw "Windows installer was not produced." }
+          Copy-Item -LiteralPath $installer.FullName -Destination "release/Ygdria-windows-setup-v$env:VERSION-$env:SHORT_HASH.exe"
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: Ygdria-windows-setup
+          path: release/Ygdria-windows-setup-*.exe
+          if-no-files-found: error
+
+  linux-server:
+    name: Build Linux standalone server
+    needs: [metadata, verify]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.metadata.outputs.version }}
+      SHORT_HASH: ${{ needs.metadata.outputs.short_hash }}
+      VITE_APP_VERSION: ${{ needs.metadata.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.16.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web and server
+        run: |
+          pnpm --filter @ygdria/web build
+          pnpm --filter @ygdria/server build
+
+      - name: Build Linux x64 SEA release
+        run: |
+          RUNTIME=release/linux-runtime
+          # pnpm v10 requires legacy deploy unless workspace dependencies are
+          # globally configured as injected packages.
+          pnpm --filter @ygdria/server --prod deploy --legacy "$RUNTIME"
+          node scripts/build-linux-sea.mjs "$RUNTIME" release/Ygdria-linux-x64
+
+      - name: Smoke test release without system Node
+        shell: bash
+        run: |
+          SMOKE_HOME="$RUNNER_TEMP/ygdria-linux-smoke"
+          mkdir -p "$SMOKE_HOME"
+          env -i HOME="$SMOKE_HOME" PATH=/ygdria-no-system-tools \
+            ./release/Ygdria-linux-x64/start.sh >"$RUNNER_TEMP/ygdria-linux-smoke.log" 2>&1 &
+          SERVER_PID=$!
+          cleanup() {
+            kill "$SERVER_PID" 2>/dev/null || true
+            wait "$SERVER_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          READY=0
+          for attempt in $(seq 1 30); do
+            if /usr/bin/curl --fail --silent http://127.0.0.1:4318/api/v1/ready >/dev/null; then
+              READY=1
+              break
+            fi
+            /bin/sleep 1
+          done
+          if [ "$READY" -ne 1 ]; then
+            /bin/cat "$RUNNER_TEMP/ygdria-linux-smoke.log"
+            exit 1
+          fi
+          if /usr/bin/env -i PATH=/ygdria-no-system-tools /bin/sh -c 'command -v node || command -v tsx || command -v pnpm'; then
+            echo "Smoke environment unexpectedly exposes a JavaScript runtime"
+            exit 1
+          fi
+
+      - name: Archive Linux x64 release
+        run: tar -C release -czf "release/Ygdria-linux-server-v${VERSION}-${SHORT_HASH}.tar.gz" Ygdria-linux-x64
+
+      - name: Upload Linux server bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: Ygdria-linux-server
+          path: release/Ygdria-linux-server-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [android, windows, linux-server]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v6
+        with:
+          pattern: Ygdria-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" release-assets/* \
+            --title "Ygdria $TAG_NAME" \
+            --generate-notes \
+            --draft

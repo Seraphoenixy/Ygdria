@@ -1,0 +1,26 @@
+{
+  "name": "@ygdria/database",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "migrate": "tsx src/cli.ts migrate",
+    "rebuild-search-index": "tsx src/cli.ts rebuild-search-index",
+    "check-search-index": "tsx src/cli.ts rebuild-search-index --check",
+    "doctor": "tsx src/cli.ts doctor",
+    "ygdria": "tsx src/ygdria-cli.ts"
+  },
+  "dependencies": {
+    "@ygdria/shared": "workspace:*",
+    "better-sqlite3": "^13.0.1",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "tsx": "^4.20.3"
+  }
+}

@@ -1,0 +1,180 @@
+.note-tree {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  padding: 1px 2px 16px;
+}
+.tree-branch {
+  position: relative;
+}
+/* Reveal the hierarchy only while exploring the tree, as VS Code does. */
+.note-tree .tree-branch.has-children::after {
+  position: absolute;
+  z-index: 0;
+  top: 34px;
+  bottom: 0;
+  left: var(--tree-guide-left);
+  width: 1px;
+  background: rgba(89, 92, 101, 0);
+  pointer-events: none;
+  content: "";
+  transition: background-color 120ms ease;
+}
+.note-tree:hover .tree-branch.has-children::after {
+  background: rgba(89, 92, 101, 0.26);
+}
+.language-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: auto 3px 2px;
+  padding: 9px 7px 2px;
+  border-top: 1px solid #e6e6e9;
+  color: #6e7178;
+  font-size: 12px;
+}
+.language-picker span {
+  flex: 1;
+}
+.language-picker select {
+  max-width: 92px;
+  border: 0;
+  outline: 0;
+  color: #51545a;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.tree-item {
+  display: flex;
+  align-items: center;
+  position: relative;
+  box-sizing: border-box;
+  min-height: 32px;
+  margin: 1px 8px 1px 0;
+  padding: 0 5px;
+  gap: 4px;
+  border-radius: 8px;
+  color: #3e4147;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+  z-index: 1;
+}
+.tree-select-hit {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.tree-select-hit:focus-visible {
+  outline: 2px solid #0f6cbd;
+  outline-offset: 1px;
+}
+.tree-item.active {
+  font-weight: 600;
+  background: #e5f1fb;
+  box-shadow: inset 3px 0 #0f6cbd;
+}
+.tree-item.multi-selected {
+  background: #e5f1fb;
+}
+.tree-item:hover {
+  background: #edf3f8;
+}
+.tree-item[draggable="true"] {
+  cursor: grab;
+}
+.tree-item.dragging {
+  opacity: 0.45;
+}
+.tree-item.drop-before::before,
+.tree-item.drop-after::after {
+  position: absolute;
+  z-index: 3;
+  right: 4px;
+  left: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: #0f6cbd;
+  content: "";
+}
+.tree-item.drop-before::before { top: -2px; }
+.tree-item.drop-after::after { bottom: -2px; }
+.tree-item.drop-inside {
+  background: #d7ebf9;
+  outline: 1px solid #0f6cbd;
+}
+.tree-toggle {
+  display: grid;
+  width: 16px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  color: transparent;
+}
+.tree-toggle.visible {
+  width: 24px;
+  margin-left: -2px;
+  color: #777a7e;
+}
+.tree-toggle:not(button) {
+  width: 24px;
+  margin-left: -2px;
+  pointer-events: none;
+}
+.tree-toggle.expanded svg {
+  transform: rotate(90deg);
+}
+.tree-icon {
+  flex: 0 0 auto;
+  color: #3f4246;
+  stroke-width: 2;
+}
+.tree-label {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  padding: 3px 0;
+  border-radius: 5px;
+  color: inherit;
+  outline: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-label.clone-related {
+  font-weight: 650;
+}
+.tree-clone-mark {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: #7a7d85;
+  pointer-events: none;
+}
+.tree-add {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  margin-right: 5px;
+  place-items: center;
+  border-radius: 50%;
+  color: #50535a;
+  opacity: 0;
+}
+.tree-item:hover .tree-add,
+.tree-item.active .tree-add {
+  opacity: 1;
+}
+.tree-add:hover {
+  background: #d1d2d5;
+}

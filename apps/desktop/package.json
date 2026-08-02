@@ -1,0 +1,46 @@
+{
+  "name": "@ygdria/desktop",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "out/main/main.cjs",
+  "scripts": {
+    "dev": "corepack pnpm --filter @ygdria/web dev:electron",
+    "build": "corepack pnpm --filter @ygdria/web build:electron",
+    "dist:win": "corepack pnpm --filter @ygdria/desktop build && set \"PATH=%CD%\\scripts;%PATH%\" && electron-builder --win",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.1"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.ygdria.app",
+    "productName": "Ygdria",
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "files": [
+      "out/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "${productName}-${version}-setup.${ext}"
+    }
+  }
+}

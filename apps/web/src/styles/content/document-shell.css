@@ -1,0 +1,178 @@
+article {
+  width: 100%;
+  margin: 16px 0 60px;
+  padding: 0 16px;
+}
+/* When inside a document-scroll flex child, make note-content a flex
+   column so the Markdown view can fill the remaining height and align
+   its bottom edge with the inspector panel. */
+.document-scroll > article.note-content {
+  display: flex;
+  flex-direction: column;
+  /* Subtract the top margin so the total box (content + margin) doesn't
+     exceed the scroll container's height, preventing an unnecessary scrollbar
+     while keeping the bottom edge aligned with the inspector panel. */
+  min-height: calc(100% - 16px);
+  margin: 16px 0 0;
+}
+article h1 {
+  font-family: SimHei, "黑体", sans-serif;
+  font-weight: 700;
+  font-size: 1.5rem;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+  margin: 0 0 18px;
+}
+.note-content > h1 {
+  font-family: "Times New Roman", SimHei, "黑体", serif;
+}
+.child-notes {
+  margin-top: 24px;
+}
+.child-notes > ul,
+.child-note-nested {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.child-notes > ul > li,
+.child-note-nested > li {
+  border-radius: 10px;
+  background: #f3f3f4;
+  transition: background-color 120ms ease;
+}
+.child-notes > ul > li:hover,
+.child-notes > ul > li:focus-within,
+.child-note-nested > li:hover,
+.child-note-nested > li:focus-within {
+  background: #ebebee;
+}
+.child-note-row {
+  display: flex;
+  min-height: 48px;
+  padding: 0 8px;
+  align-items: center;
+}
+.child-note-toggle {
+  display: grid;
+  width: 40px;
+  height: 48px;
+  flex: 0 0 40px;
+  place-items: center;
+  color: #62646a;
+}
+.child-note-toggle svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 150ms ease;
+}
+.child-notes > ul > li.expanded .child-note-toggle svg,
+.child-note-nested > li.expanded .child-note-toggle svg {
+  transform: rotate(90deg);
+}
+.child-note-toggle:hover,
+.child-note-toggle:focus-visible {
+  color: #22242a;
+  outline: 0;
+}
+.child-note-open {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  color: #26272b;
+  font-size: 16px;
+  text-align: left;
+}
+.child-note-open > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.child-note-actions {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  margin-right: 8px;
+  place-items: center;
+  border-radius: 7px;
+  color: #34363a;
+}
+.child-note-open > svg,
+.child-note-actions svg {
+  width: 18px;
+  height: 18px;
+}
+.child-note-actions:hover,
+.child-note-actions:focus-visible {
+  background: #dedee2;
+}
+.child-note-preview {
+  margin: 0 8px 6px 48px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #e8e8ea;
+}
+/* Preview cards keep a single muted surface instead of mixing in the
+   document's default light surfaces (notably blockquotes and table headers). */
+.child-note-preview .ygdria-document,
+.child-note-preview .ygdria-document blockquote,
+.child-note-preview .ygdria-document th {
+  background: #e8e8ea;
+}
+.child-notes > ul > li.expanded,
+.child-notes > ul > li.expanded:hover,
+.child-notes > ul > li.expanded:focus-within,
+.child-note-nested > li.expanded,
+.child-note-nested > li.expanded:hover,
+.child-note-nested > li.expanded:focus-within,
+.child-note-preview .child-note-nested > li,
+.child-note-preview .child-note-nested > li:hover,
+.child-note-preview .child-note-nested > li:focus-within {
+  background: #e8e8ea;
+}
+.child-note-preview > p {
+  margin: 0;
+  color: #74767c;
+}
+.child-note-nested {
+  display: grid;
+  gap: 4px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.child-note-nested .child-note-preview {
+  margin-right: 0;
+}
+.protected-note-locked {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: #888a90;
+  gap: 12px;
+}
+.protected-note-locked p {
+  margin: 0;
+  text-align: center;
+  color: #888a90;
+  font-size: 0.95rem;
+}
+.import-complete-toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1000;
+  padding: 11px 16px;
+  border-radius: 8px;
+  background: #111;
+  color: #fff;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
+  font-size: 0.9rem;
+}

@@ -1,0 +1,14 @@
+@import "./styles/foundation/base.css";
+@import "./styles/layout/application-shell.css";
+@import "./styles/navigation/sidebar.css";
+@import "./styles/navigation/note-tree.css";
+@import "./styles/navigation/context-menus.css";
+@import "./styles/workspace/workspace-chrome.css";
+@import "./styles/content/document-shell.css";
+@import "./styles/features/settings.css";
+@import "./styles/content/editor.css";
+@import "./styles/features/workspace-pages.css";
+@import "./styles/features/new-tab-search.css";
+@import "./styles/features/attachments-view.css";
+@import "./styles/responsive/breakpoints.css";
+@import "./styles/responsive/capacitor.css";

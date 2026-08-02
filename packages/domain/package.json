@@ -1,0 +1,18 @@
+{
+  "name": "@ygdria/domain",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ygdria/database": "workspace:*",
+    "@ygdria/editor": "workspace:*",
+    "@ygdria/shared": "workspace:*",
+    "drizzle-orm": "^0.45.2"
+  }
+}

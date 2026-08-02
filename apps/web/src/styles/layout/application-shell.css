@@ -1,0 +1,101 @@
+.window-controls {
+  display: flex;
+  position: absolute;
+  z-index: 12;
+  top: 0;
+  right: 0;
+  height: 42px;
+  -webkit-app-region: no-drag;
+}
+.window-controls button {
+  display: grid;
+  width: 46px;
+  place-items: center;
+  color: #4c4e55;
+  border-radius: 0;
+}
+.window-controls button:hover {
+  background: #e3eaed;
+}
+.window-controls .window-close:hover {
+  color: #fff;
+  background: #d92d20;
+}
+.desktop-window-content {
+  min-height: 100vh;
+}
+main {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px var(--tree-panel-width, 240px) minmax(0, 1fr) var(--inspector-panel-width, 200px);
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+.tree-panel-collapsed {
+  grid-template-columns: 48px minmax(0, 0) minmax(0, 1fr) var(--inspector-panel-width, 200px);
+}
+.inspector-panel-collapsed {
+  grid-template-columns: 48px var(--tree-panel-width, 240px) minmax(0, 1fr) 0;
+}
+.tree-panel-collapsed.inspector-panel-collapsed {
+  grid-template-columns: 48px minmax(0, 0) minmax(0, 1fr) 0;
+}
+.sidebar-resizer {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  bottom: 0;
+  left: calc(48px + var(--tree-panel-width, 240px) - 3px);
+  width: 7px;
+  cursor: col-resize;
+}
+.sidebar-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  content: "";
+}
+.sidebar-resizer:hover::after {
+  background: #0f6cbd;
+}
+.inspector-resizer {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: calc(var(--inspector-panel-width, 200px) - 3px);
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+}
+.inspector-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  content: "";
+}
+.inspector-resizer:hover::after {
+  background: #0f6cbd;
+}
+.inspector-panel-collapsed .note-inspector {
+  display: none;
+}
+.tree-panel-collapsed .note-tree-panel {
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+}
+
+/* Mobile-only affordances; hidden on desktop, revealed in breakpoints.css. */
+.mobile-tree-toggle {
+  display: none;
+}
+.tree-drawer-scrim {
+  display: none;
+}

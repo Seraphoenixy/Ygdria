@@ -1,0 +1,227 @@
+/* New-tab quick note finder: a note-tree-like search surface. */
+.new-tab-search {
+  display: flex;
+  flex-direction: column;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 44px 32px 32px;
+}
+
+.nts-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 14px;
+  background: linear-gradient(180deg, #fff 70%, rgba(255, 255, 255, 0));
+}
+
+.nts-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 16px;
+  border: 1px solid #cbd3d9;
+  border-radius: 10px;
+  color: #5d6770;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.nts-input:focus-within {
+  border-color: #0f6cbd;
+  box-shadow: 0 0 0 3px rgba(15, 108, 189, 0.12);
+}
+
+.nts-input > svg {
+  flex: 0 0 auto;
+  color: #8a929b;
+}
+
+.nts-input input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #333;
+  background: transparent;
+  font: inherit;
+  font-size: 17px;
+}
+
+.nts-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #8a929b;
+  background: transparent;
+  cursor: pointer;
+}
+
+.nts-clear:hover {
+  color: #4a4a52;
+  background: #eef0f2;
+}
+
+.nts-hint {
+  margin: 10px 2px 0;
+  color: #8b939b;
+  font-size: 12.5px;
+}
+
+.nts-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+}
+
+.nts-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding-right: 12px;
+  border-radius: 7px;
+  color: #34363a;
+  cursor: pointer;
+  user-select: none;
+}
+
+.nts-row:hover {
+  background: #f5f8fc;
+}
+
+.nts-row.selected,
+.nts-row.selected:hover {
+  background: #e5f1fb;
+  box-shadow: inset 2px 0 0 #0f6cbd;
+}
+
+.nts-row.trashed .nts-title {
+  color: #888a90;
+  text-decoration: line-through;
+}
+
+.nts-row.archived .nts-title {
+  color: #6c7480;
+}
+
+.nts-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: #9aa1a9;
+  background: transparent;
+  cursor: pointer;
+}
+
+.nts-toggle:hover {
+  color: #0f6cbd;
+  background: #dceaf7;
+}
+
+.nts-toggle svg {
+  transition: transform 0.12s ease;
+}
+
+.nts-toggle.expanded svg {
+  transform: rotate(90deg);
+}
+
+.nts-icon {
+  flex: 0 0 auto;
+  color: #8a929b;
+}
+
+.nts-row.selected .nts-icon {
+  color: #0f6cbd;
+}
+
+.nts-title {
+  flex: 0 1 auto;
+  overflow: hidden;
+  font-size: 14.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nts-title mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: #ffe7a8;
+  color: inherit;
+}
+
+.nts-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding-left: 8px;
+  color: #9aa1a9;
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+.nts-empty {
+  padding: 48px 16px;
+  color: #85858d;
+  font-size: 14px;
+  text-align: center;
+}
+
+.nts-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #eef0f2;
+}
+
+.nts-count {
+  color: #8b939b;
+  font-size: 12.5px;
+}
+
+.nts-new-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 7px 13px;
+  border: 1px solid #cbd3d9;
+  border-radius: 7px;
+  color: #0f6cbd;
+  background: #fff;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nts-new-note:hover:not(:disabled) {
+  border-color: #0f6cbd;
+  background: #f5f9fc;
+}
+
+.nts-new-note:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
