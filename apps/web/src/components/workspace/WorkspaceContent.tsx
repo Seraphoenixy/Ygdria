@@ -28,6 +28,7 @@ export interface WorkspaceContentProps {
   closeTab: (tabId: string) => void;
   openNewTab: () => void;
   onTabContextMenu: (tabId: string, x: number, y: number) => void;
+  onReorder: (dragId: string, dropId: string) => void;
 
   // Toolbar
   noteBreadCrumb: BreadcrumbSegment[];
@@ -92,6 +93,10 @@ export interface WorkspaceContentProps {
   canMigrateToEmptyServer: boolean;
   onMigrateToEmptyServer: () => void;
   canOpenFrontendConsole: boolean;
+  syncRunsAutomatically?: boolean;
+  canEditMobileEndpoint?: boolean;
+  mobileEndpoint?: string;
+  onEditMobileEndpoint?: (url: string) => void;
   onOpenFrontendConsole: () => void;
   onProtectedSessionTimeoutChange: (minutes: number) => void;
   onMaintainDatabase: (rebuildFts?: boolean) => void;
@@ -108,6 +113,7 @@ export interface WorkspaceContentProps {
   onUnarchive: () => void;
   onEditorReady: (editor: any) => void;
   documentScrollRef: RefObject<HTMLDivElement | null>;
+  onUploadError?: (message: string) => void;
 
   // Empty / create
   createNote: { isPending: boolean };
@@ -126,6 +132,7 @@ export function WorkspaceContent({
   closeTab,
   openNewTab,
   onTabContextMenu,
+  onReorder,
   noteBreadCrumb,
   selectedTrashed,
   noteData,
@@ -175,6 +182,10 @@ export function WorkspaceContent({
   canMigrateToEmptyServer,
   onMigrateToEmptyServer,
   canOpenFrontendConsole,
+  syncRunsAutomatically,
+  canEditMobileEndpoint,
+  mobileEndpoint,
+  onEditMobileEndpoint,
   onOpenFrontendConsole,
   onProtectedSessionTimeoutChange,
   onMaintainDatabase,
@@ -189,6 +200,7 @@ export function WorkspaceContent({
   onUnarchive,
   onEditorReady,
   documentScrollRef,
+  onUploadError,
   createNote,
   createNewNote,
   decryptedTitles,
@@ -210,6 +222,7 @@ export function WorkspaceContent({
         onClose={closeTab}
         onNewTab={openNewTab}
         onContextMenu={onTabContextMenu}
+        onReorder={onReorder}
         collapsible={phone}
         collapsed={tabsCollapsed}
         onToggleCollapsed={() => setTabsCollapsed((value) => !value)}
@@ -320,6 +333,10 @@ export function WorkspaceContent({
             onMigrateToEmptyServer={onMigrateToEmptyServer}
             canOpenFrontendConsole={canOpenFrontendConsole}
             onOpenFrontendConsole={onOpenFrontendConsole}
+            syncRunsAutomatically={syncRunsAutomatically}
+            canEditMobileEndpoint={canEditMobileEndpoint}
+            mobileEndpoint={mobileEndpoint}
+            onEditMobileEndpoint={onEditMobileEndpoint}
             onProtectedSessionTimeoutChange={onProtectedSessionTimeoutChange}
             onMaintainDatabase={onMaintainDatabase}
           />
@@ -357,6 +374,8 @@ export function WorkspaceContent({
             onUnarchive={onUnarchive}
             onEditorReady={onEditorReady}
             markdownView={markdownView}
+            onUnlock={onProtectedSessionToggle}
+            onUploadError={onUploadError}
           />
         </div>
       ) : (

@@ -11,6 +11,7 @@ export function SearchPage({ client, locale, onOpenNote }: { client: YgdriaClien
   const inputRef = useRef<HTMLInputElement>(null);
   const term = submittedQuery.trim();
   const canSearch = isSearchableQuery(query);
+  const showingSubmittedResults = term.length > 0 && term === query.trim();
   const results = useQuery({
     queryKey: ["full-text-search", term],
     queryFn: () => client.search(term) as Promise<SearchResult[]>,
@@ -19,14 +20,6 @@ export function SearchPage({ client, locale, onOpenNote }: { client: YgdriaClien
   });
 
   useEffect(() => inputRef.current?.focus(), []);
-  useEffect(() => {
-    if (!canSearch) {
-      setSubmittedQuery("");
-      return;
-    }
-    const timeout = window.setTimeout(() => setSubmittedQuery(query.trim()), 300);
-    return () => window.clearTimeout(timeout);
-  }, [canSearch, query]);
 
   return <article className="search-page">
     <h1>{t(locale, "searchTitle")}</h1>
@@ -37,7 +30,7 @@ export function SearchPage({ client, locale, onOpenNote }: { client: YgdriaClien
       </label>
       <button type="submit" disabled={!canSearch}>{t(locale, "searchAction")}</button>
     </form>
-    {!term ? <p className="search-page-message">{t(locale, "searchHint")}</p> : results.isPending ? <p className="search-page-message">{t(locale, "loading")}</p> : results.isError ? <p className="search-page-message search-page-error">{t(locale, "searchFailed")} {results.error.message}</p> : results.data?.length ? <div className="search-results">{results.data.map((result) => <button type="button" key={result.noteId} className="search-result" onClick={() => onOpenNote(result.noteId)}>
+    {!showingSubmittedResults ? (query.trim().length > 0 && !canSearch ? <p className="search-page-message">{t(locale, "minSearchLength")}</p> : <p className="search-page-message">{t(locale, "searchHint")}</p>) : results.isPending ? <p className="search-page-message">{t(locale, "loading")}</p> : results.isError ? <p className="search-page-message search-page-error">{t(locale, "searchFailed")} {results.error.message}</p> : results.data?.length ? <div className="search-results">{results.data.map((result) => <button type="button" key={result.noteId} className="search-result" onClick={() => onOpenNote(result.noteId)}>
       <strong>{result.title}</strong><span><Snippet value={result.snippet} /></span><time>{new Date(result.updatedAt).toLocaleString()}</time>
     </button>)}</div> : <p className="search-page-message">{t(locale, "searchNoResults")}</p>}
   </article>;

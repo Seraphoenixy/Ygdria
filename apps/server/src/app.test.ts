@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildApp } from "./app.js";
 import { applyMigrations, createDatabase } from "@ygdria/database";
 import { NoteService } from "@ygdria/domain";
@@ -299,6 +302,54 @@ describe("ETAPI", () => {
     expect(response.json().error.message).toBe("Internal server error");
     expect(response.body).not.toContain("SQLITE_CONSTRAINT");
     await localApp.close();
+  });
+});
+
+describe("desktop local-token boundary", () => {
+  const token = "desktop-local-token";
+  const webDist = mkdtempSync(join(tmpdir(), "ygdria-server-web-"));
+  let app: ReturnType<typeof buildApp>;
+
+  beforeAll(() => {
+    // Keep this server test independent of a preceding Vite build. The real
+    // distribution is generated at release time and is deliberately ignored
+    // by Git, so provide the small set of files this boundary exercises.
+    writeFileSync(join(webDist, "index.html"), "<!doctype html><title>Ygdria</title>");
+    writeFileSync(join(webDist, "favicon.ico"), "test favicon");
+    writeFileSync(join(webDist, "ygdria-forest-mark.png"), "test brand mark");
+    app = buildApp({ databaseUrl: ":memory:", localToken: token, webDist });
+  });
+  afterAll(async () => {
+    await app.close();
+    rmSync(webDist, { recursive: true, force: true });
+  });
+
+  it("serves the desktop shell without a header but protects API routes", async () => {
+    const shell = await app.inject({ method: "GET", url: "/" });
+    expect(shell.statusCode).toBe(200);
+    expect(shell.headers["content-type"]).toContain("text/html");
+
+    const denied = await app.inject({ method: "GET", url: "/api/v1/tree" });
+    expect(denied.statusCode).toBe(401);
+    expect(denied.json().error.message).toBe("Missing local token");
+
+    const allowed = await app.inject({
+      method: "GET",
+      url: "/api/v1/tree",
+      headers: { "x-ygdria-local-token": token },
+    });
+    expect(allowed.statusCode).toBe(200);
+  });
+
+  it("serves public root icons instead of the SPA fallback", async () => {
+    const favicon = await app.inject({ method: "GET", url: "/favicon.ico" });
+    expect(favicon.statusCode).toBe(200);
+    expect(favicon.headers["content-type"]).toContain("image/x-icon");
+    expect(favicon.body.startsWith("<!doctype html>")).toBe(false);
+
+    const brandMark = await app.inject({ method: "GET", url: "/ygdria-forest-mark.png" });
+    expect(brandMark.statusCode).toBe(200);
+    expect(brandMark.headers["content-type"]).toContain("image/png");
   });
 });
 

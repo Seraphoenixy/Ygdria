@@ -61,12 +61,13 @@ export function registerNoteRoutes(app: FastifyInstance, deps: NoteRouteDeps) {
     notes.update((req.params as { id: string }).id, parse(updateNoteSchema, req.body)),
   );
 
-  app.patch("/api/v1/notes/:id/archive", async (req) =>
-    notes.archiveNote(
+  app.patch("/api/v1/notes/:id/archive", async (req) => {
+    const archivedCount = notes.archiveSubtree(
       (req.params as { id: string }).id,
       parse(archiveNoteSchema, req.body).archived,
-    ),
-  );
+    );
+    return { archivedCount };
+  });
 
   app.get("/api/v1/notes/:id/revisions", async (req) =>
     notes.revisions((req.params as { id: string }).id),

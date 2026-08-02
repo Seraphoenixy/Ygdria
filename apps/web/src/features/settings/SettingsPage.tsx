@@ -31,6 +31,10 @@ export function SettingsPage({
   onMigrateToEmptyServer,
   canOpenFrontendConsole = false,
   onOpenFrontendConsole,
+  syncRunsAutomatically = false,
+  canEditMobileEndpoint = false,
+  mobileEndpoint = "",
+  onEditMobileEndpoint,
 }: {
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
@@ -56,6 +60,10 @@ export function SettingsPage({
   onMigrateToEmptyServer?: () => void;
   canOpenFrontendConsole?: boolean;
   onOpenFrontendConsole?: () => void;
+  syncRunsAutomatically?: boolean;
+  canEditMobileEndpoint?: boolean;
+  mobileEndpoint?: string;
+  onEditMobileEndpoint?: (url: string) => void;
 }) {
   const [settings, setSettings] = useState<StoredSettings>(readSettings);
   const updateSettings = (next: Partial<StoredSettings>) => {
@@ -93,8 +101,10 @@ export function SettingsPage({
         <SettingsTextRow key="sync-server-url" title={t(locale, "syncServerUrl")} description={t(locale, "syncServerUrlHint")} value={settings.syncServerUrl} placeholder="https://notes.example.com" onChange={(value) => updateSettings({ syncServerUrl: value })} />,
         <SettingsNumberRow key="sync-timeout" title={t(locale, "syncConnectionTimeout")} description={t(locale, "syncServerHint")} value={settings.syncConnectionTimeoutSeconds} min={1} unit={t(locale, "seconds")} onChange={(event) => updateSettings({ syncConnectionTimeoutSeconds: Math.max(1, Math.floor(Number(event.target.value)) || 1) })} />,
         <SettingsActionRow key="sync-test" title={t(locale, "testConnection")} description={t(locale, "testConnectionHint")} action={t(locale, "testConnection")} disabled={!settings.syncServerUrl.trim() || testingSyncConnection} onClick={() => onTestSyncConnection?.(settings.syncServerUrl, settings.syncConnectionTimeoutSeconds)} status={syncConnectionMessage} />,
-        ...(canMigrateToEmptyServer ? [<SettingsActionRow key="sync-migrate-empty" title="迁移本地知识库" description="将当前桌面知识库迁移到一个空白 HTTPS 服务端。已有服务端不会被覆盖。" action="迁移到空白服务端" onClick={onMigrateToEmptyServer} />] : []),
-        ...(canOpenFrontendConsole ? [<SettingsActionRow key="open-frontend-console" title="前端控制台" description="打开桌面端 DevTools，用于查看前端请求和错误日志。" action="打开控制台" onClick={onOpenFrontendConsole} />] : []),
+        ...(canMigrateToEmptyServer ? [<SettingsActionRow key="sync-migrate-empty" title={t(locale, "migrateLocalVault")} description={t(locale, "migrateLocalVaultDesc")} action={t(locale, "migrateToEmptyServer")} onClick={onMigrateToEmptyServer} />] : []),
+        ...(canOpenFrontendConsole ? [<SettingsActionRow key="open-frontend-console" title={t(locale, "openFrontendConsole")} description={t(locale, "openFrontendConsoleDesc")} action={t(locale, "openConsole")} onClick={onOpenFrontendConsole} />] : []),
+        ...(canEditMobileEndpoint ? [<SettingsTextRow key="mobile-server-url" title={t(locale, "mobileServerUrlLabel")} description={t(locale, "mobileServerUrlHint")} value={mobileEndpoint} placeholder={t(locale, "serverUrlPlaceholder")} onChange={(value) => onEditMobileEndpoint?.(value)} />] : []),
+        ...(syncRunsAutomatically ? [<div key="sync-auto-hint" className="settings-row settings-info"><p>{t(locale, "syncAutoHint")}</p></div>] : []),
       ]} />
       <h2 id="settings-data" className="settings-category">{t(locale, "settingsData")}</h2>
       <section id="settings-transfer" className="settings-section">

@@ -47,6 +47,16 @@
 .settings-intro + .settings-row {
   border-top: 0;
 }
+.settings-info {
+  min-height: 0;
+  padding: 14px 0;
+  color: #777980;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.settings-info p {
+  margin: 0;
+}
 .settings-row > div {
   min-width: 0;
 }

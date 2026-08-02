@@ -154,9 +154,9 @@ export function useMaintenance({
         try {
           target = new URL(serverUrl.trim());
           if (target.protocol !== "https:")
-            throw new Error("同步服务器必须使用 HTTPS 地址。");
+            throw new Error(t(locale, "syncRequiresHttps"));
         } catch (error) {
-          throw error instanceof Error ? error : new Error("服务器地址无效。");
+          throw error instanceof Error ? error : new Error(t(locale, "invalidServerUrl"));
         }
         target.pathname = `${target.pathname.replace(/\/$/, "")}/api/v1/health`;
         target.search = "";
@@ -167,7 +167,7 @@ export function useMaintenance({
         );
         try {
           const response = await fetch(target.toString(), { signal: controller.signal });
-          if (!response.ok) throw new Error(`服务器返回 HTTP ${response.status}`);
+          if (!response.ok) throw new Error(t(locale, "httpError", { status: String(response.status) }));
           await response.json();
           setSyncConnectionMessage(
             `${t(locale, "connectionSucceeded")}（${Math.round(performance.now() - startedAt)} ms）`,
@@ -177,7 +177,7 @@ export function useMaintenance({
         }
       })()
         .catch((error) => {
-          const detail = error instanceof Error ? error.message : "未知错误";
+          const detail = error instanceof Error ? error.message : t(locale, "unknownError");
           setSyncConnectionMessage(`${t(locale, "connectionFailed")}：${detail}`);
         })
         .finally(() => setTestingSyncConnection(false));

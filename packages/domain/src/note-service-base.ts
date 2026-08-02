@@ -23,7 +23,15 @@ import {
   type SearchResult,
 } from "@ygdria/shared";
 type Store = ReturnType<typeof createDatabase>;
-export const now = () => Date.now();
+// `updated_at` is used as a last-writer-wins version by sync. Date.now() alone
+// can return the same value for consecutive mutations, causing a causally later
+// delete/restore to be discarded by a peer's strict version comparison.
+let lastTimestamp = 0;
+
+export const now = () => {
+  lastTimestamp = Math.max(Date.now(), lastTimestamp + 1);
+  return lastTimestamp;
+};
 export const id = () => randomUUID();
 export type PlacementSnapshot = {
   placements: Array<{
@@ -222,6 +230,38 @@ export class NoteServiceBase {
       .run(archived ? timestamp : null, timestamp, noteId);
     recordChange(this.store.sqlite, "note", noteId, "updated");
     return this.get(noteId)!;
+  }
+  /**
+   * Archives (or restores) a note together with every note in its subtree. The
+   * root is validated and archived by `archiveNote` first, so a system, deleted,
+   * or protected root still throws. Descendants that are protected (cannot be
+   * archived) or already in the target state are skipped. Returns the number of
+   * notes whose archive state actually changed.
+   */
+  archiveSubtree(noteId: string, archived: boolean) {
+    this.archiveNote(noteId, archived);
+    const ids = this.placementSubtreeNoteIdsForNote(noteId);
+    let changed = 1;
+    this.store.sqlite.transaction(() => {
+      for (const id of ids) {
+        if (id === noteId) continue;
+        if (id === SYSTEM_ROOT_NOTE_ID || id === SYSTEM_TRASH_NOTE_ID || id === CALENDAR_NOTE_ID)
+          continue;
+        const row = this.store.sqlite
+          .prepare("SELECT deleted_at deletedAt,archived_at archivedAt,is_protected isProtected FROM notes WHERE id=?")
+          .get(id) as { deletedAt: number | null; archivedAt: number | null; isProtected: number } | undefined;
+        if (!row || row.deletedAt !== null) continue;
+        if (Boolean(row.isProtected)) continue;
+        if ((row.archivedAt !== null) === archived) continue;
+        const timestamp = now();
+        this.store.sqlite
+          .prepare("UPDATE notes SET archived_at=?,updated_at=?,version=version+1 WHERE id=?")
+          .run(archived ? timestamp : null, timestamp, id);
+        recordChange(this.store.sqlite, "note", id, "updated");
+        changed++;
+      }
+    })();
+    return changed;
   }
   setProtected(noteId: string, input: { protected: true; contentCiphertext: string } | { protected: false; title: string; content: NoteContent | string; propertiesJson?: string }) {
     this.assertNotSystemNote(noteId);

@@ -18,7 +18,7 @@ export type NoteContentData = {
   isProtected?: boolean;
 };
 
-export function NoteContent({ note, editing, isTrashed, locale, childNotes, childrenByParent, client, onSaveContent, onSaveTitle, onOpenChild, onChildMore, onUnarchive, onEditorReady, session, markdownView }: {
+export function NoteContent({ note, editing, isTrashed, locale, childNotes, childrenByParent, client, onSaveContent, onSaveTitle, onOpenChild, onChildMore, onUnarchive, onEditorReady, session, markdownView, onUnlock, onUploadError }: {
   note: NoteContentData;
   editing: boolean;
   isTrashed: boolean;
@@ -34,6 +34,8 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
   onEditorReady?: (editor: any) => void;
   session?: ProtectedClientSession;
   markdownView?: boolean;
+  onUnlock?: () => void;
+  onUploadError?: (message: string) => void;
 }) {
   const [decryptedPayload, setDecryptedPayload] = useState<ProtectedPayload | null>(null);
   const [title, setTitle] = useState(note.title);
@@ -107,6 +109,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
       <div className="protected-note-locked">
         <Lock size={24} />
         <p>{t(locale, "protectedNoteLocked")}</p>
+        {onUnlock && <button type="button" className="protected-note-unlock" onClick={onUnlock}>{t(locale, "unlockProtectedSession")}</button>}
       </div>
     ) : (
       <>
@@ -131,6 +134,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
                   const block = findCodeBlock(document);
                   handleSaveContent(block.code, block.language);
                 } : undefined}
+                onUploadError={onUploadError}
               />
           : <YgdriaEditor
               key={note.id}
@@ -143,6 +147,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
               onEditorReady={onEditorReady}
               readOnly={!editing || isTrashed}
               markdownView={markdownView}
+              onUploadError={onUploadError}
             />}
       </>
     )}

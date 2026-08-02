@@ -180,6 +180,7 @@ export function YgdriaEditor({
   onEditorReady,
   readOnly = false,
   markdownView = false,
+  onUploadError,
   documentId,
 }: {
   content: NoteContent;
@@ -191,6 +192,8 @@ export function YgdriaEditor({
   onEditorReady?: (editor: Editor) => void;
   readOnly?: boolean;
   markdownView?: boolean;
+  /** Called when an image upload or paste fails, so the host can surface a toast. */
+  onUploadError?: (message: string) => void;
   /** Stable owning-note identity; protects a reused editor from stale content. */
   documentId?: string;
 }) {
@@ -198,8 +201,10 @@ export function YgdriaEditor({
   const [searchOpen, setSearchOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const onSaveRef = useRef(onSave);
+  const onUploadErrorRef = useRef(onUploadError);
   const documentIdRef = useRef(documentId);
   onSaveRef.current = onSave;
+  onUploadErrorRef.current = onUploadError;
   const normalizedContent = useMemo(() => normalizeMathContent(content), [content]);
   const editor = useEditor({
     extensions: [
@@ -263,8 +268,10 @@ export function YgdriaEditor({
               if (!image) return;
               view.dispatch(view.state.tr.insert(position, image));
               position += image.nodeSize;
-            } catch {
-              // Leave the existing document untouched if an upload fails.
+            } catch (error) {
+              // Leave the existing document untouched if an upload fails, but
+              // surface the reason so the host can notify the user.
+              onUploadErrorRef.current?.(error instanceof Error ? error.message : String(error));
             }
           }
         })();

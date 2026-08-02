@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { applyMigrations, createDatabase } from "@ygdria/database";
 import { NoteService, RelationService } from "@ygdria/domain";
-import { SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
+import { CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
 import { applySyncChanges, resolveChangeEntities } from "./helpers.js";
 
 function freshDb() {
@@ -175,6 +175,29 @@ describe("cross-device purge propagation", () => {
         .prepare("SELECT 1 FROM placements WHERE note_id=? AND parent_placement_id=?")
         .get(note.id, SYSTEM_TRASH_PLACEMENT_ID),
     ).toBeUndefined();
+  });
+});
+
+describe("atomic sibling-order sync", () => {
+  it("converges every sibling after a desktop-style reorder", () => {
+    const peerA = freshDb();
+    const peerB = freshDb();
+    const notesA = new NoteService(peerA);
+    const cursor = { id: 0 };
+    const a = notesA.create({ title: "A" });
+    const b = notesA.create({ title: "B" });
+    const c = notesA.create({ title: "C" });
+    sync(peerA, peerB, cursor);
+    const cPlacement = peerA.sqlite.prepare("SELECT id FROM placements WHERE note_id=?").get(c.id) as { id: string };
+
+    notesA.movePlacement(cPlacement.id, SYSTEM_ROOT_PLACEMENT_ID, 0);
+    sync(peerA, peerB, cursor);
+
+    const order = (store: ReturnType<typeof freshDb>) => store.sqlite
+      .prepare("SELECT note_id noteId FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id")
+      .all(SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID) as Array<{ noteId: string }>;
+    expect(order(peerB).map((row) => row.noteId)).toEqual(order(peerA).map((row) => row.noteId));
+    expect(order(peerB).map((row) => row.noteId)).toEqual([c.id, a.id, b.id]);
   });
 });
 

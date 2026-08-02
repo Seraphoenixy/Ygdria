@@ -1,7 +1,7 @@
 import React from "react";
 import {
-  FolderPlus, FileCode2, Pencil, Archive, ArchiveRestore, X, Copy,
-  Trash2,
+  FolderPlus, FileCode2, Archive, ArchiveRestore, X, Copy,
+  Trash2, FileText, Lock, Unlock,
 } from "lucide-react";
 import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
@@ -17,20 +17,20 @@ type TreeContextMenuProps = {
   locale: Locale;
   onClose: () => void;
   onCreateChild: (parentPlacementId: string, type?: "text" | "code") => void;
-  onRename: (noteId: string, nextTitle: string) => void;
   onArchive: (noteId: string, archived: boolean) => void;
   onSetClipboard: (clipboard: { placements: TreePlacement[]; mode: "cut" | "copy" } | null) => void;
   onDelete: (placements: TreePlacement[]) => void;
-  onMoveTo: (target: TreePlacement, placements: TreePlacement[]) => void;
   onPaste: (target: TreePlacement, mode: "inside" | "after") => void;
   onExport: (placements: TreePlacement[]) => void;
   onImport: (targetPlacementId: string) => void;
+  onOpenInNewTab?: (placement: TreePlacement) => void;
+  onProtectSubtree?: (placement: TreePlacement, protect: boolean) => void;
 };
 
 export function TreeContextMenu({
   menu, client, tree, selectedPlacementId, selectedPlacementIds,
-  treeClipboard, locale, onClose, onCreateChild, onRename, onArchive,
-  onSetClipboard, onDelete, onMoveTo, onPaste, onExport, onImport,
+  treeClipboard, locale, onClose, onCreateChild, onArchive,
+  onSetClipboard, onDelete, onPaste,   onExport, onImport, onOpenInNewTab, onProtectSubtree,
 }: TreeContextMenuProps) {
   const { placement } = menu;
   const contextSelection = (target: TreePlacement) => {
@@ -60,17 +60,14 @@ export function TreeContextMenu({
       >
         <FileCode2 size={16} /> {t(locale, "newChildCodeNote")}
       </button>
-      <button
-        role="menuitem"
-        disabled={placement.isSystem || placement.isProtected}
-        onClick={() => {
-          const nextTitle = window.prompt(t(locale, "renamePrompt"), placement.title);
-          if (nextTitle?.trim()) onRename(placement.noteId, nextTitle.trim());
-          onClose();
-        }}
-      >
-        <Pencil size={16} /> {t(locale, "rename")}
-      </button>
+      {onOpenInNewTab && (
+        <button
+          role="menuitem"
+          onClick={() => { onOpenInNewTab(placement); onClose(); }}
+        >
+          <FileText size={16} /> {t(locale, "openInNewTab")}
+        </button>
+      )}
       <button
         role="menuitem"
         disabled={placement.isSystem || placement.isProtected}
@@ -82,6 +79,15 @@ export function TreeContextMenu({
         {placement.isArchived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
         {t(locale, placement.isArchived ? "unarchive" : "archive")}
       </button>
+      {onProtectSubtree && !placement.isSystem && (
+        <button
+          role="menuitem"
+          onClick={() => { onProtectSubtree(placement, !placement.isProtected); onClose(); }}
+        >
+          {placement.isProtected ? <Unlock size={16} /> : <Lock size={16} />}
+          {t(locale, placement.isProtected ? "unprotectSubtree" : "protectSubtree")}
+        </button>
+      )}
       <button className="with-shortcut" role="menuitem" disabled={placement.isSystem} onClick={() => { onSetClipboard({ placements: items, mode: "cut" }); onClose(); }}>
         <X size={16} /> <span>{t(locale, "cut")}</span><kbd>{modifier}+X</kbd>
       </button>
@@ -94,7 +100,6 @@ export function TreeContextMenu({
       <button role="menuitem" disabled={!treeClipboard} onClick={() => { onPaste(placement, "after"); onClose(); }}>
         {t(locale, "pasteAfter")}
       </button>
-      <button role="menuitem" disabled={placement.isSystem} onClick={() => { onMoveTo(placement, items); onClose(); }}>{t(locale, "moveTo")}</button>
       <div className="context-separator" />
       <button role="menuitem" onClick={() => { onExport(items); onClose(); }}>{t(locale, "exportNotes")}</button>
       <button role="menuitem" onClick={() => { onImport(placement.placementId); onClose(); }}>{t(locale, "importNotes")}</button>

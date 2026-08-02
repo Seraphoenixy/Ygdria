@@ -1,4 +1,5 @@
-import { Info, Clock3, Link2, ListTree } from "lucide-react";
+import { Info, Clock3, ListTree } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
@@ -32,6 +33,7 @@ function collectHeadings(nodes: any[] | undefined): { level: number; text: strin
 
 function Outline({ content, emptyLabel }: { content: any; emptyLabel: string }) {
   const headings = collectHeadings(content?.content);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const scrollToHeading = (index: number) => {
     const article = document.querySelector(".document-scroll > article");
     // `.ygdria-document` is the ProseMirror root, nested inside the editor's
@@ -43,10 +45,41 @@ function Outline({ content, emptyLabel }: { content: any; emptyLabel: string }) 
     );
     documentHeadings?.[index]?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+  useEffect(() => {
+    const scrollRoot = document.querySelector(".document-scroll");
+    const article = scrollRoot?.querySelector("article");
+    const nodes = article?.querySelectorAll<HTMLHeadingElement>(
+      ":scope .ygdria-document h1, :scope .ygdria-document h2, :scope .ygdria-document h3, :scope .ygdria-document h4, :scope .ygdria-document h5, :scope .ygdria-document h6",
+    );
+    if (!nodes || !nodes.length) {
+      setActiveIndex(-1);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // The topmost heading currently intersecting the upper viewport band
+        // is the section the reader is in.
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible.length) {
+          const index = Array.from(nodes).indexOf(visible[0].target as HTMLHeadingElement);
+          if (index >= 0) setActiveIndex(index);
+        }
+      },
+      { root: scrollRoot, rootMargin: "0px 0px -70% 0px", threshold: 0 },
+    );
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [content]);
   return headings.length ? (
     <ul className="outline-list">
       {headings.map((heading: { text: string; level: number }, index: number) => (
-        <li key={`${heading.text}-${index}`} style={{ paddingLeft: (heading.level - 1) * 12 }}>
+        <li
+          key={`${heading.text}-${index}`}
+          className={index === activeIndex ? "outline-active" : ""}
+          style={{ paddingLeft: (heading.level - 1) * 12 }}
+        >
           <button type="button" onClick={() => scrollToHeading(index)}>
             {heading.text}
           </button>
@@ -130,12 +163,6 @@ export function NoteInspector({
           <p>{t(locale, "subtreeNotes", { count: String(size.data.subtree.noteCount) })}</p>
         </section>
       )}
-      <section className="inspector-section">
-        <div className="inspector-label">
-          <Link2 size={14} /> {t(locale, "references")}
-        </div>
-        <p>{t(locale, "referencesPlaceholder")}</p>
-      </section>
       <RelationsPanel noteId={note.id} client={client} locale={locale} openNote={openNote} />
       <section className="inspector-section">
         <div className="inspector-label">

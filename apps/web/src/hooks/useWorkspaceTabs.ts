@@ -117,9 +117,22 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
     activateTab(undefined);
   };
 
+  const moveTab = (dragId: string, dropId: string) => {
+    if (dragId === dropId) return;
+    setTabs((current) => {
+      const from = current.findIndex((tab) => tab.id === dragId);
+      const to = current.findIndex((tab) => tab.id === dropId);
+      if (from < 0 || to < 0) return current;
+      const next = current.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  };
+
   return {
     tabs, activeTab, activeTabId, settingsOpen, pinnedTabIds, closedTabs,
     activateTab, openNote, openSettings, openSearch, openHistory, openArchive, openAttachments, openNewTab,
-    closeTab, closeTabs, togglePin, reopenClosedTab, openTabInNewWindow, clearTabs,
+    closeTab, closeTabs, togglePin, reopenClosedTab, openTabInNewWindow, clearTabs, moveTab,
   };
 }

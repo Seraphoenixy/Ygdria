@@ -21,7 +21,7 @@ type UseNotesOptions = {
   activeTabId?: string;
   locale: Locale;
   dataAccessReady: boolean;
-  onNoteCreated: (noteId: string) => void;
+  onNoteCreated: (noteId: string, parentPlacementId?: string | null) => void;
   onNoteRestored: (noteId: string) => void;
 };
 
@@ -110,10 +110,10 @@ export function useNotes({
         ? client.createNote({ title, parentPlacementId, type })
         : client.createTodayNote({ title });
     },
-    onSuccess: (n) => {
+    onSuccess: (n, variables) => {
       qc.invalidateQueries({ queryKey: ["tree"] });
       qc.invalidateQueries({ queryKey: ["history"] });
-      onNoteCreated(n.id);
+      onNoteCreated(n.id, variables.parentPlacementId);
     },
   });
 

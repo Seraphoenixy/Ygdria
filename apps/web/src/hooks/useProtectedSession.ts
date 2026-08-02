@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { YgdriaClient } from "@ygdria/api-client";
 import { Capacitor } from "@capacitor/core";
 import {
@@ -36,6 +36,29 @@ function discardDeviceToken(client: YgdriaClient) {
 
 export type PasswordDialogMode = "setup" | "unlock" | "change" | null;
 
+/** Collect every note id in the subtree rooted at `rootNoteId` (including the
+ *  root itself) by walking `treeData` placements. System notes are excluded as
+ *  roots so the vault/trash/calendar anchors are never traversed. */
+function collectSubtreeNoteIds(tree: TreePlacement[], rootNoteId: string): string[] {
+  const byParent = new Map<string | null, TreePlacement[]>();
+  for (const placement of tree) {
+    const siblings = byParent.get(placement.parentPlacementId) ?? [];
+    siblings.push(placement);
+    byParent.set(placement.parentPlacementId, siblings);
+  }
+  const visited = new Set<string>();
+  const queue: TreePlacement[] = tree.filter(
+    (placement) => placement.noteId === rootNoteId && !placement.isSystem,
+  );
+  while (queue.length) {
+    const current = queue.shift()!;
+    if (visited.has(current.noteId)) continue;
+    visited.add(current.noteId);
+    for (const child of byParent.get(current.placementId) ?? []) queue.push(child);
+  }
+  return [...visited];
+}
+
 type UseProtectedSessionOptions = {
   client: YgdriaClient;
   requiresDeviceAuth: boolean;
@@ -44,6 +67,7 @@ type UseProtectedSessionOptions = {
   setDeviceAccess: (access: "checking" | "ready" | "initialize" | "login") => void;
   treeData: TreePlacement[] | undefined;
   locale: Locale;
+  showToast: (message: string) => void;
 };
 
 export function useProtectedSession({
@@ -54,6 +78,7 @@ export function useProtectedSession({
   setDeviceAccess,
   treeData,
   locale,
+  showToast,
 }: UseProtectedSessionOptions) {
   const [session] = useState(() => new ProtectedClientSession());
   const [protectedSession, setProtectedSession] = useState<{
@@ -63,6 +88,7 @@ export function useProtectedSession({
   }>({ configured: false, unlocked: false, timeoutMs: DEFAULT_PROTECTED_SESSION_TIMEOUT_MS });
   const [decryptedTitles, setDecryptedTitles] = useState<Map<string, string>>(new Map());
   const [passwordDialog, setPasswordDialog] = useState<PasswordDialogMode>(null);
+  const pendingProtectRef = useRef<{ rootNoteId: string; protect: boolean } | null>(null);
 
   // Fetch server session config on mount to initialise client-side session state
   useEffect(() => {
@@ -301,6 +327,86 @@ export function useProtectedSession({
     ],
   );
 
+  const runProtectSubtree = useCallback(
+    async (rootNoteId: string, protect: boolean) => {
+      const ids = collectSubtreeNoteIds(treeData ?? [], rootNoteId);
+      let changed = 0;
+      const skipped: string[] = [];
+      for (const id of ids) {
+        let note: any;
+        try {
+          note = await client.getNote(id);
+        } catch {
+          continue;
+        }
+        if (note.isProtected === protect) continue;
+        if (note.deletedAt) continue;
+        if (note.type === "file") continue;
+        try {
+          if (protect) {
+            const payload: { title: string; content: any; codeLanguage?: string } = {
+              title: note.title,
+              content: note.content,
+            };
+            if (note.type === "code") payload.codeLanguage = note.codeLanguage;
+            const ciphertext = await session.encrypt(payload);
+            await client.setProtected(id, { protected: true, contentCiphertext: ciphertext });
+          } else {
+            const payload = await session.decrypt<{ title: string; content: any; codeLanguage?: string }>(note.contentCiphertext);
+            const unprotectInput: {
+              protected: false;
+              title: string;
+              content: any;
+              propertiesJson?: string;
+            } = { protected: false, title: payload.title, content: payload.content };
+            if (note.type === "code" && payload.codeLanguage) {
+              unprotectInput.propertiesJson = JSON.stringify({ codeLanguage: payload.codeLanguage });
+            }
+            await client.setProtected(id, unprotectInput);
+          }
+          changed++;
+        } catch {
+          skipped.push(note.title || id);
+        }
+      }
+      refreshTree();
+      showToast(
+        protect
+          ? t(locale, "protectedSubtreeDone", { count: String(changed) })
+          : t(locale, "unprotectedSubtreeDone", { count: String(changed) }),
+      );
+      if (skipped.length) {
+        showToast(t(locale, "protectedSubtreeSkipped", { count: String(skipped.length) }));
+      }
+    },
+    [client, session, treeData, locale, refreshTree, showToast],
+  );
+
+  const protectSubtree = useCallback(
+    (rootNoteId: string, protect: boolean) => {
+      if (!protectedSession.configured) {
+        setPasswordDialog("setup");
+        pendingProtectRef.current = { rootNoteId, protect };
+        return;
+      }
+      if (!protectedSession.unlocked) {
+        setPasswordDialog("unlock");
+        pendingProtectRef.current = { rootNoteId, protect };
+        return;
+      }
+      void runProtectSubtree(rootNoteId, protect);
+    },
+    [protectedSession.configured, protectedSession.unlocked, runProtectSubtree],
+  );
+
+  useEffect(() => {
+    if (protectedSession.unlocked && pendingProtectRef.current) {
+      const pending = pendingProtectRef.current;
+      pendingProtectRef.current = null;
+      void runProtectSubtree(pending.rootNoteId, pending.protect);
+    }
+  }, [protectedSession.unlocked, runProtectSubtree]);
+
   return {
     session,
     protectedSession,
@@ -311,5 +417,6 @@ export function useProtectedSession({
     handleProtectedSessionToggle,
     handleProtectedSessionTimeoutChange,
     handlePasswordSubmit,
+    protectSubtree,
   };
 }

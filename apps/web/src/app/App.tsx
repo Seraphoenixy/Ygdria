@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { YgdriaClient } from "@ygdria/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { Capacitor } from "@capacitor/core";
+import { Preferences } from "@capacitor/preferences";
 import { BookOpen } from "lucide-react";
 import { SYSTEM_ROOT_NOTE_ID } from "@ygdria/shared";
 import { create } from "zustand";
@@ -227,6 +228,18 @@ export function App({ client }: { client: YgdriaClient }) {
       toastTimerRef.current = undefined;
     }, 3500);
   }, []);
+  const handleEditMobileEndpoint = useCallback((url: string) => {
+    void (async () => {
+      const endpoint = new URL(url.trim());
+      endpoint.pathname = endpoint.pathname.replace(/\/$/, "");
+      endpoint.search = "";
+      endpoint.hash = "";
+      await Preferences.set({ key: "ygdria.api", value: endpoint.toString().replace(/\/$/, "") });
+      window.location.reload();
+    })().catch(() => {
+      // Ignore partial/invalid input while the user is still typing.
+    });
+  }, []);
   const documentScrollRef = useRef<HTMLDivElement>(null);
   const pendingViewScrollRef = useRef<{ top: number; left: number } | null>(null);
   const toggleEditing = useCallback(() => {
@@ -333,6 +346,11 @@ export function App({ client }: { client: YgdriaClient }) {
   );
   const [requiresDeviceAuth, setRequiresDeviceAuth] = useState(false);
   const isDesktopApp = Boolean(window.ygdria?.remote);
+  const [mobileApiEndpoint, setMobileApiEndpoint] = useState("");
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    void Preferences.get({ key: "ygdria.api" }).then((result) => setMobileApiEndpoint(result.value ?? ""));
+  }, []);
   const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
@@ -371,7 +389,48 @@ export function App({ client }: { client: YgdriaClient }) {
     reopenClosedTab,
     openTabInNewWindow,
     clearTabs,
+    moveTab,
   } = workspaceTabs;
+
+  // Keyboard navigation for tabs: Ctrl/Cmd+1..9 jump, Ctrl/Cmd+Tab cycles,
+  // Ctrl/Cmd+W closes the active tab. Suppressed while typing in a field.
+  useEffect(() => {
+    const tabDigits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable))
+        return;
+      if (event.key === "w" || event.key === "W") {
+        if (activeTabId) {
+          event.preventDefault();
+          closeTab(activeTabId);
+        }
+        return;
+      }
+      if (event.key === "Tab") {
+        if (tabs.length < 2) return;
+        event.preventDefault();
+        const index = tabs.findIndex((tab) => tab.id === activeTabId);
+        const next = event.shiftKey
+          ? (index - 1 + tabs.length) % tabs.length
+          : (index + 1) % tabs.length;
+        const targetTab = tabs[next];
+        if (targetTab) activateTab(targetTab);
+        return;
+      }
+      const digit = tabDigits.indexOf(event.key);
+      if (digit >= 0) {
+        const targetTab = tabs[digit];
+        if (targetTab) {
+          event.preventDefault();
+          activateTab(targetTab);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tabs, activeTabId, activateTab, closeTab]);
 
   const queryClient = useQueryClient();
 
@@ -389,7 +448,6 @@ export function App({ client }: { client: YgdriaClient }) {
     restoreNote,
     purgeTrash,
     clearUnusedAttachments,
-    renameNote,
     refreshTree,
     autoSave,
     conflict,
@@ -402,14 +460,19 @@ export function App({ client }: { client: YgdriaClient }) {
     activeTabId,
     locale,
     dataAccessReady: deviceAccess === "ready",
-    onNoteCreated: (noteId) => {
+    onNoteCreated: (noteId, parentPlacementId) => {
       openNote(noteId, false, true);
-      // The creation response contains a note, not its placement. Read the
-      // refreshed tree so a new daily note is visibly selected under its day.
-      void client
-        .tree()
-        .then((placements) => {
-          const placement = (placements as TreePlacement[]).find(
+      // Optimistically anchor the selection to the known parent so the new
+      // note is visibly selected immediately (important on mobile, where the
+      // tree drawer may already be collapsed). Then resolve the exact
+      // placement from the tree query — reusing its in-flight refetch instead
+      // of firing a second network request — and correct the selection.
+      if (parentPlacementId) setSelectionParentId(parentPlacementId);
+      void tree
+        .refetch()
+        .then((result) => {
+          const placements = (result.data as TreePlacement[] | undefined) ?? tree.data;
+          const placement = (placements ?? []).find(
             (item) => item.noteId === noteId && !item.isTrashed && !item.isSystem && !item.isTrash,
           );
           if (!placement) return;
@@ -433,6 +496,7 @@ export function App({ client }: { client: YgdriaClient }) {
     handleProtectedSessionToggle,
     handleProtectedSessionTimeoutChange,
     handlePasswordSubmit,
+    protectSubtree,
   } = useProtectedSession({
     client,
     requiresDeviceAuth,
@@ -441,6 +505,7 @@ export function App({ client }: { client: YgdriaClient }) {
     setDeviceAccess,
     treeData: tree.data,
     locale,
+    showToast,
   });
 
   const {
@@ -560,7 +625,7 @@ export function App({ client }: { client: YgdriaClient }) {
     const size = summary.estimatedBytes < 1024 * 1024
       ? `${Math.ceil(summary.estimatedBytes / 1024)} KiB`
       : `${(summary.estimatedBytes / 1024 / 1024).toFixed(1)} MiB`;
-    showToast(`${t(locale, "importComplete")} · ${summary.notes} ${locale === "zh-CN" ? "篇笔记" : "notes"} · ${summary.attachments} ${locale === "zh-CN" ? "个附件" : "attachments"} · ${size}`);
+    showToast(`${t(locale, "importComplete")} · ${summary.notes} ${t(locale, "noteUnit")} · ${summary.attachments} ${t(locale, "attachmentUnit")} · ${size}`);
   }, [locale, showToast]);
 
   useEffect(
@@ -854,6 +919,7 @@ export function App({ client }: { client: YgdriaClient }) {
       <DeviceAccessGate
         initializing={desktopMigration || deviceAccess === "initialize"}
         remoteRequiresHttps={desktopMigration}
+        locale={locale}
         onSubmit={async (password, label) => {
           if (desktopMigration) {
             // Desktop-only "create" path: establish the same local master
@@ -889,7 +955,7 @@ export function App({ client }: { client: YgdriaClient }) {
             const config = await client.authConfig();
             assertAuthConfigSupported(config);
             if (!config.initialized || !config.accessSalt || !config.srpSalt)
-              throw new Error("服务尚未初始化主密码，请刷新后重试。");
+              throw new Error(t(locale, "deviceAccessNotInitialized"));
             const accessSecret = await deriveAccessSecret(password, config.accessSalt);
             const clientEphemeral = srpBeginLogin();
             const challenge = await client.srpLoginChallenge(clientEphemeral.public);
@@ -931,7 +997,7 @@ export function App({ client }: { client: YgdriaClient }) {
                     !remoteConfig.accessSalt ||
                     !remoteConfig.srpSalt
                   )
-                    throw new Error("目标服务端尚未初始化；请先在目标服务端创建知识库。");
+                    throw new Error(t(locale, "targetServerNotInitialized"));
                   const accessSecret = await deriveAccessSecret(password, remoteConfig.accessSalt);
                   const clientEphemeral = srpBeginLogin();
                   const challenge = await remote.srpLoginChallenge(clientEphemeral.public);
@@ -979,7 +1045,7 @@ export function App({ client }: { client: YgdriaClient }) {
                 const config = await remote.authConfig();
                 assertAuthConfigSupported(config);
                 if (!config.initialized || !config.accessSalt || !config.srpSalt)
-                  throw new Error("目标服务端尚未初始化；请先在目标服务端创建知识库。");
+                  throw new Error(t(locale, "targetServerNotInitialized"));
                 const accessSecret = await deriveAccessSecret(password, config.accessSalt);
                 const clientEphemeral = srpBeginLogin();
                 const challenge = await remote.srpLoginChallenge(clientEphemeral.public);
@@ -1149,6 +1215,7 @@ export function App({ client }: { client: YgdriaClient }) {
           activateTab={activateTab}
           closeTab={closeTab}
           openNewTab={openNewTab}
+          onReorder={moveTab}
           onTabContextMenu={(tabId, x, y) => {
             setContextMenu(null);
             setTabMenu({ tabId, x, y });
@@ -1203,6 +1270,10 @@ export function App({ client }: { client: YgdriaClient }) {
           onMigrateToEmptyServer={() => setMigrationDialogOpen(true)}
           canOpenFrontendConsole={Boolean(window.ygdria?.openDevTools)}
           onOpenFrontendConsole={() => { void window.ygdria?.openDevTools?.(); }}
+          syncRunsAutomatically={!isDesktopApp}
+          canEditMobileEndpoint={Capacitor.isNativePlatform()}
+          mobileEndpoint={mobileApiEndpoint}
+          onEditMobileEndpoint={handleEditMobileEndpoint}
           onProtectedSessionTimeoutChange={handleProtectedSessionTimeoutChange}
           onMaintainDatabase={maintainDatabase}
           noteIsLoading={note.isLoading}
@@ -1221,6 +1292,7 @@ export function App({ client }: { client: YgdriaClient }) {
           onUnarchive={() => note.data && archiveNote.mutate({ noteId: note.data.id, archived: false })}
           onEditorReady={handleEditorReady}
           documentScrollRef={documentScrollRef}
+          onUploadError={(message) => showToast(`${t(locale, "imageUploadFailed")}${message ? `: ${message}` : ""}`)}
           createNote={createNote}
           createNewNote={createNewNote}
           decryptedTitles={decryptedTitles}
@@ -1284,25 +1356,14 @@ export function App({ client }: { client: YgdriaClient }) {
               locale={locale}
               onClose={() => setContextMenu(null)}
               onCreateChild={(parentId, type) => void createNewNote(parentId, type)}
-              onRename={(noteId, nextTitle) => renameNote.mutate({ noteId, nextTitle })}
               onArchive={(noteId, archived) => archiveNote.mutate({ noteId, archived })}
               onSetClipboard={setTreeClipboard}
               onDelete={setDeleteConfirmation}
-              onMoveTo={(target, placements) => {
-                const destination = window.prompt(t(locale, "movePrompt"));
-                const parent = (tree.data ?? []).find(
-                  (item) => item.placementId === destination || item.title === destination,
-                );
-                if (parent)
-                  void Promise.all(
-                    placements.map((item, index) =>
-                      client.movePlacement(item.placementId, parent.placementId, index),
-                    ),
-                  ).then(refreshTree);
-              }}
               onPaste={pastePlacements}
               onExport={exportPlacements}
               onImport={openImportDialog}
+              onOpenInNewTab={(placement) => openNote(placement.noteId, Boolean(placement.isTrashed), false, true, placement.placementId)}
+              onProtectSubtree={(placement, protect) => protectSubtree(placement.noteId, protect)}
             />
           </div>
         )}
@@ -1402,6 +1463,7 @@ export function App({ client }: { client: YgdriaClient }) {
         {remoteReauthRequired && !passwordDialog && (
           <PasswordDialog
             mode="reauth"
+            locale={locale}
             onCancel={() => {
               remoteReauthInProgressRef.current = false;
               setRemoteReauthRequired(false);
@@ -1412,12 +1474,14 @@ export function App({ client }: { client: YgdriaClient }) {
         {passwordDialog && (
           <PasswordDialog
             mode={passwordDialog}
+            locale={locale}
             onCancel={() => setPasswordDialog(null)}
             onSubmit={handlePasswordSubmit}
           />
         )}
         {migrationDialogOpen && (
           <MigrationToServerDialog
+            locale={locale}
             onCancel={() => setMigrationDialogOpen(false)}
             onSubmit={migrateToEmptyServer}
           />

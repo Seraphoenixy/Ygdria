@@ -178,3 +178,8 @@
 .tree-add:hover {
   background: #d1d2d5;
 }
+.tree-no-match {
+  padding: 16px 14px;
+  color: #888a90;
+  font-size: 0.9rem;
+}

@@ -267,8 +267,8 @@ export class YgdriaClient {
       body: JSON.stringify(body),
     });
   }
-  archiveNote(id: string, archived: boolean) {
-    return this.request<any>(`/api/v1/notes/${id}/archive`, {
+  archiveNote(id: string, archived: boolean): Promise<{ archivedCount: number }> {
+    return this.request<{ archivedCount: number }>(`/api/v1/notes/${id}/archive`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ archived }),

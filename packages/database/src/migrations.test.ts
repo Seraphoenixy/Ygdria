@@ -15,7 +15,7 @@ describe("migration integrity", () => {
 
     expect(sqlite.prepare("SELECT value FROM migration_integrity_metadata WHERE key='checksum_format'").get())
       .toEqual({ value: "stable-v1" });
-    expect(sqlite.prepare("SELECT COUNT(*) count FROM schema_migrations").get()).toEqual({ count: 9 });
+    expect(sqlite.prepare("SELECT COUNT(*) count FROM schema_migrations").get()).toEqual({ count: 10 });
   });
 
   it("upgrades the legacy Electron runtime checksum once", () => {

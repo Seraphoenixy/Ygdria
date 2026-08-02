@@ -6,7 +6,7 @@ import {
   type ContentCodec,
   type SqliteDatabase,
 } from "@ygdria/database";
-import { SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
+import { CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
 import { isSensitiveSettingKey } from "../http/settings.js";
 
 export type SyncSqlite = SqliteDatabase;
@@ -132,6 +132,16 @@ export function resolveChangeEntities(
             }
           | undefined;
         if (row) data = row;
+        break;
+      }
+      case "placement-order": {
+        const version = sqlite.prepare("SELECT updated_at updatedAt FROM placement_order_versions WHERE parent_placement_id=?").get(change.entityId) as { updatedAt: number } | undefined;
+        if (version) {
+          const placementIds = (sqlite.prepare(
+            "SELECT id FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id",
+          ).all(change.entityId, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID) as Array<{ id: string }>).map((row) => row.id);
+          data = { parentPlacementId: change.entityId, placementIds, updatedAt: version.updatedAt };
+        }
         break;
       }
       case "attachment": {
@@ -335,9 +345,10 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
   const logChange = (entityType: string, entityId: string, changeKind: ChangeKind) => {
     if (recordOutbound) recordChange(sqlite, entityType, entityId, changeKind);
   };
-  const ordered = [...changes].sort((a, b) =>
-    a.entityType === "note" ? -1 : b.entityType === "note" ? 1 : 0,
-  );
+  const ordered = [...changes].sort((a, b) => {
+    const rank = (type: string) => type === "note" ? 0 : type === "placement" ? 1 : type === "placement-order" ? 2 : 3;
+    return rank(a.entityType) - rank(b.entityType);
+  });
   sqlite.transaction(() => {
     for (const change of ordered) {
       if (change.entityType === "setting" && isSensitiveSettingKey(change.entityId)) continue;
@@ -451,6 +462,23 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           logChange("note", String(d.id), "updated");
           applied += 1;
         }
+      } else if (change.entityType === "placement-order") {
+        const d = change.data as Record<string, unknown> | null;
+        if (!d || typeof d.parentPlacementId !== "string" || !Array.isArray(d.placementIds) || !d.placementIds.every((id) => typeof id === "string") || typeof d.updatedAt !== "number") continue;
+        const accepted = sqlite.prepare(
+          "INSERT INTO placement_order_versions(parent_placement_id,updated_at) VALUES (?,?) ON CONFLICT(parent_placement_id) DO UPDATE SET updated_at=excluded.updated_at WHERE excluded.updated_at > placement_order_versions.updated_at",
+        ).run(d.parentPlacementId, d.updatedAt);
+        if (!accepted.changes) continue;
+        const current = sqlite.prepare("SELECT id FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id")
+          .all(d.parentPlacementId, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID) as Array<{ id: string }>;
+        const allowed = new Set(current.map((row) => row.id));
+        const requested = [...new Set(d.placementIds)].filter((id): id is string => typeof id === "string" && allowed.has(id));
+        const requestedSet = new Set(requested);
+        const order = [...requested, ...current.map((row) => row.id).filter((id) => !requestedSet.has(id))];
+        const update = sqlite.prepare("UPDATE placements SET position=?,updated_at=? WHERE id=? AND parent_placement_id=?");
+        order.forEach((id, position) => update.run(position, d.updatedAt, id, d.parentPlacementId));
+        logChange("placement-order", d.parentPlacementId, "updated");
+        applied += 1;
       } else if (change.entityType === "placement") {
         if (change.changeKind === "deleted") {
           const result = sqlite

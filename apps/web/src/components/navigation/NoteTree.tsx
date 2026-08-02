@@ -1,4 +1,4 @@
-import { ChevronRight, Code2, Copy, FileText, Folder, Plus } from "lucide-react";
+import { ChevronRight, Code2, Copy, FileText, Folder, Lock, Plus } from "lucide-react";
 import { useState, type DragEvent } from "react";
 import type React from "react";
 import { t, type Locale } from "../../lib/i18n";
@@ -116,9 +116,10 @@ export function NoteTree({
           }}
           onContextMenu={(event) => onContextMenu(placement, event)}
         >
-          <button className="tree-select-hit" type="button" aria-label={title} onClick={(event) => onSelect(placement, event)} />
+          <button className="tree-select-hit" type="button" aria-label={title} onClick={(event) => onSelect(placement, event)} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); onSelect(placement, event); } }} />
           {hasChildren ? <button className={`tree-toggle visible ${isExpanded ? "expanded" : ""}`} aria-label={t(locale, isExpanded ? "collapseNote" : "expandNote")} onClick={(event) => { event.stopPropagation(); onToggle(placement.placementId); }}><ChevronRight size={17} /></button> : <span className="tree-toggle" aria-hidden="true" />}
           {hasChildren || placement.isCalendar ? <Folder className="tree-icon" size={16} /> : placement.type === "code" ? <Code2 className="tree-icon" size={16} /> : <FileText className="tree-icon" size={16} />}
+          {Boolean(placement.isProtected) && <Lock className="tree-lock-icon" size={14} aria-label={t(locale, "protectedNote")} />}
           <span className={`tree-label ${isRelatedClone ? "clone-related" : ""}`}>{title}</span>
           {isCloned && <Copy className="tree-clone-mark" size={14} aria-label={t(locale, "cloneMarker")} />}
           {!placement.isTrashed && <button className="tree-add" disabled={creatingNote} aria-label={t(locale, "createChild", { title: placement.title })} onClick={(event) => { event.stopPropagation(); onCreateChild(placement.placementId); }}><Plus size={16} /></button>}
@@ -126,5 +127,13 @@ export function NoteTree({
         {hasChildren && (isExpanded || Boolean(search.trim())) && renderTree(placement.placementId, depth + 1)}
       </div>;
     });
-  return <>{renderTree(null)}</>;
+  const hasMatches = search.trim()
+    ? placements.some((placement) => !placement.isTrash && matchesSearch(placement))
+    : true;
+  return (
+    <>
+      {renderTree(null)}
+      {search.trim() && !hasMatches && <p className="tree-no-match">{t(locale, "noMatchingNotes")}</p>}
+    </>
+  );
 }

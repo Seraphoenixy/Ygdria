@@ -29,6 +29,14 @@ export function registerSecurityHeaders(app: FastifyInstance, loginRequestCounts
 export function registerLocalTokenHook(app: FastifyInstance, localToken?: string) {
   app.addHook("onRequest", async (req) => {
     if (req.method === "OPTIONS") return;
+    // The embedded desktop window navigates to the local server's static
+    // shell. Electron navigations cannot attach an application-specific
+    // request header, so protecting `/` (and its JS/CSS assets) makes a
+    // packaged desktop app render the JSON 401 response instead of the UI.
+    // Only application API routes expose user data or mutations; keep the
+    // per-launch local-token boundary on those routes.
+    const pathname = req.url.split("?")[0];
+    if (!pathname.startsWith("/api/") && !pathname.startsWith("/etapi/")) return;
     if (localToken && req.headers["x-ygdria-local-token"] !== localToken)
       throw httpError(401, "Missing local token");
   });

@@ -38,7 +38,7 @@ export function MobileTabBar({
   onToggleSettings,
 }: MobileTabBarProps) {
   return (
-    <nav className="mobile-tab-bar" aria-label={t(locale, "noteTree")}>
+    <nav className="mobile-tab-bar" aria-label={t(locale, "mobileTabBar")}>
       <button
         type="button"
         className={`mobile-tab${treeOpen ? " active" : ""}`}

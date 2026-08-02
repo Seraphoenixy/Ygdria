@@ -160,8 +160,8 @@ export function Toolbar({
           <button
             type="button"
             className="toolbar-icon inspector-toolbar-toggle"
-            title={inspectorCollapsed ? "展开右侧栏" : "收起右侧栏"}
-            aria-label={inspectorCollapsed ? "展开右侧栏" : "收起右侧栏"}
+            title={t(locale, inspectorCollapsed ? "inspectorExpand" : "inspectorCollapse")}
+            aria-label={t(locale, inspectorCollapsed ? "inspectorExpand" : "inspectorCollapse")}
             onClick={onToggleInspector}
           >
             <PanelRight size={18} />

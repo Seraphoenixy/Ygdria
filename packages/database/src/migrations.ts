@@ -53,6 +53,7 @@ const STABLE_CHECKSUMS = {
   7: "62ddd24151f959ed",
   8: "b2d458a4d650ec4f",
   9: "f2d6e98c4c79b0a1",
+  10: "d71f6e43b8a20c59",
 } as const;
 
 const MIGRATIONS: Migration[] = [
@@ -254,6 +255,19 @@ const MIGRATIONS: Migration[] = [
         DROP TABLE IF EXISTS note_attachments;
         DELETE FROM sync_change_log WHERE entity_type='note_attachment';
         DELETE FROM sync_tombstones WHERE entity_type='note_attachment';
+      `);
+    },
+  },
+  {
+    version: 10,
+    description: "Track atomic sibling-order versions for placement sync",
+    checksum: STABLE_CHECKSUMS[10],
+    up(sqlite) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS placement_order_versions (
+          parent_placement_id text primary key references placements(id) on delete cascade,
+          updated_at integer not null
+        );
       `);
     },
   },

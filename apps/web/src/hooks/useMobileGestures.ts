@@ -86,7 +86,7 @@ export function useMobileGestures({
           onCloseTree();
           tracking = false;
         }
-      } else if (startX <= 28 && dx > 60) {
+      } else if (startX <= 44 && dx > 60) {
         onOpenTree();
         tracking = false;
       }

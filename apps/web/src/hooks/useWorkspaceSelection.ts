@@ -166,6 +166,9 @@ export function useWorkspaceSelection({
   const selectTreePlacement = (placement: TreePlacement, event: React.MouseEvent<HTMLElement>) => {
     const isRangeSelect = event.shiftKey;
     const isToggleSelect = event.ctrlKey || event.metaKey;
+    // A middle-click (button 1) opens the note in a new tab even without a
+    // modifier; Ctrl/Cmd would normally select, so it can't be reused here.
+    const openInNewTab = event.button === 1 || (event.ctrlKey || event.metaKey);
     if (!isRangeSelect && !isToggleSelect) {
       setSelectedPlacementIds(new Set());
       setSelectedPlacementId(placement.placementId);
@@ -175,7 +178,7 @@ export function useWorkspaceSelection({
         placement.noteId,
         Boolean(placement.isTrashed),
         false,
-        event.ctrlKey || event.metaKey,
+        openInNewTab,
         placement.placementId,
       );
       return;
@@ -250,6 +253,12 @@ export function useWorkspaceSelection({
 
       const focused = document.activeElement as Element | null;
       if (!focused?.closest(".note-tree-panel")) return;
+      if (
+        focused instanceof HTMLInputElement ||
+        focused instanceof HTMLTextAreaElement ||
+        (focused as HTMLElement).isContentEditable
+      )
+        return;
 
       const selectedItems = (treeData ?? [])
         .filter(

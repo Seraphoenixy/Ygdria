@@ -4,7 +4,7 @@ import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement, WorkspaceTab } from "../../types/workspace";
 import { NoteTree } from "./NoteTree";
-import { computeAutoExpansion } from "../../lib/tree-paths";
+import { ancestorChain, computeAutoExpansion } from "../../lib/tree-paths";
 
 function QuickButton({ label, active = false, className = "", disabled = false, onClick, children }: {
   label: string;
@@ -82,6 +82,8 @@ export function TreePanel({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [userExpanded, setUserExpanded] = useState<Set<string>>(new Set());
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const autoExpandedRef = useRef<Set<string>>(new Set());
+  const pendingAutoCollapsesRef = useRef<Map<string, number>>(new Map());
 
   const childrenByParent = useMemo(() => {
     const byParent = new Map<string | null, TreePlacement[]>();
@@ -125,8 +127,9 @@ export function TreePanel({
   };
 
   // ── Auto-expansion from open note tabs ──────────────────────────────
-  // Whenever tabs or tree change, compute the union of ancestor chains for
-  // all open note tabs and set that as the expansion state.
+  // Opening a note reveals its path immediately. Paths that are no longer
+  // needed stay open initially and only become collapse candidates; this
+  // avoids disrupting someone who is still browsing the same area.
   useEffect(() => {
     if (isSearching) return; // Don't auto-recalc during search — search has its own expanded view.
 
@@ -135,10 +138,72 @@ export function TreePanel({
       .map((tab) => ({ noteId: tab.noteId, placementId: tab.placementId }));
 
     const autoSet = computeAutoExpansion(openNoteInfos, byId, byNoteId, rootIds);
-    setExpanded(autoSet);
-    setUserExpanded(new Set());
+    const previousAutoSet = autoExpandedRef.current;
+    const candidateIds = [...previousAutoSet].filter((id) =>
+      !autoSet.has(id) && !rootIds.has(id) && (childrenByParent.get(id)?.length ?? 0) > 0,
+    );
+    for (const id of candidateIds) pendingAutoCollapsesRef.current.set(id, 0);
+    for (const id of autoSet) pendingAutoCollapsesRef.current.delete(id);
+    autoExpandedRef.current = autoSet;
+    setExpanded((current) => {
+      const next = new Set([...current].filter((id) => byId.has(id)));
+      for (const id of autoSet) next.add(id);
+      return next;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabs, tree, isSearching]);
+
+  // A newly created child or today's calendar note can arrive after its parent
+  // was deliberately collapsed. Reveal the selected placement's full path once
+  // it is present in the refreshed tree, overriding that stale collapse choice.
+  useEffect(() => {
+    if (!selectedPlacementId || isSearching) return;
+    const path = ancestorChain(selectedPlacementId, byId);
+    if (!path.length) return;
+    setUserExpanded((current) => {
+      const next = new Set(current);
+      let changed = false;
+      for (const placementId of path) {
+        if (next.delete(placementId)) changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [selectedPlacementId, byId, isSearching]);
+
+  /** Count a deliberate tree interaction against stale auto-expanded paths.
+   * Selecting a note within such a path counts as a visit and cancels its
+   * pending collapse. Three operations elsewhere finally reclaim the space. */
+  const recordTreeOperation = (visitedPlacementId?: string) => {
+    const pending = pendingAutoCollapsesRef.current;
+    if (pending.size === 0) return;
+    const shouldCollapse = new Set<string>();
+    for (const [placementId, count] of pending) {
+      let currentId = visitedPlacementId;
+      let visitedCandidate = false;
+      while (currentId) {
+        if (currentId === placementId) {
+          visitedCandidate = true;
+          break;
+        }
+        currentId = byId.get(currentId)?.parentPlacementId ?? undefined;
+      }
+      if (visitedCandidate) {
+        pending.delete(placementId);
+      } else if (count + 1 >= 3) {
+        pending.delete(placementId);
+        shouldCollapse.add(placementId);
+      } else {
+        pending.set(placementId, count + 1);
+      }
+    }
+    if (shouldCollapse.size) {
+      setExpanded((current) => {
+        const next = new Set(current);
+        shouldCollapse.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  };
 
   // ── Search temporary expansion ──────────────────────────────────────
   // When searching, temporarily expand ancestors of all matching items so
@@ -319,6 +384,15 @@ export function TreePanel({
           </button>
           <button
             type="button"
+            aria-label={t(locale, "attachments")}
+            title={t(locale, "attachments")}
+            className={activeTabId === "attachments" ? "active" : ""}
+            onClick={() => { if (activeTabId === "attachments") onCloseAttachments(); else onOpenAttachments(); }}
+          >
+            <Paperclip size={20} />
+          </button>
+          <button
+            type="button"
             aria-label={protectedSession.unlocked
               ? t(locale, "lockProtectedSession")
               : protectedSession.configured
@@ -353,7 +427,7 @@ export function TreePanel({
             ref={searchInputRef}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder={t(locale, "searchNotes")}
+            placeholder={t(locale, "filterNotes")}
             aria-label={t(locale, "searchNotes")}
           />
         </div>
@@ -368,12 +442,18 @@ export function TreePanel({
             locale={locale}
             matchesSearch={matchesSearch}
             decryptedTitles={decryptedTitles}
-            onSelect={onSelectPlacement}
-            onToggle={(placementId) => setUserExpanded((current) => {
-              const next = new Set(current);
-              next.has(placementId) ? next.delete(placementId) : next.add(placementId);
-              return next;
-            })}
+            onSelect={(placement, event) => {
+              recordTreeOperation(placement.placementId);
+              onSelectPlacement(placement, event);
+            }}
+            onToggle={(placementId) => {
+              recordTreeOperation();
+              setUserExpanded((current) => {
+                const next = new Set(current);
+                next.has(placementId) ? next.delete(placementId) : next.add(placementId);
+                return next;
+              });
+            }}
             onCreateChild={(placementId) => onCreateNote(placementId)}
             creatingNote={creatingNote}
             onMove={(placementId, parentPlacementId, position) => {

@@ -26,12 +26,13 @@ export function recordChange(
   entityType: string,
   entityId: string,
   changeKind: ChangeKind,
+  createdAt = Date.now(),
 ): void {
   sqlite
     .prepare(
       "INSERT INTO sync_change_log (entity_type, entity_id, change_kind, created_at) VALUES (?,?,?,?)",
     )
-    .run(entityType, entityId, changeKind, Date.now());
+    .run(entityType, entityId, changeKind, createdAt);
 }
 
 /** Record a batch of changes atomically. */

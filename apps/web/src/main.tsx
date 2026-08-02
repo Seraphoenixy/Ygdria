@@ -9,9 +9,10 @@ import { initCapacitor } from "./lib/capacitor";
 import { isPhoneLayout } from "./lib/mobileLayout";
 import { loadRemoteCredential } from "./lib/credentialStorage";
 import { initShareReceiver } from "./lib/shareReceiver";
+import { t, detectLocale, type Locale } from "./lib/i18n";
 import "./style.css";
 
-const MOBILE_API_ENDPOINT_KEY = "ygdria.api";
+export const MOBILE_API_ENDPOINT_KEY = "ygdria.api";
 
 // Apply the native-shell body class as early as possible — before React renders
 // — so the mobile-only CSS in `styles/responsive/capacitor.css` is active on
@@ -42,9 +43,9 @@ if (typeof document !== "undefined") {
   if (isPhoneLayout()) document.documentElement.classList.add("phone");
 }
 
-function normalizeMobileApiEndpoint(value: string) {
+export function normalizeMobileApiEndpoint(value: string, locale: Locale) {
   const endpoint = new URL(value.trim());
-  if (endpoint.protocol !== "https:") throw new Error("移动端只能连接 HTTPS 服务地址。");
+  if (endpoint.protocol !== "https:") throw new Error(t(locale, "mobileOnlyHttps"));
   endpoint.pathname = endpoint.pathname.replace(/\/$/, "");
   endpoint.search = "";
   endpoint.hash = "";
@@ -55,6 +56,7 @@ function MobileEndpointGate() {
   const [serverUrl, setServerUrl] = useState("");
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const locale = detectLocale();
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -62,11 +64,11 @@ function MobileEndpointGate() {
     setSaving(true);
     setError(undefined);
     void (async () => {
-      const endpoint = normalizeMobileApiEndpoint(serverUrl);
+      const endpoint = normalizeMobileApiEndpoint(serverUrl, locale);
       await Preferences.set({ key: MOBILE_API_ENDPOINT_KEY, value: endpoint });
       window.location.reload();
     })()
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法保存服务地址。"))
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t(locale, "mobileServerSaveError")))
       .finally(() => setSaving(false));
   };
 
@@ -75,23 +77,23 @@ function MobileEndpointGate() {
       <section className="device-access-card" aria-labelledby="mobile-server-title">
         <form onSubmit={submit}>
           <div>
-            <h1 id="mobile-server-title">登录</h1>
-            <p>请输入 Ygdria 服务的 HTTPS 域名。该地址仅保存在本机，用于登录和同步。</p>
+            <h1 id="mobile-server-title">{t(locale, "deviceAccessLogin")}</h1>
+            <p>{t(locale, "mobileServerDesc")}</p>
           </div>
           <label>
-            <span>服务地址</span>
+            <span>{t(locale, "mobileServerUrlLabel")}</span>
             <input
               autoFocus
               type="url"
               inputMode="url"
               value={serverUrl}
-              placeholder="https://notes.example.com"
+              placeholder={t(locale, "serverUrlPlaceholder")}
               onChange={(event) => { setServerUrl(event.target.value); setError(undefined); }}
             />
           </label>
           {error && <p className="device-access-error" role="alert">{error}</p>}
           <button type="submit" disabled={!serverUrl.trim() || saving}>
-            {saving ? "保存中…" : "继续登录"}
+            {saving ? t(locale, "processing") : t(locale, "mobileContinueLogin")}
           </button>
         </form>
       </section>

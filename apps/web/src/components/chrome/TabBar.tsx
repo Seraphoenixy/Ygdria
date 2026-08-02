@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Plus,
   Settings,
@@ -25,6 +25,7 @@ type TabBarProps = {
   onClose: (tabId: string) => void;
   onNewTab: () => void;
   onContextMenu: (tabId: string, x: number, y: number) => void;
+  onReorder: (dragId: string, dropId: string) => void;
   /** Phone-only: render the strip in its collapsed (active-tab-only) form. */
   collapsible?: boolean;
   /** Phone-only: when true the strip is collapsed to a single active-tab row. */
@@ -42,10 +43,13 @@ export function TabBar({
   onClose,
   onNewTab,
   onContextMenu,
+  onReorder,
   collapsible,
   collapsed,
   onToggleCollapsed,
 }: TabBarProps) {
+  const [dragId, setDragId] = useState<string>();
+  const [overId, setOverId] = useState<string>();
   const activeTitle = (() => {
     const tab = tabs.find((x) => x.id === activeTabId);
     if (!tab) return undefined;
@@ -55,7 +59,7 @@ export function TabBar({
     if (tab.kind === "archive") return t(locale, "archivedNotes");
     if (tab.kind === "attachments") return t(locale, "attachments");
     if (tab.kind === "new") return t(locale, "newTab");
-    return noteTitleForTab(tab) ?? t(locale, "loading");
+    return noteTitleForTab(tab) ?? t(locale, "newTab");
   })();
 
   // Collapsed (phone): a single slim row showing the active tab, tappable to
@@ -100,21 +104,43 @@ export function TabBar({
                 ? t(locale, "archivedNotes")
                 : tab.kind === "attachments"
                   ? t(locale, "attachments")
-                  : tab.kind === "new"
-                    ? t(locale, "newTab")
-                    : noteTitleForTab(tab) ?? t(locale, "loading");
+          : tab.kind === "new"
+            ? t(locale, "newTab")
+            : noteTitleForTab(tab) ?? t(locale, "newTab");
           return (
             <div
-              className={`note-tab ${activeTabId === tab.id ? "active" : ""}`}
+              className={`note-tab ${activeTabId === tab.id ? "active" : ""} ${dragId === tab.id ? "dragging" : ""} ${overId === tab.id && dragId && dragId !== tab.id ? "drop-target" : ""}`}
               key={tab.id}
               role="tab"
               aria-selected={activeTabId === tab.id}
               tabIndex={0}
+              draggable
               onClick={() => onActivate(tab)}
               onKeyDown={(event) => event.key === "Enter" && onActivate(tab)}
               onContextMenu={(event) => {
                 event.preventDefault();
                 onContextMenu(tab.id, event.clientX, event.clientY);
+              }}
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", tab.id);
+                setDragId(tab.id);
+              }}
+              onDragOver={(event) => {
+                if (!dragId || dragId === tab.id) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                if (overId !== tab.id) setOverId(tab.id);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (dragId) onReorder(dragId, tab.id);
+                setDragId(undefined);
+                setOverId(undefined);
+              }}
+              onDragEnd={() => {
+                setDragId(undefined);
+                setOverId(undefined);
               }}
             >
               {tab.kind === "settings" ? <Settings size={16} /> : tab.kind === "search" ? <Search size={16} /> : tab.kind === "history" ? <History size={16} /> : tab.kind === "archive" ? <Archive size={16} /> : tab.kind === "attachments" ? <Paperclip size={16} /> : <FileText size={16} />}

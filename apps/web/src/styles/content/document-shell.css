@@ -164,6 +164,20 @@ article h1 {
   color: #888a90;
   font-size: 0.95rem;
 }
+.protected-note-unlock {
+  margin-top: 4px;
+  padding: 8px 18px;
+  border: 1px solid var(--accent, #0f6cbd);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent, #0f6cbd);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.protected-note-unlock:hover {
+  background: var(--accent, #0f6cbd);
+  color: #fff;
+}
 .import-complete-toast {
   position: fixed;
   right: 24px;

@@ -154,7 +154,7 @@ export function useSync({
     const authEpoch = remoteAuthEpochRef.current;
     const syncEpoch = ++syncEpochRef.current;
     setSyncing(true);
-    setSyncProgress(locale === "zh-CN" ? "准备同步" : "Preparing sync");
+    setSyncProgress(t(locale, "syncPreparing"));
     void (async () => {
       const hydrateNoteContents = async <T extends { entityType: string; changeKind: string; data: Record<string, unknown> | null }>(
         changes: T[],
@@ -190,14 +190,14 @@ export function useSync({
             if (existing.exists && existing.id === ref.id) {
               transferredHashes.add(ref.contentHash);
               completed += 1;
-              setSyncProgress(`${locale === "zh-CN" ? "附件" : "Attachments"} ${completed}/${total}`);
+              setSyncProgress(`${t(locale, "syncAttachments")} ${completed}/${total}`);
               continue;
             }
             const file = await source.downloadAttachmentByHash(ref.contentHash);
             await destination.uploadAttachmentByHash(ref.contentHash, noteId, ref.filename, file.blob, destinationOrigin, ref.id);
             transferredHashes.add(ref.contentHash);
             completed += 1;
-            setSyncProgress(`${locale === "zh-CN" ? "附件" : "Attachments"} ${completed}/${total}`);
+            setSyncProgress(`${t(locale, "syncAttachments")} ${completed}/${total}`);
           }
         }
       };
@@ -206,7 +206,7 @@ export function useSync({
       if (incomingCursor.advancedAt === null) {
         let snapshot = await remoteClient.syncSnapshot(0, 500, true);
         while (snapshot.changes.length) {
-          setSyncProgress(`${locale === "zh-CN" ? "下载完整基线" : "Downloading baseline"} · ${snapshot.changes.length}`);
+          setSyncProgress(`${t(locale, "syncDownloadBaseline")} · ${snapshot.changes.length}`);
           const hydrated = await hydrateNoteContents(snapshot.changes, remoteClient);
           await client.pushSyncChanges(hydrated, "remote");
           await copyAttachments(snapshot.changes, remoteClient, client, "remote");
@@ -219,7 +219,7 @@ export function useSync({
       const outgoingCursor = await client.getSyncCursor(`out:${peer}`);
       let outgoing = await client.syncChanges(outgoingCursor.lastAdvanceId, 500, undefined, true);
       while (outgoing.changes.length) {
-        setSyncProgress(`${locale === "zh-CN" ? "上传元数据" : "Uploading metadata"} · ${outgoing.changes.length} · ${formatSyncBytes(outgoing.stats?.serializedBytes ?? 0)}`);
+        setSyncProgress(`${t(locale, "syncUploadMeta")} · ${outgoing.changes.length} · ${formatSyncBytes(outgoing.stats?.serializedBytes ?? 0)}`);
         const hydrated = await hydrateNoteContents(outgoing.changes, client);
         await remoteClient.pushSyncChanges(hydrated);
         await copyAttachments(outgoing.changes, client, remoteClient);
@@ -229,7 +229,7 @@ export function useSync({
       }
       let incoming = await remoteClient.syncChanges(incomingCursor.lastAdvanceId, 500, undefined, true);
       while (incoming.changes.length) {
-        setSyncProgress(`${locale === "zh-CN" ? "下载元数据" : "Downloading metadata"} · ${incoming.changes.length} · ${formatSyncBytes(incoming.stats?.serializedBytes ?? 0)}`);
+        setSyncProgress(`${t(locale, "syncDownloadMeta")} · ${incoming.changes.length} · ${formatSyncBytes(incoming.stats?.serializedBytes ?? 0)}`);
         const hydrated = await hydrateNoteContents(incoming.changes, remoteClient);
         await client.pushSyncChanges(hydrated, "remote");
         await copyAttachments(incoming.changes, remoteClient, client, "remote");
@@ -246,7 +246,8 @@ export function useSync({
       .catch((error) => {
         console.error("Immediate sync failed", error);
         const message = error instanceof Error ? error.message : String(error);
-        setSyncProgress(`${locale === "zh-CN" ? "失败，点击重试" : "Failed; click to retry"}: ${message}`);
+        showToast(`${t(locale, "syncFailed")}${message ? `: ${message}` : ""}`);
+        setSyncProgress(`${t(locale, "syncFailedRetry")}: ${message}`);
         if (syncEpoch === syncEpochRef.current) setSyncState("pending");
         if (
           isDesktopApp &&
@@ -269,6 +270,7 @@ export function useSync({
     refreshTree,
     remoteClient,
     showSyncComplete,
+    showToast,
   ]);
 
   // --- Sync state refresh ---
@@ -310,13 +312,13 @@ export function useSync({
   // --- Reauthenticate ---
   const reauthenticateRemote = useCallback(
     async (password: string) => {
-      if (!remoteClient) throw new Error("未配置同步服务器。");
+      if (!remoteClient) throw new Error(t(locale, "syncNotConfigured"));
       remoteReauthInProgressRef.current = true;
       remoteAuthEpochRef.current += 1;
       const config = await remoteClient.authConfig();
       assertAuthConfigSupported(config);
       if (!config.initialized || !config.accessSalt || !config.srpSalt)
-        throw new Error("目标服务端尚未初始化主密码。");
+        throw new Error(t(locale, "syncTargetNotInitialized"));
       const accessSecret = await deriveAccessSecret(password, config.accessSalt);
       const clientEphemeral = srpBeginLogin();
       const challenge = await remoteClient.srpLoginChallenge(clientEphemeral.public);
@@ -347,29 +349,29 @@ export function useSync({
       setSyncState("pending");
       syncNow();
     },
-    [isDesktopApp, pendingSyncServerUrl, remoteClient, syncNow],
+    [isDesktopApp, pendingSyncServerUrl, remoteClient, syncNow, locale],
   );
 
   // --- Migrate to empty server ---
   const migrateToEmptyServer = useCallback(
     async (serverUrl: string, password: string, label: string) => {
-      if (!isDesktopApp) throw new Error("只有桌面客户端可以发起此迁移。");
+      if (!isDesktopApp) throw new Error(t(locale, "desktopOnlyMigration"));
       let target: URL;
       try {
         target = new URL(serverUrl);
       } catch {
-        throw new Error("服务端地址无效。");
+        throw new Error(t(locale, "invalidServerUrl"));
       }
-      if (target.protocol !== "https:") throw new Error("迁移目标必须使用 HTTPS。");
+      if (target.protocol !== "https:") throw new Error(t(locale, "migrateRequiresHttps"));
       const localProtected = await client.protectedSession();
       if (!localProtected.salt || !localProtected.verifier)
-        throw new Error("本地受保护会话尚未配置，无法安全迁移主密码。");
+        throw new Error(t(locale, "localProtectedNotConfigured"));
       await session.unlock(password, localProtected.salt, localProtected.verifier);
       await window.ygdria!.remote!.configure(target.origin);
       const remote = new RemoteProxyClient(target.origin);
       const health = await remote.health();
       if (health.authInitialized || health.bootstrapped)
-        throw new Error("目标服务端已初始化；为避免覆盖现有知识库，迁移已取消。");
+        throw new Error(t(locale, "targetAlreadyInitialized"));
 
       await client.advanceSyncCursor(`out:${target.origin}`, 0);
       await client.advanceSyncCursor(`in:${target.origin}`, 0);
@@ -393,7 +395,7 @@ export function useSync({
       setSyncState("pending");
       setSyncAfterBootstrap(true);
     },
-    [client, isDesktopApp, session, setProtectedSession],
+    [client, isDesktopApp, session, setProtectedSession, locale],
   );
 
   return {

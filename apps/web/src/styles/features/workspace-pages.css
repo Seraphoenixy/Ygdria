@@ -424,3 +424,7 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+.outline-list li.outline-active > button {
+  color: #0f6cbd;
+  font-weight: 600;
+}

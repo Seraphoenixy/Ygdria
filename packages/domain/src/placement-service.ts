@@ -49,7 +49,7 @@ export class PlacementService extends NoteServiceBase {
       const autoTrashedNoteIds = this.moveOrphanNotesToTrash(affected, noteId);
       const snapshot: PlacementSnapshot = { placements, autoTrashedNoteIds };
       this.recordPlacementDeletion(undoId, snapshot);
-      recordChange(this.store.sqlite, "note", noteId, "deleted");
+      recordChange(this.store.sqlite, "note", noteId, "deleted", now());
       if (originalPlacementIds.length > 0) {
         recordChanges(
           this.store.sqlite,
@@ -149,7 +149,7 @@ export class PlacementService extends NoteServiceBase {
     this.store.sqlite.transaction(() => {
       const result = this.store.sqlite.prepare("DELETE FROM notes WHERE id=?").run(noteId);
       if (!result.changes) throw new NotFoundError();
-      recordChange(this.store.sqlite, "note", noteId, "deleted");
+      recordChange(this.store.sqlite, "note", noteId, "deleted", now());
       this.queueUnreferencedAttachmentCleanup();
     })();
     // The storage adapter owns physical files. The durable job records cleanup intent;
@@ -171,7 +171,7 @@ export class PlacementService extends NoteServiceBase {
     this.store.sqlite.transaction(() => {
       for (const noteId of noteIds) {
         this.store.sqlite.prepare("DELETE FROM notes WHERE id=?").run(noteId);
-        recordChange(this.store.sqlite, "note", noteId, "deleted");
+        recordChange(this.store.sqlite, "note", noteId, "deleted", now());
       }
       this.queueUnreferencedAttachmentCleanup();
     })();
@@ -394,7 +394,12 @@ export class PlacementService extends NoteServiceBase {
       );
       const updatedAt = now();
       orderedIds.forEach((id, index) => update.run(parentPlacementId, index, updatedAt, id));
-      recordChange(this.store.sqlite, "placement", placementId, "updated");
+      // A move re-numbers the entire sibling list. Sync that list as one
+      // atomic entity instead of emitting only the dragged placement.
+      this.store.sqlite
+        .prepare("INSERT INTO placement_order_versions(parent_placement_id,updated_at) VALUES (?,?) ON CONFLICT(parent_placement_id) DO UPDATE SET updated_at=excluded.updated_at")
+        .run(parentPlacementId, updatedAt);
+      recordChange(this.store.sqlite, "placement-order", parentPlacementId, "updated");
     })();
   }
   deletePlacement(placementId: string) {
@@ -411,7 +416,7 @@ export class PlacementService extends NoteServiceBase {
       for (const placement of placements)
         recordChange(this.store.sqlite, "placement", placement.id, "deleted");
       for (const noteId of autoTrashedNoteIds)
-        recordChange(this.store.sqlite, "note", noteId, "deleted");
+        recordChange(this.store.sqlite, "note", noteId, "deleted", now());
     })();
     return { undoId };
   }
