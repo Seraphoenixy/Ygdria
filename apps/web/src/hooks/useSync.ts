@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import type { YgdriaClient } from "@ygdria/api-client";
 import { YgdriaClient as YgdriaClientClass } from "@ygdria/api-client";
 import { RemoteProxyClient } from "../app/RemoteProxyClient";
 import type { Locale } from "../lib/i18n";
 import { t } from "../lib/i18n";
 import { loadRemoteCredential, saveRemoteCredential } from "../lib/credentialStorage";
+import { readSettings } from "../features/settings/settingsStore";
 import {
   assertAuthConfigSupported,
   deriveAccessSecret,
@@ -28,11 +30,16 @@ function isInvalidDeviceToken(error: unknown) {
   // and path (for example: "Invalid device token（GET /api/v1/sync/changes…）").
   // Treat all authentication failures as re-authentication candidates instead
   // of requiring the unwrapped server message to match exactly.
-  return error instanceof Error && /invalid device token|unauthorized|\bHTTP (?:401|403)\b/i.test(error.message);
+  return (
+    error instanceof Error &&
+    /invalid device token|unauthorized|\bHTTP (?:401|403)\b/i.test(error.message)
+  );
 }
 
 function formatSyncBytes(bytes: number) {
-  return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  return bytes < 1024 * 1024
+    ? `${Math.ceil(bytes / 1024)} KiB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
 
 type UseSyncOptions = {
@@ -49,7 +56,13 @@ type UseSyncOptions = {
     verifier: string | null;
     timeoutMs: number;
   };
-  setProtectedSession: (updater: (current: { configured: boolean; unlocked: boolean; timeoutMs: number }) => { configured: boolean; unlocked: boolean; timeoutMs: number }) => void;
+  setProtectedSession: (
+    updater: (current: { configured: boolean; unlocked: boolean; timeoutMs: number }) => {
+      configured: boolean;
+      unlocked: boolean;
+      timeoutMs: number;
+    },
+  ) => void;
   showToast: (message: string) => void;
   isDesktopApp: boolean;
 };
@@ -104,9 +117,20 @@ export function useSync({
       }
       try {
         const credential = await loadRemoteCredential();
+        const isNative = Capacitor.isNativePlatform();
+        // On mobile the authoritative server address is the "目标服务器地址"
+        // (syncServerUrl) from settings — not the address auto-saved alongside
+        // the device credential. Other platforms keep using the credential's
+        // server URL. Fall back to the credential's serverUrl for legacy mobile
+        // installs that have not set syncServerUrl yet.
+        const targetUrl = isNative
+          ? readSettings().syncServerUrl?.trim() || credential?.serverUrl
+          : credential?.serverUrl;
         setRemoteClient(
-          credential?.serverUrl && credential.deviceToken
-            ? new YgdriaClientClass(credential.serverUrl, undefined, credential.deviceToken)
+          // A device token is scoped to its issuing server. Never send a
+          // credential recovered for one server to a newly configured URL.
+          targetUrl && credential?.deviceToken && credential.serverUrl === targetUrl
+            ? new YgdriaClientClass(targetUrl, undefined, credential.deviceToken)
             : null,
         );
       } catch {
@@ -156,14 +180,29 @@ export function useSync({
     setSyncing(true);
     setSyncProgress(t(locale, "syncPreparing"));
     void (async () => {
-      const hydrateNoteContents = async <T extends { entityType: string; changeKind: string; data: Record<string, unknown> | null }>(
+      const hydrateNoteContents = async <
+        T extends { entityType: string; changeKind: string; data: Record<string, unknown> | null },
+      >(
         changes: T[],
         source: AttachmentTransferClient,
-      ): Promise<T[]> => Promise.all(changes.map(async (change): Promise<T> => {
-        if (change.entityType !== "note" || change.changeKind === "deleted" || !change.data || typeof change.data.contentHash !== "string" || typeof change.data.contentData === "string") return change;
-        const content = await source.syncNoteContent(String(change.data.id), change.data.contentHash);
-        return { ...change, data: { ...change.data, ...content } } as T;
-      }));
+      ): Promise<T[]> =>
+        Promise.all(
+          changes.map(async (change): Promise<T> => {
+            if (
+              change.entityType !== "note" ||
+              change.changeKind === "deleted" ||
+              !change.data ||
+              typeof change.data.contentHash !== "string" ||
+              typeof change.data.contentData === "string"
+            )
+              return change;
+            const content = await source.syncNoteContent(
+              String(change.data.id),
+              change.data.contentHash,
+            );
+            return { ...change, data: { ...change.data, ...content } } as T;
+          }),
+        );
       const copyAttachments = async (
         changes: Array<{
           entityType: string;
@@ -175,17 +214,36 @@ export function useSync({
         destinationOrigin?: "remote",
       ) => {
         const transferredHashes = new Set<string>();
-        const total = new Set(changes.flatMap((change) => Array.isArray(change.data?.attachmentRefs)
-          ? (change.data.attachmentRefs as Array<{ contentHash?: string }>).map((ref) => ref.contentHash).filter((hash): hash is string => Boolean(hash))
-          : [])).size;
+        const total = new Set(
+          changes.flatMap((change) =>
+            Array.isArray(change.data?.attachmentRefs)
+              ? (change.data.attachmentRefs as Array<{ contentHash?: string }>)
+                  .map((ref) => ref.contentHash)
+                  .filter((hash): hash is string => Boolean(hash))
+              : [],
+          ),
+        ).size;
         let completed = 0;
         for (const change of changes) {
-          if (change.entityType !== "note" || change.changeKind === "deleted" || !change.data) continue;
+          if (change.entityType !== "note" || change.changeKind === "deleted" || !change.data)
+            continue;
           const noteId = typeof change.data.id === "string" ? change.data.id : undefined;
-          const refs = Array.isArray(change.data.attachmentRefs) ? change.data.attachmentRefs as Array<{ id?: string; contentHash?: string; filename?: string }> : [];
+          const refs = Array.isArray(change.data.attachmentRefs)
+            ? (change.data.attachmentRefs as Array<{
+                id?: string;
+                contentHash?: string;
+                filename?: string;
+              }>)
+            : [];
           if (!noteId) continue;
           for (const ref of refs) {
-            if (!ref.id || !ref.contentHash || !ref.filename || transferredHashes.has(ref.contentHash)) continue;
+            if (
+              !ref.id ||
+              !ref.contentHash ||
+              !ref.filename ||
+              transferredHashes.has(ref.contentHash)
+            )
+              continue;
             const existing = await destination.hasAttachmentByHash(ref.contentHash);
             if (existing.exists && existing.id === ref.id) {
               transferredHashes.add(ref.contentHash);
@@ -194,7 +252,14 @@ export function useSync({
               continue;
             }
             const file = await source.downloadAttachmentByHash(ref.contentHash);
-            await destination.uploadAttachmentByHash(ref.contentHash, noteId, ref.filename, file.blob, destinationOrigin, ref.id);
+            await destination.uploadAttachmentByHash(
+              ref.contentHash,
+              noteId,
+              ref.filename,
+              file.blob,
+              destinationOrigin,
+              ref.id,
+            );
             transferredHashes.add(ref.contentHash);
             completed += 1;
             setSyncProgress(`${t(locale, "syncAttachments")} ${completed}/${total}`);
@@ -219,7 +284,9 @@ export function useSync({
       const outgoingCursor = await client.getSyncCursor(`out:${peer}`);
       let outgoing = await client.syncChanges(outgoingCursor.lastAdvanceId, 500, undefined, true);
       while (outgoing.changes.length) {
-        setSyncProgress(`${t(locale, "syncUploadMeta")} · ${outgoing.changes.length} · ${formatSyncBytes(outgoing.stats?.serializedBytes ?? 0)}`);
+        setSyncProgress(
+          `${t(locale, "syncUploadMeta")} · ${outgoing.changes.length} · ${formatSyncBytes(outgoing.stats?.serializedBytes ?? 0)}`,
+        );
         const hydrated = await hydrateNoteContents(outgoing.changes, client);
         await remoteClient.pushSyncChanges(hydrated);
         await copyAttachments(outgoing.changes, client, remoteClient);
@@ -227,9 +294,16 @@ export function useSync({
         if (!outgoing.hasMore) break;
         outgoing = await client.syncChanges(outgoing.cursor, 500, undefined, true);
       }
-      let incoming = await remoteClient.syncChanges(incomingCursor.lastAdvanceId, 500, undefined, true);
+      let incoming = await remoteClient.syncChanges(
+        incomingCursor.lastAdvanceId,
+        500,
+        undefined,
+        true,
+      );
       while (incoming.changes.length) {
-        setSyncProgress(`${t(locale, "syncDownloadMeta")} · ${incoming.changes.length} · ${formatSyncBytes(incoming.stats?.serializedBytes ?? 0)}`);
+        setSyncProgress(
+          `${t(locale, "syncDownloadMeta")} · ${incoming.changes.length} · ${formatSyncBytes(incoming.stats?.serializedBytes ?? 0)}`,
+        );
         const hydrated = await hydrateNoteContents(incoming.changes, remoteClient);
         await client.pushSyncChanges(hydrated, "remote");
         await copyAttachments(incoming.changes, remoteClient, client, "remote");

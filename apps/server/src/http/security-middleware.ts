@@ -14,7 +14,7 @@ export function registerSecurityHeaders(app: FastifyInstance, loginRequestCounts
     );
     reply.header(
       "Content-Security-Policy",
-      "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'",
+      "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'; connect-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:",
     );
     if (req.method !== "POST") return;
     const path = req.url.split("?")[0];

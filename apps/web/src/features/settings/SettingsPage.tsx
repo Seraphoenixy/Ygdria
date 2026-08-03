@@ -33,8 +33,6 @@ export function SettingsPage({
   onOpenFrontendConsole,
   syncRunsAutomatically = false,
   canEditMobileEndpoint = false,
-  mobileEndpoint = "",
-  onEditMobileEndpoint,
 }: {
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
@@ -62,14 +60,21 @@ export function SettingsPage({
   onOpenFrontendConsole?: () => void;
   syncRunsAutomatically?: boolean;
   canEditMobileEndpoint?: boolean;
-  mobileEndpoint?: string;
-  onEditMobileEndpoint?: (url: string) => void;
 }) {
   const [settings, setSettings] = useState<StoredSettings>(readSettings);
   const updateSettings = (next: Partial<StoredSettings>) => {
     const updated = { ...settings, ...next };
     setSettings(updated);
     writeSettings(updated);
+  };
+  const reconnectMobileEndpoint = () => {
+    if (!canEditMobileEndpoint) return;
+    try {
+      const url = new URL(settings.syncServerUrl.trim());
+      if (url.protocol === "http:" || url.protocol === "https:") window.location.reload();
+    } catch {
+      // Preserve the entered value so the user can complete or correct it.
+    }
   };
   const numberInput = (key: keyof StoredSettings) => (event: ChangeEvent<HTMLInputElement>) =>
     updateSettings({ [key]: Number(event.target.value) } as Partial<StoredSettings>);
@@ -98,12 +103,11 @@ export function SettingsPage({
         </div></div>
       </section>
       <SettingsSection id="settings-sync" title={t(locale, "syncServer")} hint={t(locale, "syncServerHint")} rows={[
-        <SettingsTextRow key="sync-server-url" title={t(locale, "syncServerUrl")} description={t(locale, "syncServerUrlHint")} value={settings.syncServerUrl} placeholder="https://notes.example.com" onChange={(value) => updateSettings({ syncServerUrl: value })} />,
+        <SettingsTextRow key="sync-server-url" title={t(locale, "syncServerUrl")} description={t(locale, "syncServerUrlHint")} value={settings.syncServerUrl} placeholder="https://notes.example.com" onChange={(value) => updateSettings({ syncServerUrl: value })} onBlur={reconnectMobileEndpoint} />,
         <SettingsNumberRow key="sync-timeout" title={t(locale, "syncConnectionTimeout")} description={t(locale, "syncServerHint")} value={settings.syncConnectionTimeoutSeconds} min={1} unit={t(locale, "seconds")} onChange={(event) => updateSettings({ syncConnectionTimeoutSeconds: Math.max(1, Math.floor(Number(event.target.value)) || 1) })} />,
         <SettingsActionRow key="sync-test" title={t(locale, "testConnection")} description={t(locale, "testConnectionHint")} action={t(locale, "testConnection")} disabled={!settings.syncServerUrl.trim() || testingSyncConnection} onClick={() => onTestSyncConnection?.(settings.syncServerUrl, settings.syncConnectionTimeoutSeconds)} status={syncConnectionMessage} />,
         ...(canMigrateToEmptyServer ? [<SettingsActionRow key="sync-migrate-empty" title={t(locale, "migrateLocalVault")} description={t(locale, "migrateLocalVaultDesc")} action={t(locale, "migrateToEmptyServer")} onClick={onMigrateToEmptyServer} />] : []),
         ...(canOpenFrontendConsole ? [<SettingsActionRow key="open-frontend-console" title={t(locale, "openFrontendConsole")} description={t(locale, "openFrontendConsoleDesc")} action={t(locale, "openConsole")} onClick={onOpenFrontendConsole} />] : []),
-        ...(canEditMobileEndpoint ? [<SettingsTextRow key="mobile-server-url" title={t(locale, "mobileServerUrlLabel")} description={t(locale, "mobileServerUrlHint")} value={mobileEndpoint} placeholder={t(locale, "serverUrlPlaceholder")} onChange={(value) => onEditMobileEndpoint?.(value)} />] : []),
         ...(syncRunsAutomatically ? [<div key="sync-auto-hint" className="settings-row settings-info"><p>{t(locale, "syncAutoHint")}</p></div>] : []),
       ]} />
       <h2 id="settings-data" className="settings-category">{t(locale, "settingsData")}</h2>
@@ -167,8 +171,8 @@ function SettingsNumberRow({ title, description, value, min, unit, onChange, onU
   </label></div>;
 }
 
-function SettingsTextRow({ title, description, value, placeholder, onChange }: { title: string; description: string; value: string; placeholder: string; onChange: (value: string) => void }) {
-  return <div className="settings-row"><div><strong>{title}</strong><p>{description}</p></div><input className="settings-text-control" type="url" inputMode="url" value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} /></div>;
+function SettingsTextRow({ title, description, value, placeholder, onChange, onBlur }: { title: string; description: string; value: string; placeholder: string; onChange: (value: string) => void; onBlur?: () => void }) {
+  return <div className="settings-row"><div><strong>{title}</strong><p>{description}</p></div><input className="settings-text-control" type="url" inputMode="url" value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} /></div>;
 }
 
 function SettingsActionRow({ title, description, action, disabled = false, onClick, status }: {

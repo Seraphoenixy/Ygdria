@@ -1,10 +1,27 @@
 import { Capacitor } from "@capacitor/core";
 
 const REMOTE_CREDENTIAL_KEY = "ygdria.remote-device-credential";
+export const STARTUP_AUTH_CACHE_MAX_AGE_MS = 10 * 60 * 1_000;
 
 export interface RemoteCredential {
   serverUrl: string;
   deviceToken: string;
+  /** Epoch milliseconds of the last successful `/devices/me` validation. */
+  lastVerifiedAt?: number;
+}
+
+/** Whether a locally protected credential was validated recently enough to
+ * render the workspace while a fresh validation continues in the background. */
+export function hasFreshStartupAuth(
+  credential: RemoteCredential | null,
+  now = Date.now(),
+): boolean {
+  return Boolean(
+    credential &&
+    typeof credential.lastVerifiedAt === "number" &&
+    credential.lastVerifiedAt <= now &&
+    now - credential.lastVerifiedAt <= STARTUP_AUTH_CACHE_MAX_AGE_MS,
+  );
 }
 
 /**

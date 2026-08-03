@@ -7,7 +7,8 @@ import { YgdriaClient } from "@ygdria/api-client";
 import { App } from "./app/App";
 import { initCapacitor } from "./lib/capacitor";
 import { isPhoneLayout } from "./lib/mobileLayout";
-import { loadRemoteCredential } from "./lib/credentialStorage";
+import { hasFreshStartupAuth, loadRemoteCredential } from "./lib/credentialStorage";
+import { readSettings, writeSettings } from "./features/settings/settingsStore";
 import { initShareReceiver } from "./lib/shareReceiver";
 import { t, detectLocale, type Locale } from "./lib/i18n";
 import "./style.css";
@@ -65,10 +66,15 @@ function MobileEndpointGate() {
     setError(undefined);
     void (async () => {
       const endpoint = normalizeMobileApiEndpoint(serverUrl, locale);
+      // Persist to settings (the unified target server address) and keep the
+      // legacy preference in sync for backward compatibility.
+      writeSettings({ ...readSettings(), syncServerUrl: endpoint });
       await Preferences.set({ key: MOBILE_API_ENDPOINT_KEY, value: endpoint });
       window.location.reload();
     })()
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t(locale, "mobileServerSaveError")))
+      .catch((reason: unknown) =>
+        setError(reason instanceof Error ? reason.message : t(locale, "mobileServerSaveError")),
+      )
       .finally(() => setSaving(false));
   };
 
@@ -88,10 +94,17 @@ function MobileEndpointGate() {
               inputMode="url"
               value={serverUrl}
               placeholder={t(locale, "serverUrlPlaceholder")}
-              onChange={(event) => { setServerUrl(event.target.value); setError(undefined); }}
+              onChange={(event) => {
+                setServerUrl(event.target.value);
+                setError(undefined);
+              }}
             />
           </label>
-          {error && <p className="device-access-error" role="alert">{error}</p>}
+          {error && (
+            <p className="device-access-error" role="alert">
+              {error}
+            </p>
+          )}
           <button type="submit" disabled={!serverUrl.trim() || saving}>
             {saving ? t(locale, "processing") : t(locale, "mobileContinueLogin")}
           </button>
@@ -109,37 +122,54 @@ async function bootstrap() {
   const storedMobileEndpoint = isNativeMobile
     ? (await Preferences.get({ key: MOBILE_API_ENDPOINT_KEY })).value
     : undefined;
+  // On mobile the single source of truth for the server address is the
+  // "目标服务器地址" (syncServerUrl) from settings. The legacy ygdria.api
+  // preference is only a fallback for installs that predate the merge.
+  const settings = isNativeMobile ? readSettings() : undefined;
+  const effectiveMobileEndpoint =
+    settings?.syncServerUrl?.trim() || storedMobileEndpoint || import.meta.env.VITE_API_URL || "";
+  // One-time merge: fold the legacy mobile endpoint into settings so there is
+  // a single server address.
+  if (isNativeMobile && storedMobileEndpoint) {
+    const current = readSettings();
+    if (!current.syncServerUrl?.trim())
+      writeSettings({ ...current, syncServerUrl: storedMobileEndpoint });
+  }
   // Restore the device token from the OS secure store (iOS Keychain / Android
   // EncryptedSharedPreferences) before constructing the API client. The token
   // is what the server returns after SRP login, so persisting it is what lets
   // cold launches skip the master-password prompt. The previous bootstrap only
   // read `sessionStorage`, which is empty on every fresh WebView, forcing a
   // full SRP round-trip on every app start. The credential is only adopted if
-  // its server URL still matches the stored mobile endpoint — otherwise a
+  // its server URL still matches the effective endpoint — otherwise a
   // user who switched backends would get a misleading 401.
   let restoredDeviceToken: string | undefined;
+  let hasCachedStartupAuth = false;
   if (isNativeMobile) {
     const credential = await loadRemoteCredential();
     if (
       credential?.deviceToken &&
-      (!storedMobileEndpoint || credential.serverUrl === storedMobileEndpoint)
+      (!effectiveMobileEndpoint || credential.serverUrl === effectiveMobileEndpoint)
     ) {
       restoredDeviceToken = credential.deviceToken;
+      hasCachedStartupAuth = hasFreshStartupAuth(credential);
     }
   }
-  if (isNativeMobile && !storedMobileEndpoint) {
+  if (isNativeMobile && !effectiveMobileEndpoint) {
     createRoot(document.getElementById("root")!).render(<MobileEndpointGate />);
     void initCapacitor();
     return;
   }
   const client = new YgdriaClient(
-    connection?.baseUrl ?? storedMobileEndpoint ?? import.meta.env.VITE_API_URL ?? "",
+    isNativeMobile
+      ? effectiveMobileEndpoint
+      : (connection?.baseUrl ?? import.meta.env.VITE_API_URL ?? ""),
     connection?.token,
     restoredDeviceToken,
   );
   createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={new QueryClient()}>
-      <App client={client} />
+      <App client={client} hasCachedStartupAuth={hasCachedStartupAuth} />
     </QueryClientProvider>,
   );
   // Apply native-shell tweaks (status bar, keyboard, back button). No-op in a

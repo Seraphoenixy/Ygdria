@@ -222,6 +222,8 @@ corepack pnpm dev:server
 
 `apps/mobile` 是 Capacitor Android 壳，复用 `@ygdria/web` 的构建产物（见 [§4](#4-构建与校验)）。**注意**：`pnpm --filter @ygdria/mobile android` 只执行 `cap sync`，**不生成 APK**；要出包必须借助 Android SDK 的 Gradle（`assembleDebug` / `assembleRelease`）或 `cap run android`。
 
+Android 包会在构建时向系统注册 `SEND` 与 `SEND_MULTIPLE` 的 `image/*` 分享意图。因此相册中选择“分享”时，Ygdria 会出现在目标列表；接收的图片会被保存为一条新笔记。修改这项能力后必须重新构建并安装 APK，已安装的旧包不会自动获得该系统注册。
+
 Android 拒绝安装**完全未签名**的 APK（报错「该安装包未包含任何证书」）。CI 的 `assembleRelease` 默认不签名，因此 `.github/workflows/build.yml` 的 Android 任务在配置了签名密钥后会用 `apksigner` 对 `app-release-unsigned.apk` 签名，产出可直接安装的 `Ygdria-android.apk`；未配置密钥时退回 unsigned 并在日志给出 `::warning::` 提示（该产物无法安装）。
 
 ### 10.1 本地调试安装（无需签名）

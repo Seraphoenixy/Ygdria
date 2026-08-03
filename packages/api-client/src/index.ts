@@ -1,4 +1,22 @@
 import type { NoteContent } from "@ygdria/shared";
+
+/**
+ * Build an AbortSignal that rejects after `timeoutMs`. Used so startup probes
+ * (health / currentDevice) can never hang forever on a slow or unreachable
+ * remote server — without a timeout a mobile WebView could sit on the loading
+ * screen indefinitely. Returns `undefined` when timeouts are unsupported.
+ */
+function createTimeoutSignal(timeoutMs?: number): AbortSignal | undefined {
+  if (!timeoutMs) return undefined;
+  if (
+    typeof AbortSignal === "undefined" ||
+    typeof (AbortSignal as { timeout?: unknown }).timeout !== "function"
+  ) {
+    return undefined;
+  }
+  return AbortSignal.timeout(timeoutMs);
+}
+
 export class YgdriaClient {
   constructor(
     private baseUrl = "http://127.0.0.1:4318",
@@ -14,21 +32,34 @@ export class YgdriaClient {
   getServerUrl() {
     return this.baseUrl;
   }
+  setServerUrl(url: string) {
+    this.baseUrl = url;
+  }
   peerId() {
     return this.baseUrl;
   }
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
     const headers: Record<string, string> = {
       ...((init?.headers as Record<string, string>) ?? {}),
     };
     if (this.token) headers["X-Ygdria-Local-Token"] = this.token;
     if (this.deviceToken) headers["Authorization"] = `Bearer ${this.deviceToken}`;
+    // Honor a caller-supplied signal; otherwise apply a short timeout so a
+    // startup probe can never hang forever on a slow or unreachable server.
+    const signal = init?.signal ?? createTimeoutSignal(timeoutMs);
     let r: Response;
     try {
-      r = await fetch(this.baseUrl + path, { ...init, headers });
+      r = await fetch(this.baseUrl + path, { ...init, headers, ...(signal ? { signal } : {}) });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`HTTP 请求失败（${init?.method ?? "GET"} ${this.baseUrl}${path}）：${reason}`);
+      const requestError = new Error(
+        `HTTP 请求失败（${init?.method ?? "GET"} ${this.baseUrl}${path}）：${reason}`,
+        { cause: error },
+      );
+      // Keep abort/timeout semantics available to callers while retaining the
+      // request context in the human-readable message.
+      if (error instanceof Error) requestError.name = error.name;
+      throw requestError;
     }
     if (!r.ok) {
       const body = (await r.json().catch(() => null)) as { error?: { code?: string; message?: string } } | null;
@@ -530,7 +561,7 @@ export class YgdriaClient {
       bootstrapped: boolean;
       requiresDeviceAuth: boolean;
       authInitialized: boolean;
-    }>("/api/v1/health");
+    }>("/api/v1/health", undefined, 8000);
   }
   /** Readiness probe: returns 200 when the server is fully operational. */
   ready() {
@@ -622,7 +653,7 @@ export class YgdriaClient {
       label: string;
       createdAt: number;
       lastActiveAt: number | null;
-    }>("/api/v1/devices/me");
+    }>("/api/v1/devices/me", undefined, 8000);
   }
   createPairingToken(ttlMs?: number) {
     return this.request<{ pairingToken: string; expiresAt: number }>(

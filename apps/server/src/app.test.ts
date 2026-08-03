@@ -328,6 +328,7 @@ describe("desktop local-token boundary", () => {
     const shell = await app.inject({ method: "GET", url: "/" });
     expect(shell.statusCode).toBe(200);
     expect(shell.headers["content-type"]).toContain("text/html");
+    expect(shell.headers["content-security-policy"]).toContain("font-src 'self' data:");
 
     const denied = await app.inject({ method: "GET", url: "/api/v1/tree" });
     expect(denied.statusCode).toBe(401);

@@ -55,4 +55,35 @@ export default defineConfig(({ mode }) => ({
       "/etapi": "http://127.0.0.1:4318",
     },
   },
+  build: {
+    target: "es2022",
+    rollupOptions: {
+      output: {
+        // Split heavy / rarely-changing dependencies into their own chunks so
+        // the first paint only parses the app shell, and repeat mobile launches
+        // reuse cached vendor chunks instead of re-downloading everything.
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+          if (
+            id.includes("@ygdria/editor") ||
+            id.includes("@tiptap") ||
+            id.includes("prosemirror") ||
+            id.includes("markdown-it")
+          ) {
+            return "editor";
+          }
+          if (
+            id.includes("react-dom") ||
+            id.includes("/react/") ||
+            id.includes("/scheduler/") ||
+            id.includes("use-sync-external-store")
+          ) {
+            return "react-vendor";
+          }
+          if (id.includes("@tanstack")) return "tanstack";
+          if (id.includes("lucide")) return "icons";
+        },
+      },
+    },
+  },
 }));

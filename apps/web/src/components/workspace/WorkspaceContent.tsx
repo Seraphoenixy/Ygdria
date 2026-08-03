@@ -95,8 +95,6 @@ export interface WorkspaceContentProps {
   canOpenFrontendConsole: boolean;
   syncRunsAutomatically?: boolean;
   canEditMobileEndpoint?: boolean;
-  mobileEndpoint?: string;
-  onEditMobileEndpoint?: (url: string) => void;
   onOpenFrontendConsole: () => void;
   onProtectedSessionTimeoutChange: (minutes: number) => void;
   onMaintainDatabase: (rebuildFts?: boolean) => void;
@@ -184,8 +182,6 @@ export function WorkspaceContent({
   canOpenFrontendConsole,
   syncRunsAutomatically,
   canEditMobileEndpoint,
-  mobileEndpoint,
-  onEditMobileEndpoint,
   onOpenFrontendConsole,
   onProtectedSessionTimeoutChange,
   onMaintainDatabase,
@@ -335,8 +331,6 @@ export function WorkspaceContent({
             onOpenFrontendConsole={onOpenFrontendConsole}
             syncRunsAutomatically={syncRunsAutomatically}
             canEditMobileEndpoint={canEditMobileEndpoint}
-            mobileEndpoint={mobileEndpoint}
-            onEditMobileEndpoint={onEditMobileEndpoint}
             onProtectedSessionTimeoutChange={onProtectedSessionTimeoutChange}
             onMaintainDatabase={onMaintainDatabase}
           />

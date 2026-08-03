@@ -1,8 +1,15 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { YgdriaClient } from "@ygdria/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import { Capacitor } from "@capacitor/core";
-import { Preferences } from "@capacitor/preferences";
 import { BookOpen } from "lucide-react";
 import { SYSTEM_ROOT_NOTE_ID } from "@ygdria/shared";
 import { create } from "zustand";
@@ -20,7 +27,6 @@ import { DeviceAccessGate } from "../components/chrome/DeviceAccessGate";
 import { WindowControls } from "../components/chrome/WindowControls";
 import { MobileTabBar } from "../components/chrome/MobileTabBar";
 import { WorkspaceLayout } from "../components/workspace/WorkspaceLayout";
-import { WorkspaceContent } from "../components/workspace/WorkspaceContent";
 import {
   assertAuthConfigSupported,
   deriveAccessSecret,
@@ -30,10 +36,18 @@ import {
   srpRegister,
   srpVerifyServer,
 } from "../lib/client-crypto";
+// `appendTiptapDocument` / `markdownToTiptap` live in the editor package. They
+// are only used by the clipboard Markdown-import action, so import them lazily
+// to keep the editor out of the first-paint bundle.
 import { ChildNoteMenu } from "../components/note/ChildNoteMenu";
+// The heavy Tiptap/ProseMirror editor is only needed once the workspace is
+// interactive (after the auth gate). Load it lazily so the monolithic editor
+// bundle stays out of the initial parse/execute path on cold mobile starts.
+const WorkspaceContent = lazy(() =>
+  import("../components/workspace/WorkspaceContent").then((m) => ({ default: m.WorkspaceContent })),
+);
 import { RevisionHistoryDialog } from "../components/note/RevisionHistoryDialog";
 import { ConflictDialog } from "../components/note/ConflictDialog";
-import { appendTiptapDocument, markdownToTiptap } from "@ygdria/editor";
 import type {
   ContextMenuState,
   TabMenuState,
@@ -67,7 +81,7 @@ function persistDeviceToken(client: YgdriaClient, deviceToken: string) {
   if (Capacitor.isNativePlatform()) {
     const serverUrl = client.getServerUrl();
     if (serverUrl) {
-      void saveRemoteCredential({ serverUrl, deviceToken });
+      void saveRemoteCredential({ serverUrl, deviceToken, lastVerifiedAt: Date.now() });
     }
   }
 }
@@ -113,7 +127,13 @@ type AttachmentTransferClient = Pick<
 
 import { RemoteProxyClient } from "./RemoteProxyClient";
 
-export function App({ client }: { client: YgdriaClient }) {
+export function App({
+  client,
+  hasCachedStartupAuth = false,
+}: {
+  client: YgdriaClient;
+  hasCachedStartupAuth?: boolean;
+}) {
   const { selected, selectedTrashed, editing, locale, set } = useUi();
   // On phones the note tree is an off-canvas drawer, so it starts collapsed to
   // keep the document visible on launch (otherwise the fixed drawer + scrim
@@ -123,8 +143,8 @@ export function App({ client }: { client: YgdriaClient }) {
   const [treeCollapsed, setTreeCollapsed] = useState(
     () => typeof window !== "undefined" && (isNativePhone() || window.innerWidth <= 680),
   );
-  const [treePanelWidth, setTreePanelWidth] = useState(
-    () => Math.min(360, Math.max(180, Math.round(window.innerWidth * 0.18))),
+  const [treePanelWidth, setTreePanelWidth] = useState(() =>
+    Math.min(360, Math.max(180, Math.round(window.innerWidth * 0.18))),
   );
   // On the phone / compact layout the inspector is an off-canvas drawer, so it
   // starts collapsed too — otherwise, the moment `note.data` resolves,
@@ -171,7 +191,7 @@ export function App({ client }: { client: YgdriaClient }) {
   // drawer mutual-exclusion invariant that `toggleTree`/`toggleInspector` hold.
   useEffect(() => {
     const compact = window.matchMedia("(max-width: 900px)");
-    const apply = () => setInspectorCollapsed((current) => compact.matches ? true : current);
+    const apply = () => setInspectorCollapsed((current) => (compact.matches ? true : current));
     apply();
     compact.addEventListener("change", apply);
     return () => compact.removeEventListener("change", apply);
@@ -228,18 +248,6 @@ export function App({ client }: { client: YgdriaClient }) {
       toastTimerRef.current = undefined;
     }, 3500);
   }, []);
-  const handleEditMobileEndpoint = useCallback((url: string) => {
-    void (async () => {
-      const endpoint = new URL(url.trim());
-      endpoint.pathname = endpoint.pathname.replace(/\/$/, "");
-      endpoint.search = "";
-      endpoint.hash = "";
-      await Preferences.set({ key: "ygdria.api", value: endpoint.toString().replace(/\/$/, "") });
-      window.location.reload();
-    })().catch(() => {
-      // Ignore partial/invalid input while the user is still typing.
-    });
-  }, []);
   const documentScrollRef = useRef<HTMLDivElement>(null);
   const pendingViewScrollRef = useRef<{ top: number; left: number } | null>(null);
   const toggleEditing = useCallback(() => {
@@ -267,6 +275,7 @@ export function App({ client }: { client: YgdriaClient }) {
         showToast(t(locale, "clipboardEmpty"));
         return;
       }
+      const { markdownToTiptap, appendTiptapDocument } = await import("@ygdria/editor");
       const { document, warnings } = markdownToTiptap(text);
       if (activeEditor && !activeEditor.isDestroyed) {
         // Append imported Markdown after the current note content. The editor's
@@ -286,7 +295,9 @@ export function App({ client }: { client: YgdriaClient }) {
         showToast(t(locale, "clipboardAccessDenied"));
       } else {
         showToast(
-          t(locale, "markdownImportFailed", { reason: error instanceof Error ? error.message : t(locale, "markdownParseFailed") }),
+          t(locale, "markdownImportFailed", {
+            reason: error instanceof Error ? error.message : t(locale, "markdownParseFailed"),
+          }),
         );
       }
     }
@@ -342,15 +353,12 @@ export function App({ client }: { client: YgdriaClient }) {
   const [clearUnusedAttachmentsConfirmation, setClearUnusedAttachmentsConfirmation] =
     useState(false);
   const [deviceAccess, setDeviceAccess] = useState<"checking" | "ready" | "initialize" | "login">(
-    "checking",
+    hasCachedStartupAuth ? "ready" : "checking",
   );
+  const [bootError, setBootError] = useState<string>();
+  const [bootEpoch, setBootEpoch] = useState(0);
   const [requiresDeviceAuth, setRequiresDeviceAuth] = useState(false);
   const isDesktopApp = Boolean(window.ygdria?.remote);
-  const [mobileApiEndpoint, setMobileApiEndpoint] = useState("");
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
-    void Preferences.get({ key: "ygdria.api" }).then((result) => setMobileApiEndpoint(result.value ?? ""));
-  }, []);
   const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
@@ -399,7 +407,10 @@ export function App({ client }: { client: YgdriaClient }) {
     const onKey = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable))
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      )
         return;
       if (event.key === "w" || event.key === "W") {
         if (activeTabId) {
@@ -458,6 +469,7 @@ export function App({ client }: { client: YgdriaClient }) {
     selectedTrashed,
     settingsOpen,
     activeTabId,
+    editing,
     locale,
     dataAccessReady: deviceAccess === "ready",
     onNoteCreated: (noteId, parentPlacementId) => {
@@ -538,46 +550,81 @@ export function App({ client }: { client: YgdriaClient }) {
     isDesktopApp,
   });
 
+  // Startup auth probe. Runs once on mount and again whenever `bootEpoch`
+  // changes (the retry button bumps it). The two network calls — the health
+  // probe and the device-token check — are fired in parallel so a cold mobile
+  // launch pays only one round-trip instead of two. Both calls carry an
+  // 8s timeout in the API client, so a slow/unreachable server fails fast into
+  // the retry UI instead of hanging on the loading screen forever.
   useEffect(() => {
     let cancelled = false;
-    void client
-      .health()
-      .then(async (health) => {
-        if (cancelled) return;
-        setRequiresDeviceAuth(health.requiresDeviceAuth);
-        if (!health.requiresDeviceAuth) {
-          setDeviceAccess("ready");
-          return;
-        }
+    setBootError(undefined);
+    void (async () => {
+      try {
         // Token sources, in order of authority:
         //   1. The client constructor may already have been given a token
         //      (native shells hydrate it from the OS secure store in main.tsx
         //      so cold launches skip the master-password prompt).
         //   2. The sessionStorage copy covers the browser/desktop refresh
         //      path; native shells lose it on every cold start.
-        // We validate before trusting either — a stale or revoked token must
-        // not silently leave the user on the login screen.
         const storedToken = window.sessionStorage.getItem(SESSION_DEVICE_TOKEN_KEY) ?? undefined;
         const candidate = client.getDeviceToken() ?? storedToken;
-        if (candidate) {
-          try {
-            if (client.getDeviceToken() !== candidate) client.setDeviceToken(candidate);
-            await client.currentDevice();
-            if (!cancelled) setDeviceAccess("ready");
-            return;
-          } catch {
-            discardDeviceToken(client);
-          }
+        // Install a session-restored token before validating it so
+        // `currentDevice` includes it in the Authorization header. A failed
+        // validation below removes it again.
+        if (candidate && client.getDeviceToken() !== candidate) client.setDeviceToken(candidate);
+        // Kick off the token check immediately and in parallel with health when
+        // we already have a candidate token. `Promise.all` then waits for both.
+        const deviceCheck = candidate
+          ? client.currentDevice().then(
+              () => "ok" as const,
+              () => "bad" as const,
+            )
+          : Promise.resolve("none" as const);
+        const [health, deviceResult] = await Promise.all([client.health(), deviceCheck]);
+        if (cancelled) return;
+        setRequiresDeviceAuth(health.requiresDeviceAuth);
+        if (!health.requiresDeviceAuth) {
+          setDeviceAccess("ready");
+          return;
         }
-        if (!cancelled) setDeviceAccess(health.authInitialized ? "login" : "initialize");
-      })
-      .catch(() => {
-        if (!cancelled) setDeviceAccess("login");
-      });
+        if (deviceResult === "ok") {
+          // Refresh the short-lived native startup-auth cache only after the
+          // server has accepted the credential. It is merely a UI fast path;
+          // every actual API request still remains server-authenticated.
+          if (Capacitor.isNativePlatform() && candidate) {
+            const serverUrl = client.getServerUrl();
+            if (serverUrl)
+              void saveRemoteCredential({
+                serverUrl,
+                deviceToken: candidate,
+                lastVerifiedAt: Date.now(),
+              });
+          }
+          setDeviceAccess("ready");
+          return;
+        }
+        if (deviceResult === "bad") discardDeviceToken(client);
+        setDeviceAccess(health.authInitialized ? "login" : "initialize");
+      } catch (error) {
+        if (cancelled) return;
+        const isTimeout =
+          error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+        console.error("Startup health check failed", error);
+        setBootError(
+          isTimeout
+            ? t(locale, "bootConnectionTimeout")
+            : error instanceof Error
+              ? error.message
+              : String(error),
+        );
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, []);
+    // `bootEpoch` lets the retry button re-run this probe.
+  }, [client, bootEpoch]);
   const createNewNote = useCallback(
     async (parentPlacementId?: string, type: "text" | "code" = "text") => {
       if (creatingNoteRef.current) return;
@@ -621,12 +668,30 @@ export function App({ client }: { client: YgdriaClient }) {
     }
   }, [client, tree, openNote]);
 
-  const showImportComplete = useCallback((summary: { notes: number; attachments: number; estimatedBytes: number }) => {
-    const size = summary.estimatedBytes < 1024 * 1024
-      ? `${Math.ceil(summary.estimatedBytes / 1024)} KiB`
-      : `${(summary.estimatedBytes / 1024 / 1024).toFixed(1)} MiB`;
-    showToast(`${t(locale, "importComplete")} · ${summary.notes} ${t(locale, "noteUnit")} · ${summary.attachments} ${t(locale, "attachmentUnit")} · ${size}`);
-  }, [locale, showToast]);
+  // Retry the startup auth probe after a connection failure (bumps `bootEpoch`,
+  // which the startup effect depends on).
+  const retryBoot = useCallback(() => {
+    // On mobile, reconnect to the target server address from settings rather
+    // than the address captured at startup.
+    if (Capacitor.isNativePlatform()) {
+      const target = readSettings().syncServerUrl?.trim();
+      if (target && target !== client.getServerUrl()) client.setServerUrl(target);
+    }
+    setBootEpoch((epoch) => epoch + 1);
+  }, [client]);
+
+  const showImportComplete = useCallback(
+    (summary: { notes: number; attachments: number; estimatedBytes: number }) => {
+      const size =
+        summary.estimatedBytes < 1024 * 1024
+          ? `${Math.ceil(summary.estimatedBytes / 1024)} KiB`
+          : `${(summary.estimatedBytes / 1024 / 1024).toFixed(1)} MiB`;
+      showToast(
+        `${t(locale, "importComplete")} · ${summary.notes} ${t(locale, "noteUnit")} · ${summary.attachments} ${t(locale, "attachmentUnit")} · ${size}`,
+      );
+    },
+    [locale, showToast],
+  );
 
   useEffect(
     () => () => {
@@ -839,12 +904,11 @@ export function App({ client }: { client: YgdriaClient }) {
       }
       return;
     }
-    const open =
-      !treeCollapsed
-        ? ".note-tree-panel"
-        : showInspector && !inspectorCollapsed
-          ? ".note-inspector"
-          : null;
+    const open = !treeCollapsed
+      ? ".note-tree-panel"
+      : showInspector && !inspectorCollapsed
+        ? ".note-inspector"
+        : null;
     if (open) {
       lastFocusedRef.current = (document.activeElement as HTMLElement) ?? null;
       const el = document.querySelector<HTMLElement>(open);
@@ -908,7 +972,17 @@ export function App({ client }: { client: YgdriaClient }) {
   if (deviceAccess === "checking" || desktopOnboarding === "checking") {
     return (
       <main className="device-access-shell">
-        <div className="empty">{t(locale, "loading")}</div>
+        {bootError ? (
+          <section className="device-access-card" role="alert">
+            <p>{t(locale, "bootConnectionFailed")}</p>
+            <p className="device-access-error">{bootError}</p>
+            <button type="button" onClick={retryBoot}>
+              {t(locale, "retry")}
+            </button>
+          </section>
+        ) : (
+          <div className="empty">{t(locale, "loading")}</div>
+        )}
       </main>
     );
   }
@@ -1137,7 +1211,15 @@ export function App({ client }: { client: YgdriaClient }) {
             showToast(t(locale, "importFailed", { reason }));
           });
         }}
-        toastMessage={toastMessage}
+        // Full baseline sync can run immediately after first connection, before
+        // the user has opened the navigation panel. Keep its phase/progress
+        // visible in the global status toast instead of hiding it in the sync
+        // button tooltip.
+        toastMessage={
+          syncing
+            ? `${t(locale, "syncInProgress")} · ${syncProgress ?? t(locale, "syncPreparing")}`
+            : toastMessage
+        }
         onDismissContextMenus={() => {
           setContextMenu(null);
           setTabMenu(null);
@@ -1205,118 +1287,116 @@ export function App({ client }: { client: YgdriaClient }) {
             onPointerDown={resizeInspectorPanel}
           />
         )}
-        <WorkspaceContent
-          tabs={tabs}
-          activeTabId={activeTabId}
-          activeTab={activeTab}
-          pinnedTabIds={pinnedTabIds}
-          noteTitleForTab={noteTitleForTab}
-          locale={locale}
-          activateTab={activateTab}
-          closeTab={closeTab}
-          openNewTab={openNewTab}
-          onReorder={moveTab}
-          onTabContextMenu={(tabId, x, y) => {
-            setContextMenu(null);
-            setTabMenu({ tabId, x, y });
-          }}
-          noteBreadCrumb={noteBreadCrumb}
-          selectedTrashed={Boolean(selectedTrashed)}
-          noteData={note.data}
-          restoreNote={restoreNote}
-          showInspector={showInspector}
-          inspectorCollapsed={inspectorCollapsed}
-          onToggleInspector={toggleInspector}
-          onToggleTree={toggleTree}
-          toggleMarkdownView={toggleMarkdownView}
-          markdownView={markdownView}
-          protectedSession={protectedSession}
-          onProtectedSessionToggle={handleProtectedSessionToggle}
-          readingMode={readingMode}
-          onToggleReadingMode={() => setReadingMode((value) => !value)}
-          convertNote={convertNote}
-          onViewRevisionHistory={() => setRevisionHistoryOpen(true)}
-          activeEditor={activeEditor}
-          editing={editing}
-          onToggleEditing={toggleEditing}
-          importMarkdown={importMarkdown}
-          client={client}
-          openNote={openNote}
-          archivedNotes={archivedNotes}
-          treeData={tree.data}
-          archiveNote={archiveNote}
-          history={history}
-          attachments={attachments}
-          purgeTrash={purgeTrash}
-          setPurgeTrashConfirmation={setPurgeTrashConfirmation}
-          settingsOpen={settingsOpen}
-          onLocaleChange={(nextLocale) => set({ locale: nextLocale })}
-          clearUnusedAttachments={clearUnusedAttachments}
-          clearUnusedAttachmentsConfirmation={clearUnusedAttachmentsConfirmation}
-          setClearUnusedAttachmentsConfirmation={setClearUnusedAttachmentsConfirmation}
-          clearingExcessRevisions={clearingExcessRevisions}
-          revisionCleanupMessage={revisionCleanupMessage}
-          onClearExcessRevisions={clearExcessRevisions}
-          maintainingDatabase={maintainingDatabase}
-          databaseMaintenanceMessage={databaseMaintenanceMessage}
-          databaseMaintenanceMessageTarget={databaseMaintenanceMessageTarget}
-          protectedSessionTimeoutMinutes={Math.floor(protectedSession.timeoutMs / 60_000)}
-          canChangeProtectedPassword={protectedSession.configured}
-          onChangeProtectedPassword={() => setPasswordDialog("change")}
-          testingSyncConnection={testingSyncConnection}
-          syncConnectionMessage={syncConnectionMessage}
-          onTestSyncConnection={testSyncConnection}
-          canMigrateToEmptyServer={isDesktopApp && deviceAccess === "ready"}
-          onMigrateToEmptyServer={() => setMigrationDialogOpen(true)}
-          canOpenFrontendConsole={Boolean(window.ygdria?.openDevTools)}
-          onOpenFrontendConsole={() => { void window.ygdria?.openDevTools?.(); }}
-          syncRunsAutomatically={!isDesktopApp}
-          canEditMobileEndpoint={Capacitor.isNativePlatform()}
-          mobileEndpoint={mobileApiEndpoint}
-          onEditMobileEndpoint={handleEditMobileEndpoint}
-          onProtectedSessionTimeoutChange={handleProtectedSessionTimeoutChange}
-          onMaintainDatabase={maintainDatabase}
-          noteIsLoading={note.isLoading}
-          childNotes={childNotes}
-          childrenByParent={childrenByParent}
-          session={session}
-          autoSave={autoSave}
-          saveTitle={saveTitle}
-          openChildNote={openChildNote}
-          onChildMore={(child, event) => {
-            const { right, bottom } = event.currentTarget.getBoundingClientRect();
-            setContextMenu(null);
-            setTabMenu(null);
-            setChildNoteMenu({ placement: child, x: right, y: bottom });
-          }}
-          onUnarchive={() => note.data && archiveNote.mutate({ noteId: note.data.id, archived: false })}
-          onEditorReady={handleEditorReady}
-          documentScrollRef={documentScrollRef}
-          onUploadError={(message) => showToast(`${t(locale, "imageUploadFailed")}${message ? `: ${message}` : ""}`)}
-          createNote={createNote}
-          createNewNote={createNewNote}
-          decryptedTitles={decryptedTitles}
-        />
+        <Suspense fallback={<div className="empty">{t(locale, "loading")}</div>}>
+          <WorkspaceContent
+            tabs={tabs}
+            activeTabId={activeTabId}
+            activeTab={activeTab}
+            pinnedTabIds={pinnedTabIds}
+            noteTitleForTab={noteTitleForTab}
+            locale={locale}
+            activateTab={activateTab}
+            closeTab={closeTab}
+            openNewTab={openNewTab}
+            onReorder={moveTab}
+            onTabContextMenu={(tabId, x, y) => {
+              setContextMenu(null);
+              setTabMenu({ tabId, x, y });
+            }}
+            noteBreadCrumb={noteBreadCrumb}
+            selectedTrashed={Boolean(selectedTrashed)}
+            noteData={note.data}
+            restoreNote={restoreNote}
+            showInspector={showInspector}
+            inspectorCollapsed={inspectorCollapsed}
+            onToggleInspector={toggleInspector}
+            onToggleTree={toggleTree}
+            toggleMarkdownView={toggleMarkdownView}
+            markdownView={markdownView}
+            protectedSession={protectedSession}
+            onProtectedSessionToggle={handleProtectedSessionToggle}
+            readingMode={readingMode}
+            onToggleReadingMode={() => setReadingMode((value) => !value)}
+            convertNote={convertNote}
+            onViewRevisionHistory={() => setRevisionHistoryOpen(true)}
+            activeEditor={activeEditor}
+            editing={editing}
+            onToggleEditing={toggleEditing}
+            importMarkdown={importMarkdown}
+            client={client}
+            openNote={openNote}
+            archivedNotes={archivedNotes}
+            treeData={tree.data}
+            archiveNote={archiveNote}
+            history={history}
+            attachments={attachments}
+            purgeTrash={purgeTrash}
+            setPurgeTrashConfirmation={setPurgeTrashConfirmation}
+            settingsOpen={settingsOpen}
+            onLocaleChange={(nextLocale) => set({ locale: nextLocale })}
+            clearUnusedAttachments={clearUnusedAttachments}
+            clearUnusedAttachmentsConfirmation={clearUnusedAttachmentsConfirmation}
+            setClearUnusedAttachmentsConfirmation={setClearUnusedAttachmentsConfirmation}
+            clearingExcessRevisions={clearingExcessRevisions}
+            revisionCleanupMessage={revisionCleanupMessage}
+            onClearExcessRevisions={clearExcessRevisions}
+            maintainingDatabase={maintainingDatabase}
+            databaseMaintenanceMessage={databaseMaintenanceMessage}
+            databaseMaintenanceMessageTarget={databaseMaintenanceMessageTarget}
+            protectedSessionTimeoutMinutes={Math.floor(protectedSession.timeoutMs / 60_000)}
+            canChangeProtectedPassword={protectedSession.configured}
+            onChangeProtectedPassword={() => setPasswordDialog("change")}
+            testingSyncConnection={testingSyncConnection}
+            syncConnectionMessage={syncConnectionMessage}
+            onTestSyncConnection={testSyncConnection}
+            canMigrateToEmptyServer={isDesktopApp && deviceAccess === "ready"}
+            onMigrateToEmptyServer={() => setMigrationDialogOpen(true)}
+            canOpenFrontendConsole={Boolean(window.ygdria?.openDevTools)}
+            onOpenFrontendConsole={() => {
+              void window.ygdria?.openDevTools?.();
+            }}
+            syncRunsAutomatically={!isDesktopApp}
+            canEditMobileEndpoint={Capacitor.isNativePlatform()}
+            onProtectedSessionTimeoutChange={handleProtectedSessionTimeoutChange}
+            onMaintainDatabase={maintainDatabase}
+            noteIsLoading={note.isLoading}
+            childNotes={childNotes}
+            childrenByParent={childrenByParent}
+            session={session}
+            autoSave={autoSave}
+            saveTitle={saveTitle}
+            openChildNote={openChildNote}
+            onChildMore={(child, event) => {
+              const { right, bottom } = event.currentTarget.getBoundingClientRect();
+              setContextMenu(null);
+              setTabMenu(null);
+              setChildNoteMenu({ placement: child, x: right, y: bottom });
+            }}
+            onUnarchive={() =>
+              note.data && archiveNote.mutate({ noteId: note.data.id, archived: false })
+            }
+            onEditorReady={handleEditorReady}
+            documentScrollRef={documentScrollRef}
+            onUploadError={(message) =>
+              showToast(`${t(locale, "imageUploadFailed")}${message ? `: ${message}` : ""}`)
+            }
+            createNote={createNote}
+            createNewNote={createNewNote}
+            decryptedTitles={decryptedTitles}
+          />
+        </Suspense>
         <MobileTabBar
           locale={locale}
           treeOpen={!treeCollapsed}
           onToggleTree={toggleTree}
           searchActive={activeTabId === "search"}
-          onToggleSearch={() =>
-            activeTabId === "search" ? closeTab("search") : openSearch()
-          }
+          onToggleSearch={() => (activeTabId === "search" ? closeTab("search") : openSearch())}
           historyActive={activeTabId === "history"}
-          onToggleHistory={() =>
-            activeTabId === "history" ? closeTab("history") : openHistory()
-          }
+          onToggleHistory={() => (activeTabId === "history" ? closeTab("history") : openHistory())}
           archiveActive={activeTabId === "archive"}
-          onToggleArchive={() =>
-            activeTabId === "archive" ? closeTab("archive") : openArchive()
-          }
+          onToggleArchive={() => (activeTabId === "archive" ? closeTab("archive") : openArchive())}
           settingsActive={settingsOpen}
-          onToggleSettings={() =>
-            settingsOpen ? closeTab("settings") : openSettings()
-          }
+          onToggleSettings={() => (settingsOpen ? closeTab("settings") : openSettings())}
         />
         {showInspector &&
           (settingsOpen ? (
@@ -1362,7 +1442,15 @@ export function App({ client }: { client: YgdriaClient }) {
               onPaste={pastePlacements}
               onExport={exportPlacements}
               onImport={openImportDialog}
-              onOpenInNewTab={(placement) => openNote(placement.noteId, Boolean(placement.isTrashed), false, true, placement.placementId)}
+              onOpenInNewTab={(placement) =>
+                openNote(
+                  placement.noteId,
+                  Boolean(placement.isTrashed),
+                  false,
+                  true,
+                  placement.placementId,
+                )
+              }
               onProtectSubtree={(placement, protect) => protectSubtree(placement.noteId, protect)}
             />
           </div>
@@ -1499,11 +1587,7 @@ export function App({ client }: { client: YgdriaClient }) {
           />
         )}
         {readingMode && (
-          <button
-            type="button"
-            className="reading-mode-exit"
-            onClick={() => setReadingMode(false)}
-          >
+          <button type="button" className="reading-mode-exit" onClick={() => setReadingMode(false)}>
             <BookOpen size={16} />
             {t(locale, "exitReadingMode")}
           </button>

@@ -9,16 +9,13 @@ function durationMs(value: number, unit: TimeUnit) {
   return Math.max(0, Math.floor(value)) * multiplier;
 }
 
-// Trailing debounce for the autosave: collapse a burst of keystrokes into a
-// single network write once typing settles.
-const SAVE_DEBOUNCE_MS = 1000;
-
 type UseNotesOptions = {
   client: YgdriaClient;
   selected?: string;
   selectedTrashed?: boolean;
   settingsOpen: boolean;
   activeTabId?: string;
+  editing: boolean;
   locale: Locale;
   dataAccessReady: boolean;
   onNoteCreated: (noteId: string, parentPlacementId?: string | null) => void;
@@ -52,26 +49,61 @@ export function useNotes({
   selectedTrashed,
   settingsOpen,
   activeTabId,
+  editing,
   locale,
   dataAccessReady,
   onNoteCreated,
   onNoteRestored,
 }: UseNotesOptions) {
   const qc = useQueryClient();
-  // This must survive renders. A local variable creates a fresh timer for each
-  // render, leaving an older editor's delayed save alive to overwrite content.
-  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // Start of the current autosave window. Used as a max-wait boundary so that
-  // uninterrupted typing still flushes at most once per snapshot interval.
-  const autoSaveWindowStartRef = useRef<number | undefined>(undefined);
+  // Editor updates only replace this draft while editing. It is written once
+  // when the user intentionally exits editing mode.
+  const pendingAutoSaveRef = useRef<ContentSaveRequest | undefined>(undefined);
+  // Track the latest known version for the selected note. After a successful
+  // save the React Query cache may still be stale; using the higher of the
+  // cached version and this ref avoids spurious conflict errors.
+  const autoSaveVersionRef = useRef<number>(0);
+  // Writes to one note must be ordered: a title blur and the final editor
+  // flush often happen in the same interaction on mobile. Keep the last
+  // server-issued version alongside the per-note promise chain so each write
+  // starts with the version produced by its predecessor.
+  const noteWriteQueueRef = useRef(new Map<string, Promise<void>>());
+  const noteVersionRef = useRef(new Map<string, number>());
+  // Mutation callbacks can settle after the user toggles editing. Keep the
+  // current mode in a ref so conflict handling uses the mode at completion.
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const [conflict, setConflict] = useState<SaveConflict | null>(null);
+  const [deferredConflict, setDeferredConflict] = useState<SaveConflict | null>(null);
 
-  const tree = useQuery({ queryKey: ["tree"], queryFn: () => client.tree(), retry: 1, enabled: dataAccessReady });
+  const tree = useQuery({
+    queryKey: ["tree"],
+    queryFn: () => client.tree(),
+    retry: 1,
+    enabled: dataAccessReady,
+  });
 
   const note = useQuery({
     queryKey: ["note", selected, selectedTrashed],
     queryFn: () => (selectedTrashed ? client.getTrashedNote(selected!) : client.getNote(selected!)),
     enabled: dataAccessReady && !!selected && !settingsOpen,
   });
+
+  // Keep the version ref in sync with the latest fetched note data.
+  useEffect(() => {
+    if (note.data && note.data.id === selected) {
+      autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, note.data.version);
+      noteVersionRef.current.set(
+        note.data.id,
+        Math.max(noteVersionRef.current.get(note.data.id) ?? 0, note.data.version),
+      );
+    }
+  }, [note.data, selected]);
+
+  // Reset the version ref when switching notes.
+  useEffect(() => {
+    autoSaveVersionRef.current = 0;
+  }, [selected]);
 
   const history = useQuery({
     queryKey: ["history"],
@@ -103,7 +135,13 @@ export function useNotes({
   });
 
   const createNote = useMutation({
-    mutationFn: ({ parentPlacementId, type = "text" }: { parentPlacementId?: string; type?: "text" | "code" }) => {
+    mutationFn: ({
+      parentPlacementId,
+      type = "text",
+    }: {
+      parentPlacementId?: string;
+      type?: "text" | "code";
+    }) => {
       const title = t(locale, type === "code" ? "untitledCodeNote" : "untitledNote");
       if (type === "code") return client.createNote({ title, parentPlacementId, type });
       return parentPlacementId
@@ -117,45 +155,131 @@ export function useNotes({
     },
   });
 
+  const enqueueNoteWrite = <T>(
+    noteId: string,
+    fallbackVersion: number,
+    write: (expectedVersion: number) => Promise<T>,
+  ): Promise<T> => {
+    const previous = noteWriteQueueRef.current.get(noteId) ?? Promise.resolve();
+    const operation = previous
+      // A rejected write must not permanently block later user-initiated
+      // writes. Its error remains attached to the mutation that created it.
+      .catch(() => undefined)
+      .then(async () => {
+        const expectedVersion = Math.max(fallbackVersion, noteVersionRef.current.get(noteId) ?? 0);
+        const updated = await write(expectedVersion);
+        const version = (updated as { version?: unknown } | null)?.version;
+        if (typeof version === "number") {
+          noteVersionRef.current.set(
+            noteId,
+            Math.max(noteVersionRef.current.get(noteId) ?? 0, version),
+          );
+          if (noteId === selected)
+            autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, version);
+        }
+        return updated;
+      });
+    const tail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    noteWriteQueueRef.current.set(noteId, tail);
+    void tail.finally(() => {
+      if (noteWriteQueueRef.current.get(noteId) === tail) noteWriteQueueRef.current.delete(noteId);
+    });
+    return operation;
+  };
+
   const save = useMutation({
-    mutationFn: ({ noteId, expectedVersion, type, isProtected, content: contentOrCiphertext }: ContentSaveRequest) => {
+    mutationFn: ({
+      noteId,
+      expectedVersion,
+      type,
+      isProtected,
+      content: contentOrCiphertext,
+    }: ContentSaveRequest) => {
       const settings = readSettings();
-      const revisionIntervalMs = durationMs(settings.revisionIntervalMinutes, settings.revisionIntervalUnit);
+      const revisionIntervalMs = durationMs(
+        settings.revisionIntervalMinutes,
+        settings.revisionIntervalUnit,
+      );
       if (isProtected && typeof contentOrCiphertext === "string") {
-        return client.updateNote(noteId, { contentCiphertext: contentOrCiphertext, expectedVersion });
+        return enqueueNoteWrite(noteId, expectedVersion, (version) =>
+          client.updateNote(noteId, {
+            contentCiphertext: contentOrCiphertext,
+            expectedVersion: version,
+          }),
+        );
       }
       if (type === "code" && typeof contentOrCiphertext === "string") {
-        return client.updateNote(noteId, { code: contentOrCiphertext, revisionIntervalMs, expectedVersion });
+        return enqueueNoteWrite(noteId, expectedVersion, (version) =>
+          client.updateNote(noteId, {
+            code: contentOrCiphertext,
+            revisionIntervalMs,
+            expectedVersion: version,
+          }),
+        );
       }
       if (type === "code" && contentOrCiphertext && typeof contentOrCiphertext.code === "string") {
-        return client.updateNote(noteId, { code: contentOrCiphertext.code, codeLanguage: contentOrCiphertext.codeLanguage, revisionIntervalMs, expectedVersion });
+        return enqueueNoteWrite(noteId, expectedVersion, (version) =>
+          client.updateNote(noteId, {
+            code: contentOrCiphertext.code,
+            codeLanguage: contentOrCiphertext.codeLanguage,
+            revisionIntervalMs,
+            expectedVersion: version,
+          }),
+        );
       }
-      return client.updateNote(noteId, { content: contentOrCiphertext, revisionIntervalMs, expectedVersion });
+      return enqueueNoteWrite(noteId, expectedVersion, (version) =>
+        client.updateNote(noteId, {
+          content: contentOrCiphertext,
+          revisionIntervalMs,
+          expectedVersion: version,
+        }),
+      );
     },
-    onSuccess: (_updated, request) => {
+    onSuccess: (updated, request) => {
       qc.invalidateQueries({ queryKey: ["note", request.noteId] });
       qc.invalidateQueries({ queryKey: ["history"] });
+      // Bump the tracked version so the next autosave won't use a stale
+      // expectedVersion from the React Query cache.
+      if (updated?.version != null) {
+        autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, updated.version);
+      }
       const { revisionLimit } = readSettings();
-      if (Number.isInteger(revisionLimit) && revisionLimit >= 0) void client.clearExcessRevisions(revisionLimit);
+      if (Number.isInteger(revisionLimit) && revisionLimit >= 0)
+        void client.clearExcessRevisions(revisionLimit);
     },
     onError: (error, request) => {
       // The note was modified elsewhere (another device via sync, or a second
       // tab) so the optimistic-lock version no longer matches. Surface it as a
       // resolvable conflict instead of silently dropping the user's edits.
       if (isConflictError(error)) {
-        setConflict({
+        const nextConflict = {
           noteId: request.noteId,
           type: request.type === "code" ? "code" : "text",
           isProtected: request.isProtected,
           localContent: request.content,
-        });
+        } satisfies SaveConflict;
+        // Do not interrupt an active mobile editing session. The latest failed
+        // save is presented once editing ends.
+        if (editingRef.current) setDeferredConflict(nextConflict);
+        else setConflict((current) => current ?? nextConflict);
       }
     },
   });
 
-  const [conflict, setConflict] = useState<SaveConflict | null>(null);
+  useEffect(() => {
+    if (!editing && !conflict && deferredConflict) {
+      setConflict(deferredConflict);
+      setDeferredConflict(null);
+    }
+  }, [editing, conflict, deferredConflict]);
 
-  const resolveConflict = (resolution: "keepMine" | "takeTheirs" | "dismiss", serverVersion?: number) => {
+  const resolveConflict = (
+    resolution: "keepMine" | "takeTheirs" | "dismiss",
+    serverVersion?: number,
+  ) => {
     if (!conflict) return;
     if (resolution === "keepMine" && serverVersion != null) {
       // Re-apply the user's local edits on top of the server's current version.
@@ -177,15 +301,39 @@ export function useNotes({
   };
 
   const saveTitle = useMutation({
-    mutationFn: (nextTitle: string) =>
-      client.updateNote(selected!, {
-        title: nextTitle.trim() || "Untitled note",
-        expectedVersion: note.data.version,
-      }),
-    onSuccess: () => {
+    mutationFn: (nextTitle: string) => {
+      const noteId = selected!;
+      const expectedVersion = Math.max(
+        note.data.version,
+        autoSaveVersionRef.current,
+        noteVersionRef.current.get(noteId) ?? 0,
+      );
+      return enqueueNoteWrite(noteId, expectedVersion, (version) =>
+        client.updateNote(noteId, {
+          title: nextTitle.trim() || "Untitled note",
+          expectedVersion: version,
+        }),
+      );
+    },
+    onSuccess: (updated) => {
       qc.invalidateQueries({ queryKey: ["note", selected] });
       qc.invalidateQueries({ queryKey: ["tree"] });
       qc.invalidateQueries({ queryKey: ["history"] });
+      if (updated?.version != null) {
+        autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, updated.version);
+      }
+    },
+    onError: (error) => {
+      // Title save failures (409 conflict, network error) must not be silent.
+      // Surface them so the user knows the title was not persisted.
+      if (isConflictError(error)) {
+        setConflict({
+          noteId: selected!,
+          type: note.data?.type === "code" ? "code" : "text",
+          isProtected: note.data?.isProtected,
+          localContent: note.data?.content,
+        });
+      }
     },
   });
 
@@ -242,44 +390,62 @@ export function useNotes({
   };
 
   const autoSave = (content: any) => {
-    // Bind the write to the note/version which produced this editor update.
-    // If the selection changes before the debounce expires, the effect below
-    // cancels it instead of writing stale content into a different note.
+    // Bind the draft to the note/version which produced this editor update.
     if (!selected || !note.data || note.data.id !== selected) return;
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    const settings = readSettings();
-    const revisionIntervalMs = durationMs(settings.revisionIntervalMinutes, settings.revisionIntervalUnit);
-    const request: ContentSaveRequest = {
+    pendingAutoSaveRef.current = {
       noteId: selected,
-      expectedVersion: note.data.version,
+      expectedVersion: Math.max(
+        note.data.version,
+        autoSaveVersionRef.current,
+        noteVersionRef.current.get(selected) ?? 0,
+      ),
       type: note.data.type,
       isProtected: note.data.isProtected,
       content,
     };
-    const flush = () => {
-      autoSaveTimerRef.current = undefined;
-      autoSaveWindowStartRef.current = undefined;
-      save.mutate(request);
-    };
-    const nowTs = Date.now();
-    if (autoSaveWindowStartRef.current === undefined) autoSaveWindowStartRef.current = nowTs;
-    // While edits keep arriving, flush at most once per snapshot interval so a
-    // long, uninterrupted writing session still persists and never spawns a
-    // revision on every keystroke. The server's revision throttle collapses
-    // the window into a single snapshot as well.
-    if (revisionIntervalMs > 0 && nowTs - autoSaveWindowStartRef.current >= revisionIntervalMs) {
-      flush();
-      return;
+    // An editor update can be delivered while it is unmounting after the mode
+    // switch. Persist that final update immediately; it still occurs only
+    // after editing has ended.
+    if (!editing) {
+      const pendingSave = pendingAutoSaveRef.current;
+      pendingAutoSaveRef.current = undefined;
+      save.mutate(pendingSave);
     }
-    autoSaveTimerRef.current = setTimeout(flush, SAVE_DEBOUNCE_MS);
   };
 
-  // A note switch or hook teardown must never leave an old editor's deferred
-  // update in flight.
-  useEffect(() => () => {
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveWindowStartRef.current = undefined;
-  }, [selected]);
+  // The write queue serializes a title blur and this final body flush, so no
+  // timer (or optimistic guess about network timing) is needed.
+  useEffect(() => {
+    if (editing) return;
+    const pendingSave = pendingAutoSaveRef.current;
+    if (!pendingSave) return;
+    pendingAutoSaveRef.current = undefined;
+    save.mutate(pendingSave);
+  }, [editing, save]);
+
+  // ── Visibility / page-hide save ──
+  // When the app moves to the background or the page is about to be discarded,
+  // flush the draft immediately. `visibilitychange` covers app switching on
+  // mobile; `pagehide` covers tab close / navigation.
+  useEffect(() => {
+    const flush = () => {
+      const draft = pendingAutoSaveRef.current;
+      if (!draft || !editing) return;
+      pendingAutoSaveRef.current = undefined;
+      // This cannot be awaited during app suspension, but queueing it before
+      // the WebView is paused gives the native request a chance to start.
+      save.mutate(draft);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [editing, save]);
 
   return {
     tree,

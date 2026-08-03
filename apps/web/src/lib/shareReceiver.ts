@@ -103,7 +103,10 @@ async function saveImagesAsNote(client: YgdriaClient, images: SharedImage[], loc
     images.length === 1
       ? firstTitle || t(locale, "sharedImageNote")
       : t(locale, "sharedImagesNote", { count: String(images.length) });
-  const note = await client.createNote({ title });
+  // A received image belongs to today's calendar day, matching notes created
+  // from the calendar shortcut. `createTodayNote` ensures that day exists and
+  // uses it as the new note's parent instead of falling back to the root.
+  const note = await client.createTodayNote({ title });
   const markdown: string[] = [];
   for (const image of images) {
     const { bytes, mimeType } = await readSharedFile(image.uri, image.mimeType);
