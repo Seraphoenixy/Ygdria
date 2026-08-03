@@ -76,16 +76,16 @@
   cursor: pointer;
 }
 .tree-select-hit:focus-visible {
-  outline: 2px solid #0f6cbd;
+  outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
 .tree-item.active {
   font-weight: 600;
-  background: #e5f1fb;
-  box-shadow: inset 3px 0 #0f6cbd;
+  background: var(--color-accent-soft);
+  box-shadow: inset 3px 0 var(--color-accent);
 }
 .tree-item.multi-selected {
-  background: #e5f1fb;
+  background: var(--color-accent-soft);
 }
 .tree-item:hover {
   background: #edf3f8;
@@ -104,14 +104,14 @@
   left: 4px;
   height: 2px;
   border-radius: 2px;
-  background: #0f6cbd;
+  background: var(--color-accent);
   content: "";
 }
 .tree-item.drop-before::before { top: -2px; }
 .tree-item.drop-after::after { bottom: -2px; }
 .tree-item.drop-inside {
   background: #d7ebf9;
-  outline: 1px solid #0f6cbd;
+  outline: 1px solid var(--color-accent);
 }
 .tree-toggle {
   display: grid;

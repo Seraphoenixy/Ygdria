@@ -169,8 +169,8 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     if (Buffer.byteLength(JSON.stringify(body)) > 16 * 1024 * 1024)
       throw httpError(413, "sync push payload exceeds 16 MiB");
     const serializedBytes = Buffer.byteLength(JSON.stringify(body));
-    const applied = applySyncChanges(sqlite, body.changes, recordOutbound(req));
-    req.log.info({ syncBatch: "push", entities: body.changes.length, serializedBytes, applied }, "applied sync batch");
-    return { applied };
+    const { applied, rejected } = applySyncChanges(sqlite, body.changes, recordOutbound(req));
+    req.log.info({ syncBatch: "push", entities: body.changes.length, serializedBytes, applied, rejected: rejected.length }, "applied sync batch");
+    return { applied, rejected };
   });
 }

@@ -1,3 +1,6 @@
+import { t, type Locale } from "../lib/i18n";
+import type { RejectedSyncChange } from "@ygdria/api-client";
+
 type RemoteResponse = {
   status: number;
   body: unknown;
@@ -18,8 +21,10 @@ type RemoteResponse = {
  */
 export class RemoteProxyClient {
   private serverUrl: string;
-  constructor(serverUrl: string) {
+  private locale: Locale;
+  constructor(serverUrl: string, locale: Locale) {
     this.serverUrl = serverUrl;
+    this.locale = locale;
   }
   peerId() {
     return this.serverUrl;
@@ -38,7 +43,7 @@ export class RemoteProxyClient {
       response = await window.ygdria!.remote!.request({ method, path, body: init?.body, headers: init?.headers });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`桌面远端代理请求失败（${method} ${path}）：${reason}`);
+      throw new Error(t(this.locale, "remoteProxyRequestFailed", { method, path, reason }));
     }
     if (response.status >= 400) {
       const body = response.body as { error?: { message?: string } } | string | null;
@@ -155,7 +160,10 @@ export class RemoteProxyClient {
       method: "POST",
       headers,
       body,
-    }) as Promise<{ applied: number }>;
+    }) as Promise<{ applied: number; rejected: RejectedSyncChange[] }>;
+  }
+  getNote(id: string) {
+    return this.request(`/api/v1/notes/${encodeURIComponent(id)}`) as Promise<any>;
   }
   syncNoteContent(noteId: string, contentHash: string) {
     return this.request(`/api/v1/sync/notes/${encodeURIComponent(noteId)}/content?hash=${encodeURIComponent(contentHash)}`) as Promise<{ contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string }>;

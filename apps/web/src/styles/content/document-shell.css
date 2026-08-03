@@ -167,15 +167,15 @@ article h1 {
 .protected-note-unlock {
   margin-top: 4px;
   padding: 8px 18px;
-  border: 1px solid var(--accent, #0f6cbd);
+  border: 1px solid var(--accent, var(--color-accent));
   border-radius: 6px;
   background: transparent;
-  color: var(--accent, #0f6cbd);
+  color: var(--accent, var(--color-accent));
   font-size: 0.9rem;
   cursor: pointer;
 }
 .protected-note-unlock:hover {
-  background: var(--accent, #0f6cbd);
+  background: var(--accent, var(--color-accent));
   color: #fff;
 }
 .import-complete-toast {

@@ -359,13 +359,21 @@ export class PlacementService extends NoteServiceBase {
     return { id: placementId, noteId, parentPlacementId, position: next };
   }
   movePlacement(placementId: string, parentPlacementId: string, position: number) {
-    this.assertNotSystemPlacement(placementId);
+    this.movePlacements([placementId], parentPlacementId, position);
+  }
+  movePlacements(placementIds: string[], parentPlacementId: string, position: number) {
+    const uniquePlacementIds = [...new Set(placementIds)];
+    if (!uniquePlacementIds.length) throw new ConflictError("At least one placement is required");
+    uniquePlacementIds.forEach((placementId) => this.assertNotSystemPlacement(placementId));
     this.store.sqlite.transaction(() => {
-      if (!this.store.sqlite.prepare("SELECT 1 FROM placements WHERE id=?").get(placementId))
+      const existing = this.store.sqlite
+        .prepare(`SELECT id FROM placements WHERE id IN (${uniquePlacementIds.map(() => "?").join(",")})`)
+        .all(...uniquePlacementIds) as Array<{ id: string }>;
+      if (existing.length !== uniquePlacementIds.length)
         throw new NotFoundError("Placement not found");
       this.assertParent(parentPlacementId);
       this.assertCanUseAsNormalParent(parentPlacementId);
-      if (placementId === parentPlacementId || this.isDescendant(parentPlacementId, placementId))
+      if (uniquePlacementIds.some((placementId) => placementId === parentPlacementId || this.isDescendant(parentPlacementId, placementId)))
         throw new ConflictError(
           "A placement cannot be moved into itself or one of its descendants",
         );
@@ -374,11 +382,11 @@ export class PlacementService extends NoteServiceBase {
       // placements use reserved negative positions and are protected from updates.
       const siblings = this.store.sqlite
         .prepare(
-          "SELECT id FROM placements WHERE parent_placement_id=? AND id<>? AND note_id NOT IN (?,?,?) ORDER BY position,id",
+          `SELECT id FROM placements WHERE parent_placement_id=? AND id NOT IN (${uniquePlacementIds.map(() => "?").join(",")}) AND note_id NOT IN (?,?,?) ORDER BY position,id`,
         )
         .all(
           parentPlacementId,
-          placementId,
+          ...uniquePlacementIds,
           SYSTEM_ROOT_NOTE_ID,
           SYSTEM_TRASH_NOTE_ID,
           CALENDAR_NOTE_ID,
@@ -386,7 +394,7 @@ export class PlacementService extends NoteServiceBase {
       const insertionIndex = Math.min(position, siblings.length);
       const orderedIds = [
         ...siblings.slice(0, insertionIndex).map((sibling) => sibling.id),
-        placementId,
+        ...uniquePlacementIds,
         ...siblings.slice(insertionIndex).map((sibling) => sibling.id),
       ];
       const update = this.store.sqlite.prepare(
@@ -399,6 +407,10 @@ export class PlacementService extends NoteServiceBase {
       this.store.sqlite
         .prepare("INSERT INTO placement_order_versions(parent_placement_id,updated_at) VALUES (?,?) ON CONFLICT(parent_placement_id) DO UPDATE SET updated_at=excluded.updated_at")
         .run(parentPlacementId, updatedAt);
+      // The order snapshot only describes siblings already under the destination.
+      // Record every moved placement so peers receive their new parent ids.
+      for (const placementId of uniquePlacementIds)
+        recordChange(this.store.sqlite, "placement", placementId, "updated");
       recordChange(this.store.sqlite, "placement-order", parentPlacementId, "updated");
     })();
   }

@@ -42,6 +42,11 @@ export const placementSchema = z.object({
   parentPlacementId: z.string(),
   position: z.number().int().nonnegative().optional(),
 });
+export const movePlacementsSchema = z.object({
+  placementIds: z.array(z.string()).min(1),
+  parentPlacementId: z.string(),
+  position: z.number().int().nonnegative(),
+});
 
 // ---------------------------------------------------------------------------
 // Note-to-note relations (related / uses / prerequisite)

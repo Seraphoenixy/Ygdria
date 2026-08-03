@@ -71,8 +71,8 @@
   font-size: 13px;
 }
 .attachments-filter.active {
-  border-color: #0f6cbd;
-  color: #0f6cbd;
+  border-color: var(--color-accent);
+  color: var(--color-accent);
   background: #eef5fb;
 }
 .attachments-filter-count {
@@ -85,7 +85,7 @@
   text-align: center;
 }
 .attachments-filter.active .attachments-filter-count {
-  color: #0f6cbd;
+  color: var(--color-accent);
   background: #d8e8f7;
 }
 .attachments-list {
@@ -157,7 +157,7 @@
   padding: 2px 9px;
   border: 1px solid #dde1e5;
   border-radius: 999px;
-  color: #0f6cbd;
+  color: var(--color-accent);
   background: #fff;
   font-size: 13px;
 }

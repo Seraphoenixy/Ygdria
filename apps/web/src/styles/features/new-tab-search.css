@@ -29,7 +29,7 @@
 }
 
 .nts-input:focus-within {
-  border-color: #0f6cbd;
+  border-color: var(--color-accent);
   box-shadow: 0 0 0 3px rgba(15, 108, 189, 0.12);
 }
 
@@ -100,8 +100,8 @@
 
 .nts-row.selected,
 .nts-row.selected:hover {
-  background: #e5f1fb;
-  box-shadow: inset 2px 0 0 #0f6cbd;
+  background: var(--color-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-accent);
 }
 
 .nts-row.trashed .nts-title {
@@ -129,7 +129,7 @@
 }
 
 .nts-toggle:hover {
-  color: #0f6cbd;
+  color: var(--color-accent);
   background: #dceaf7;
 }
 
@@ -147,7 +147,7 @@
 }
 
 .nts-row.selected .nts-icon {
-  color: #0f6cbd;
+  color: var(--color-accent);
 }
 
 .nts-title {
@@ -208,7 +208,7 @@
   padding: 7px 13px;
   border: 1px solid #cbd3d9;
   border-radius: 7px;
-  color: #0f6cbd;
+  color: var(--color-accent);
   background: #fff;
   font: inherit;
   font-size: 13.5px;
@@ -217,7 +217,7 @@
 }
 
 .nts-new-note:hover:not(:disabled) {
-  border-color: #0f6cbd;
+  border-color: var(--color-accent);
   background: #f5f9fc;
 }
 

@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { describe, it, expect } from "vitest";
 import { normalizePastedHtml } from "./clipboard.js";
 describe("Word cleanup", () =>

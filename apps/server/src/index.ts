@@ -12,7 +12,6 @@ const app = buildApp({
   // A SEA release injects its bundled Web directory before this module runs.
   // Source/development execution continues to use the INI value.
   webDist: process.env.YGDRIA_BUNDLED_WEB_DIST || config.webDist,
-  prettyLogs: false,
 });
 let isClosing = false;
 

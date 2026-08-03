@@ -1,15 +1,52 @@
 :root {
-  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
-  color: #333;
-  background: #f2f3f5;
+  font-family: var(--font-sans);
+  /* Themeable canvas colors — overridden under :root[data-theme="dark"]. */
+  color: var(--color-fg);
+  background: var(--color-bg);
 }
+
 * {
   box-sizing: border-box;
 }
+
 body {
   margin: 0;
   overflow: hidden;
+  font-size: var(--text-base);
+  line-height: var(--line-normal);
 }
+
 #root {
   height: 100vh;
+}
+
+/* Unified keyboard focus ring. Uses the accent token so it adapts to the
+ * theme. Improves accessibility for dialogs/controls reached via Tab. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* Thin, theme-aware scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-fg-muted);
+  background-clip: padding-box;
 }

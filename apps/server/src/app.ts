@@ -50,7 +50,6 @@ export function buildApp(
     origin?: string;
     localToken?: string;
     webDist?: string;
-    prettyLogs?: boolean;
     trustedProxy?: string | string[];
     /** Enable device-credential authentication for standalone server deployments. */
     enableDeviceAuth?: boolean;
@@ -59,7 +58,7 @@ export function buildApp(
   const store = createDatabase(options.databaseUrl);
   applyMigrations(store.sqlite);
   const app = Fastify({
-    logger: options.prettyLogs ? { transport: { target: "pino-pretty" } } : true,
+    logger: true,
     bodyLimit: 128 * 1024 * 1024,
     requestTimeout: 120_000,
     keepAliveTimeout: 10_000,

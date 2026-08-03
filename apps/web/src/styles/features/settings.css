@@ -123,7 +123,7 @@
   font: inherit;
 }
 .settings-text-control:focus {
-  border-color: #0f6cbd;
+  border-color: var(--color-accent);
   outline: 2px solid rgba(15, 108, 189, 0.14);
   outline-offset: 1px;
 }
@@ -153,8 +153,8 @@
   background: #e7e7e8;
 }
 .settings-action:hover:not(:disabled) {
-  color: #0f6cbd;
-  border-color: #0f6cbd;
+  color: var(--color-accent);
+  border-color: var(--color-accent);
 }
 .settings-action:disabled {
   color: #a0a1a6;

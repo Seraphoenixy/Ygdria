@@ -138,6 +138,8 @@ type DiffViewProps = {
   hunks?: DiffHunk[];
   locale: Locale;
   emptyHint?: string;
+  /** Layout: classic single-column unified diff, or side-by-side split view. */
+  mode?: "unified" | "split";
   /** When provided, each hunk header shows a revert button (code notes only). */
   onRevertHunk?: (hunkIndex: number) => void;
   revertHunkLabel?: string;
@@ -145,13 +147,14 @@ type DiffViewProps = {
   isReverting?: boolean;
 };
 
-/** GitHub-style unified diff view, reused by the revision and conflict dialogs. */
+/** GitHub-style diff view, reused by the revision and conflict dialogs. */
 export function DiffView({
   oldContent,
   newContent,
   hunks,
   locale,
   emptyHint,
+  mode = "unified",
   onRevertHunk,
   revertHunkLabel,
   revertHunkTitle,
@@ -170,7 +173,7 @@ export function DiffView({
   return (
     <>
       {derivedHunks.map((hunk, hi) => (
-        <div className="revision-hunk" key={hi}>
+        <div className={`revision-hunk${mode === "split" ? " split" : ""}`} key={hi}>
           <div className="revision-hunk-header">
             <span className="revision-hunk-range">
               @@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@
@@ -187,16 +190,37 @@ export function DiffView({
               </button>
             )}
           </div>
-          <ol>
-            {hunk.lines.map((line, li) => (
-              <li className={line.type} key={li}>
-                <span className="ln old">{line.oldNo ?? ""}</span>
-                <span className="ln new">{line.newNo ?? ""}</span>
-                <span className="sign">{line.type === "added" ? "+" : line.type === "removed" ? "−" : " "}</span>
-                <code>{line.text || " "}</code>
-              </li>
-            ))}
-          </ol>
+          {mode === "split" ? (
+            <div className="revision-hunk-split">
+              {hunk.lines.map((line, li) => (
+                <div className="split-row" key={li}>
+                  <code
+                    className={`split-cell old ${line.type === "removed" ? "removed" : line.type === "context" ? "context" : "blank"}`}
+                  >
+                    <span className="ln">{line.type === "added" ? "" : (line.oldNo ?? "")}</span>
+                    <span className="txt">{line.type === "added" ? "" : line.text || " "}</span>
+                  </code>
+                  <code
+                    className={`split-cell new ${line.type === "added" ? "added" : line.type === "context" ? "context" : "blank"}`}
+                  >
+                    <span className="ln">{line.type === "removed" ? "" : (line.newNo ?? "")}</span>
+                    <span className="txt">{line.type === "removed" ? "" : line.text || " "}</span>
+                  </code>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <ol>
+              {hunk.lines.map((line, li) => (
+                <li className={line.type} key={li}>
+                  <span className="ln old">{line.oldNo ?? ""}</span>
+                  <span className="ln new">{line.newNo ?? ""}</span>
+                  <span className="sign">{line.type === "added" ? "+" : line.type === "removed" ? "−" : " "}</span>
+                  <code>{line.text || " "}</code>
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
       ))}
     </>

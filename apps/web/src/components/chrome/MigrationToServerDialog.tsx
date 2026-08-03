@@ -13,7 +13,7 @@ export function MigrationToServerDialog({
 }) {
   const [serverUrl, setServerUrl] = useState("");
   const [password, setPassword] = useState("");
-  const [label, setLabel] = useState("桌面端");
+  const [label, setLabel] = useState(t(locale, "deviceLabelDesktop"));
   const [confirmed, setConfirmed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();

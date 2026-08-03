@@ -14,7 +14,6 @@
     "@ygdria/domain": "workspace:*",
     "@ygdria/shared": "workspace:*",
     "fastify": "^5.4.0",
-    "pino-pretty": "^13.0.0",
     "secure-remote-password": "^0.3.1",
     "tsx": "^4.20.3",
     "zod": "^3.24.4"

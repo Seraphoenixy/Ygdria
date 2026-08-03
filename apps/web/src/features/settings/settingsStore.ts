@@ -2,8 +2,12 @@ import { detectLocale, type Locale } from "../../lib/i18n";
 
 export type TimeUnit = "seconds" | "minutes" | "hours" | "days";
 
+/** User theme preference. "system" follows the OS `prefers-color-scheme`. */
+export type ThemePreference = "light" | "dark" | "system";
+
 export type StoredSettings = {
   locale: Locale;
+  theme: ThemePreference;
   trashRetentionDays: number;
   trashRetentionUnit: TimeUnit;
   attachmentRetentionDays: number;
@@ -18,6 +22,7 @@ export type StoredSettings = {
 
 const defaultSettings: StoredSettings = {
   locale: detectLocale(),
+  theme: "system",
   trashRetentionDays: 7,
   trashRetentionUnit: "days",
   attachmentRetentionDays: 0,

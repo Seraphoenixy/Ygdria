@@ -48,6 +48,7 @@ const WorkspaceContent = lazy(() =>
 );
 import { RevisionHistoryDialog } from "../components/note/RevisionHistoryDialog";
 import { ConflictDialog } from "../components/note/ConflictDialog";
+import { SyncConflictsDialog } from "../components/note/SyncConflictsDialog";
 import type {
   ContextMenuState,
   TabMenuState,
@@ -62,6 +63,7 @@ import { useWorkspaceSelection } from "../hooks/useWorkspaceSelection";
 import { useWorkspaceTabs } from "../hooks/useWorkspaceTabs";
 import { useMaintenance } from "../hooks/useMaintenance";
 import { useMobileGestures } from "../hooks/useMobileGestures";
+import { applyTheme } from "../lib/theme";
 import { saveRemoteCredential, clearRemoteCredential } from "../lib/credentialStorage";
 import { isPhoneLayout, isNativePhone } from "../lib/mobileLayout";
 import { configureShareReceiver } from "../lib/shareReceiver";
@@ -158,6 +160,26 @@ export function App({
   useEffect(() => {
     document.body.classList.toggle("reading-mode", readingMode);
   }, [readingMode]);
+
+  // Keep the active theme in sync with the user's preference. The attribute is
+  // set once before first paint (main.tsx); here we re-apply whenever the OS
+  // color scheme changes so a "system" preference tracks the OS live. The
+  // settings page calls `applyTheme()` directly on every change, so no custom
+  // event is needed for manual switches.
+  useEffect(() => {
+    applyTheme();
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyTheme();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  // Reflect the active locale on <html lang> for accessibility and for
+  // CSS :lang()-based localization (e.g. the empty-editor placeholder).
+  useEffect(() => {
+    if (typeof document !== "undefined") document.documentElement.lang = locale;
+  }, [locale]);
 
   // Hand the authenticated API client to the share receiver so images shared
   // from other apps (captured by initShareReceiver at startup) can be persisted
@@ -535,6 +557,11 @@ export function App({
     syncState,
     syncProgress,
     syncing,
+    lastSyncedAt,
+    syncItemCount,
+    lastSyncError,
+    syncConflicts,
+    removeSyncConflict,
     syncAfterBootstrap,
     setSyncAfterBootstrap,
     syncNow,
@@ -549,6 +576,8 @@ export function App({
     showToast,
     isDesktopApp,
   });
+
+  const [showSyncConflicts, setShowSyncConflicts] = useState(false);
 
   // Startup auth probe. Runs once on mount and again whenever `bootEpoch`
   // changes (the retry button bumps it). The two network calls — the health
@@ -1059,7 +1088,7 @@ export function App({
                 // Browser: direct YgdriaClient with token in sessionStorage.
                 if (isDesktopApp) await window.ygdria!.remote!.configure(serverUrl);
                 const remote = isDesktopApp
-                  ? new RemoteProxyClient(serverUrl)
+                  ? new RemoteProxyClient(serverUrl, locale)
                   : new YgdriaClient(serverUrl);
                 if (desktopMigration) {
                   // A first-run desktop client attaches to an existing remote
@@ -1183,7 +1212,7 @@ export function App({
             ? async () => {
                 const health = await client.health();
                 if (!health.authInitialized)
-                  throw new Error("尚未检测到客户端迁移。请在已有桌面客户端完成迁移后再试。");
+                  throw new Error(t(locale, "migrationClientNotDetected"));
                 setDeviceAccess("login");
               }
             : undefined
@@ -1249,8 +1278,8 @@ export function App({
             setContextMenu({ placement, x, y });
           }}
           onSetClipboard={setTreeClipboard}
-          onMovePlacement={(placementId, parentPlacementId, position) => {
-            void client.movePlacement(placementId, parentPlacementId, position).then(refreshTree);
+          onMovePlacement={(placementIds, parentPlacementId, position) => {
+            void client.movePlacements(placementIds, parentPlacementId, position).then(refreshTree);
           }}
           onResizePanel={resizeTreePanel}
           onToggleCollapse={() => setTreeCollapsed((collapsed) => !collapsed)}
@@ -1269,6 +1298,11 @@ export function App({
           syncing={syncing}
           syncState={syncState}
           syncProgress={syncProgress}
+          lastSyncedAt={lastSyncedAt}
+          syncItemCount={syncItemCount}
+          lastSyncError={lastSyncError}
+          syncConflictCount={syncConflicts.length}
+          onShowSyncConflicts={() => setShowSyncConflicts(true)}
           onSync={syncNow}
           onClearTabs={clearTabs}
           refreshTree={refreshTree}
@@ -1495,6 +1529,15 @@ export function App({
               setDeleteConfirmation(null);
               void Promise.all(placements.map((item) => client.deletePlacement(item.placementId)))
                 .then(() => {
+                  const deletedNoteIds = new Set(placements.map((item) => item.noteId));
+                  // A deleted note must not remain open in a workspace tab. Use
+                  // force mode so a pinned tab cannot keep a stale document.
+                  closeTabs(
+                    tabs
+                      .filter((tab) => tab.kind === "note" && deletedNoteIds.has(tab.noteId))
+                      .map((tab) => tab.id),
+                    true,
+                  );
                   if (placements.some((item) => item.placementId === selectedPlacementId))
                     setSelectedPlacementId(undefined);
                   setSelectedPlacementIds(new Set());
@@ -1546,6 +1589,19 @@ export function App({
             conflict={conflict}
             onResolve={resolveConflict}
             onClose={() => resolveConflict("dismiss")}
+          />
+        )}
+        {showSyncConflicts && syncConflicts.length > 0 && remoteClient && (
+          <SyncConflictsDialog
+            conflicts={syncConflicts}
+            client={client}
+            remoteClient={remoteClient}
+            locale={locale}
+            onResolve={(noteId) => {
+              removeSyncConflict(noteId);
+              showToast(t(locale, "syncConflictResolved"));
+            }}
+            onClose={() => setShowSyncConflicts(false)}
           />
         )}
         {remoteReauthRequired && !passwordDialog && (

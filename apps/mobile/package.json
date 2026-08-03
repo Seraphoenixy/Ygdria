@@ -23,8 +23,7 @@
     "@capacitor/splash-screen": "^7.0.1",
     "@capacitor/status-bar": "^7.0.1",
     "@capgo/capacitor-share-target": "^7.0.0",
-    "@ygdria/web": "workspace:*",
-    "vite": "^8.0.0"
+    "@ygdria/web": "workspace:*"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.2"

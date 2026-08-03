@@ -1,5 +1,14 @@
 import type { NoteContent } from "@ygdria/shared";
 
+/** A sync change the server rejected because last-write-wins kept a newer
+ * local version. Surfaced so clients can flag a divergence to the user. */
+export type RejectedSyncChange = {
+  entityType: string;
+  entityId: string;
+  localUpdatedAt: number;
+  localVersion: number;
+};
+
 /**
  * Build an AbortSignal that rejects after `timeoutMs`. Used so startup probes
  * (health / currentDevice) can never hang forever on a slow or unreachable
@@ -173,7 +182,7 @@ export class YgdriaClient {
       headers["Content-Type"] = "application/vnd.ygdria.sync+json";
       headers["Content-Encoding"] = "gzip";
     }
-    return this.request<{ applied: number }>("/api/v1/sync/push", {
+    return this.request<{ applied: number; rejected: RejectedSyncChange[] }>("/api/v1/sync/push", {
       method: "POST",
       headers,
       body,
@@ -357,6 +366,13 @@ export class YgdriaClient {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ parentPlacementId, position }),
+    });
+  }
+  movePlacements(placementIds: string[], parentPlacementId: string, position: number) {
+    return this.request<{ ok: true }>("/api/v1/placements", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ placementIds, parentPlacementId, position }),
     });
   }
   content(id: string, format: "markdown" | "json" = "markdown") {

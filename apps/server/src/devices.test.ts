@@ -11,7 +11,7 @@ import { buildApp } from "./app.js";
 
 const MASTER_PASSWORD = "correct horse battery staple";
 const buildDeviceApp = () =>
-  buildApp({ databaseUrl: ":memory:", enableDeviceAuth: true, prettyLogs: false });
+  buildApp({ databaseUrl: ":memory:", enableDeviceAuth: true });
 
 /** Node mirror of the browser's accessSecret derivation: PBKDF2-SHA256 over
  *  (masterPassword || ACCESS_SECRET_CONTEXT) with accessSalt, base64url-encoded. */
@@ -529,7 +529,6 @@ describe("device auth (SRP-6a)", () => {
     const localApp = buildApp({
       databaseUrl: ":memory:",
       enableDeviceAuth: false,
-      prettyLogs: false,
     });
     const ok = await localApp.inject({
       method: "POST",
@@ -620,7 +619,7 @@ describe("device auth (SRP-6a)", () => {
     // file-backed DB we can reopen. The settings table must contain only the
     // salts, verifier and version metadata — never the password or accessSecret.
     const dbPath = `./test-auth-${Date.now()}.db`;
-    const app = buildApp({ databaseUrl: dbPath, enableDeviceAuth: true, prettyLogs: false });
+    const app = buildApp({ databaseUrl: dbPath, enableDeviceAuth: true });
     await initialize(app);
     const { createDatabase } = await import("@ygdria/database");
     const store = createDatabase(dbPath);

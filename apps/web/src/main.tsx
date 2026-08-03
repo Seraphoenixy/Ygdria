@@ -11,6 +11,7 @@ import { hasFreshStartupAuth, loadRemoteCredential } from "./lib/credentialStora
 import { readSettings, writeSettings } from "./features/settings/settingsStore";
 import { initShareReceiver } from "./lib/shareReceiver";
 import { t, detectLocale, type Locale } from "./lib/i18n";
+import { applyTheme } from "./lib/theme";
 import "./style.css";
 
 export const MOBILE_API_ENDPOINT_KEY = "ygdria.api";
@@ -42,6 +43,10 @@ void initShareReceiver();
 // flash on narrow loads.
 if (typeof document !== "undefined") {
   if (isPhoneLayout()) document.documentElement.classList.add("phone");
+  // Apply the persisted theme (light / dark / system) before first paint so the
+  // already-authored `:root[data-theme="dark"]` styles show immediately instead
+  // of flashing the light theme.
+  applyTheme();
 }
 
 export function normalizeMobileApiEndpoint(value: string, locale: Locale) {

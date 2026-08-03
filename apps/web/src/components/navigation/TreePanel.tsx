@@ -1,10 +1,26 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Search, ChevronsLeft, FilePlus2, History, Settings, Archive, Calendar, Lock, Unlock, RefreshCw, CloudCheck, CloudUpload, Paperclip, Home } from "lucide-react";
+import { Search, ChevronsLeft, FilePlus2, History, Settings, Archive, Calendar, Lock, Unlock, RefreshCw, CloudCheck, CloudUpload, CloudAlert, AlertTriangle, Paperclip, Home } from "lucide-react";
 import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement, WorkspaceTab } from "../../types/workspace";
 import { NoteTree } from "./NoteTree";
 import { ancestorChain, computeAutoExpansion } from "../../lib/tree-paths";
+
+/** Number of deliberate tree operations elsewhere before a stale auto-expanded
+ * branch is reclaimed by auto-collapse. */
+const AUTO_COLLAPSE_OPERATIONS = 5;
+
+/** Compact, locale-aware "3 minutes ago" style label for a timestamp. */
+function formatRelativeTime(timestamp: number, locale: Locale): string {
+  const diffMs = Date.now() - timestamp;
+  const rtf = new Intl.RelativeTimeFormat(locale === "zh-CN" ? "zh-CN" : "en-US", { numeric: "auto" });
+  const minutes = Math.round(diffMs / 60000);
+  if (Math.abs(minutes) < 60) return rtf.format(-minutes, "minute");
+  const hours = Math.round(minutes / 60);
+  if (Math.abs(hours) < 24) return rtf.format(-hours, "hour");
+  const days = Math.round(hours / 24);
+  return rtf.format(-days, "day");
+}
 
 function QuickButton({ label, active = false, className = "", disabled = false, onClick, children }: {
   label: string;
@@ -38,7 +54,7 @@ type TreePanelProps = {
   onToggleExpand: (placementId: string) => void;
   onContextMenu: (placement: TreePlacement, x: number, y: number) => void;
   onSetClipboard: (clipboard: { placements: TreePlacement[]; mode: "cut" | "copy" } | null) => void;
-  onMovePlacement: (placementId: string, parentPlacementId: string, position: number) => void;
+  onMovePlacement: (placementIds: string[], parentPlacementId: string, position: number) => void;
   onResizePanel: (event: React.PointerEvent<HTMLDivElement>) => void;
   onToggleCollapse: () => void;
   onOpenHistory: () => void;
@@ -56,6 +72,11 @@ type TreePanelProps = {
   syncing: boolean;
   syncState: "unconfigured" | "synced" | "pending";
   syncProgress?: string;
+  lastSyncedAt?: number;
+  syncItemCount?: { out: number; in: number };
+  lastSyncError?: string;
+  syncConflictCount?: number;
+  onShowSyncConflicts?: () => void;
   onSync: () => void;
   onClearTabs: () => void;
   refreshTree: () => void;
@@ -75,7 +96,7 @@ export function TreePanel({
   onOpenHistory, onCloseHistory, onOpenSettings, onOpenSearch, onCloseSearch, onCloseSettings, onOpenArchive,
   onOpenAttachments, onCloseAttachments,
   protectedSession, onProtectedSessionToggle,
-  onOpenTodayNote, syncing, syncState, syncProgress, onSync, onClearTabs, refreshTree, importInputRef, openImportDialog, exportPlacements, importNotes,
+  onOpenTodayNote, syncing, syncState, syncProgress, lastSyncedAt, syncItemCount, lastSyncError, syncConflictCount, onShowSyncConflicts, onSync, onClearTabs, refreshTree, importInputRef, openImportDialog, exportPlacements, importNotes,
   decryptedTitles,
 }: TreePanelProps) {
   const [search, setSearch] = useState("");
@@ -104,6 +125,13 @@ export function TreePanel({
     return map;
   }, [tree]);
 
+  // The branch containing the currently selected note is "active" and must
+  // never be auto-collapsed, even after the idle-operation threshold is met.
+  const activeBranchIds = useMemo(() => {
+    if (!selectedPlacementId) return new Set<string>();
+    return new Set(ancestorChain(selectedPlacementId, byId));
+  }, [selectedPlacementId, byId]);
+
   // Root placements that must always stay expanded.
   const rootIds = useMemo(
     () => new Set(
@@ -115,6 +143,37 @@ export function TreePanel({
   );
 
   const isSearching = search.trim().length > 0;
+
+  // ── Sync status presentation ──────────────────────────────────────
+  // Derive a human-readable tooltip, icon and class for the sync button,
+  // including the last-success time, live item counts and any failure reason.
+  const hasSyncError = Boolean(lastSyncError);
+  const syncTooltip = (() => {
+    const out = syncItemCount?.out ?? 0;
+    const inn = syncItemCount?.in ?? 0;
+    if (syncing) {
+      return `${t(locale, "syncInProgress")} · ${t(locale, "syncItems", { out: String(out), in: String(inn) })}`;
+    }
+    if (hasSyncError) {
+      return `${t(locale, "syncErrorReason")}: ${lastSyncError} · ${t(locale, "syncRetryHint")}`;
+    }
+    const last = lastSyncedAt ? formatRelativeTime(lastSyncedAt, locale) : t(locale, "syncNever");
+    if (syncState === "unconfigured") return t(locale, "syncServer");
+    const stateLabel = syncState === "pending" ? t(locale, "syncNeeded") : t(locale, "syncUpToDate");
+    return `${stateLabel} · ${t(locale, "syncLastAt", { time: last })}`;
+  })();
+  const syncIcon = syncing ? (
+    <RefreshCw />
+  ) : hasSyncError ? (
+    <CloudAlert />
+  ) : syncState === "synced" ? (
+    <CloudCheck />
+  ) : syncState === "pending" ? (
+    <CloudUpload />
+  ) : (
+    <RefreshCw />
+  );
+  const syncClassName = `sync-shortcut sync-${hasSyncError ? "error" : syncing ? "syncing" : syncState}`;
 
   const matchesSearch = (placement: TreePlacement): boolean => {
     const term = search.trim().toLocaleLowerCase();
@@ -172,7 +231,9 @@ export function TreePanel({
 
   /** Count a deliberate tree interaction against stale auto-expanded paths.
    * Selecting a note within such a path counts as a visit and cancels its
-   * pending collapse. Three operations elsewhere finally reclaim the space. */
+   * pending collapse. After `AUTO_COLLAPSE_OPERATIONS` operations elsewhere
+   * the stale branch is reclaimed — unless it is the active branch (the one
+   * containing the currently selected note), which is never auto-collapsed. */
   const recordTreeOperation = (visitedPlacementId?: string) => {
     const pending = pendingAutoCollapsesRef.current;
     if (pending.size === 0) return;
@@ -189,9 +250,14 @@ export function TreePanel({
       }
       if (visitedCandidate) {
         pending.delete(placementId);
-      } else if (count + 1 >= 3) {
-        pending.delete(placementId);
-        shouldCollapse.add(placementId);
+      } else if (count + 1 >= AUTO_COLLAPSE_OPERATIONS) {
+        // Never auto-collapse the branch that holds the active note.
+        if (activeBranchIds.has(placementId)) {
+          pending.set(placementId, count + 1);
+        } else {
+          pending.delete(placementId);
+          shouldCollapse.add(placementId);
+        }
       } else {
         pending.set(placementId, count + 1);
       }
@@ -316,14 +382,24 @@ export function TreePanel({
           </QuickButton>
           {window.ygdria && (
             <QuickButton
-              label={`${syncing ? t(locale, "syncInProgress") : syncState === "pending" ? t(locale, "syncNeeded") : syncState === "synced" ? t(locale, "syncUpToDate") : t(locale, "syncServer")}${syncProgress ? ` · ${syncProgress}` : ""}`}
-              className={`sync-shortcut sync-${syncing ? "syncing" : syncState}`}
+              label={syncTooltip}
+              className={syncClassName}
               disabled={syncing}
               onClick={onSync}
             >
-              {syncing ? <RefreshCw /> : syncState === "synced" ? <CloudCheck /> : syncState === "pending" ? <CloudUpload /> : <RefreshCw />}
+              {syncIcon}
             </QuickButton>
           )}
+          {window.ygdria && syncConflictCount ? syncConflictCount > 0 && (
+            <QuickButton
+              label={t(locale, "syncConflictsTitle")}
+              className="sync-shortcut sync-conflict-badge"
+              onClick={onShowSyncConflicts}
+            >
+              <AlertTriangle />
+              <span className="sync-conflict-count">{syncConflictCount}</span>
+            </QuickButton>
+          ) : null}
           <QuickButton
             label={t(locale, "quickSettings")}
             active={settingsOpen}
@@ -412,14 +488,26 @@ export function TreePanel({
             <button
               type="button"
               disabled={syncing}
-              aria-label={`${syncing ? t(locale, "syncInProgress") : syncState === "pending" ? t(locale, "syncNeeded") : syncState === "synced" ? t(locale, "syncUpToDate") : t(locale, "syncServer")}${syncProgress ? ` · ${syncProgress}` : ""}`}
-              title={`${syncing ? t(locale, "syncInProgress") : syncState === "pending" ? t(locale, "syncNeeded") : syncState === "synced" ? t(locale, "syncUpToDate") : t(locale, "syncServer")}${syncProgress ? ` · ${syncProgress}` : ""}`}
-              className={`sync-shortcut sync-${syncing ? "syncing" : syncState}`}
+              aria-label={syncTooltip}
+              title={syncTooltip}
+              className={syncClassName}
               onClick={onSync}
             >
-              {syncing ? <RefreshCw size={20} /> : syncState === "synced" ? <CloudCheck size={20} /> : syncState === "pending" ? <CloudUpload size={20} /> : <RefreshCw size={20} />}
+              {React.cloneElement(syncIcon, { size: 20 })}
             </button>
           )}
+          {window.ygdria && syncConflictCount ? syncConflictCount > 0 && (
+            <button
+              type="button"
+              aria-label={t(locale, "syncConflictsTitle")}
+              title={t(locale, "syncConflictsTitle")}
+              className="sync-shortcut sync-conflict-badge"
+              onClick={onShowSyncConflicts}
+            >
+              <AlertTriangle size={20} />
+              <span className="sync-conflict-count">{syncConflictCount}</span>
+            </button>
+          ) : null}
         </div>
         <div className="tree-search">
           <Search size={18} />
@@ -456,8 +544,8 @@ export function TreePanel({
             }}
             onCreateChild={(placementId) => onCreateNote(placementId)}
             creatingNote={creatingNote}
-            onMove={(placementId, parentPlacementId, position) => {
-              void client.movePlacement(placementId, parentPlacementId, position).then(refreshTree);
+            onMove={(placementIds, parentPlacementId, position) => {
+              void onMovePlacement(placementIds, parentPlacementId, position);
             }}
             onContextMenu={(placement, event) => {
               if (placement.isTrashed || placement.isTrash) return;

@@ -52,10 +52,29 @@ type CopiedFormat = {
   persistent?: boolean;
 };
 
-const DEFAULT_TEXT_COLOR = "#333333";
-const DEFAULT_HIGHLIGHT_COLOR = "#E2F0D9";
-const TEXT_COLOR_PALETTE = ["#000000", "#3A3A3E", "#5E6770", "#8A949E", "#1F4E79", "#2F6B55", "#7A5A22", "#7A3E48", "#5C4B8A", "#9C2D2D"];
-const HIGHLIGHT_COLOR_PALETTE = ["#FFF2CC", "#E2F0D9", "#DDEBF7", "#E4DFEC", "#FCE4D6", "#F4CCCC", "#D9EAD3", "#D0E0E3", "#D9D2E9", "#EAD1DC"];
+// Palette now references design tokens defined in the web app's tokens.css
+// (see --editor-text-* / --editor-highlight-*). This keeps the swatch colors
+// centralized and themeable instead of hardcoding hex here.
+const DEFAULT_TEXT_COLOR = "var(--editor-text-default)";
+const DEFAULT_HIGHLIGHT_COLOR = "var(--editor-highlight-default)";
+const TEXT_COLOR_PALETTE = [
+  "var(--editor-text-1)", "var(--editor-text-2)", "var(--editor-text-3)", "var(--editor-text-4)", "var(--editor-text-5)",
+  "var(--editor-text-6)", "var(--editor-text-7)", "var(--editor-text-8)", "var(--editor-text-9)", "var(--editor-text-10)",
+];
+const HIGHLIGHT_COLOR_PALETTE = [
+  "var(--editor-highlight-1)", "var(--editor-highlight-2)", "var(--editor-highlight-3)", "var(--editor-highlight-4)", "var(--editor-highlight-5)",
+  "var(--editor-highlight-6)", "var(--editor-highlight-7)", "var(--editor-highlight-8)", "var(--editor-highlight-9)", "var(--editor-highlight-10)",
+];
+
+// Resolve a `var(--token)` color to its computed value (used for <input type="color">,
+// which only accepts literal colors). Non-var colors pass through unchanged.
+function resolveColor(value: string): string {
+  if (!value.startsWith("var(")) return value;
+  if (typeof document === "undefined" || !document.documentElement) return value;
+  const name = value.slice(4, -1).trim();
+  const resolved = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return resolved || value;
+}
 
 const MODE_LABELS = {
   "zh-CN": { read: "只读", edit: "编辑" },
@@ -813,7 +832,7 @@ function ColorButton({
                   key={swatch}
                   type="button"
                   className={color.toLowerCase() === swatch.toLowerCase() ? "is-active" : undefined}
-                  aria-label={`${label}: ${swatch}`}
+                  aria-label={`${label}: ${resolveColor(swatch)}`}
                   aria-pressed={color.toLowerCase() === swatch.toLowerCase()}
                   style={{ backgroundColor: swatch }}
                   onClick={() => { onChange(swatch); setOpen(false); }}
@@ -823,7 +842,7 @@ function ColorButton({
           </div>
           <label>
             <span>{colorLabels.customColor}</span>
-            <input ref={inputRef} type="color" value={color} onChange={(event) => onChange(event.target.value)} />
+            <input ref={inputRef} type="color" value={resolveColor(color)} onChange={(event) => onChange(event.target.value)} />
           </label>
           <button type="button" onClick={() => { onReset(); setOpen(false); }}>{colorLabels.resetColor}</button>
         </div>,

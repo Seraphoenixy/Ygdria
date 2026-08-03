@@ -179,6 +179,31 @@ describe("cross-device purge propagation", () => {
 });
 
 describe("atomic sibling-order sync", () => {
+  it("moves placements to a different parent on the peer", () => {
+    const peerA = freshDb();
+    const peerB = freshDb();
+    const notesA = new NoteService(peerA);
+    const cursor = { id: 0 };
+    const parent = notesA.create({ title: "Parent" });
+    const firstChild = notesA.create({ title: "First child" });
+    const secondChild = notesA.create({ title: "Second child" });
+    sync(peerA, peerB, cursor);
+    const [parentPlacement, firstChildPlacement, secondChildPlacement] = [parent, firstChild, secondChild].map((note) =>
+      peerA.sqlite.prepare("SELECT id FROM placements WHERE note_id=?").get(note.id) as { id: string },
+    );
+
+    notesA.movePlacements([firstChildPlacement.id, secondChildPlacement.id], parentPlacement.id, 0);
+    sync(peerA, peerB, cursor);
+
+    const children = peerB.sqlite
+      .prepare("SELECT id,parent_placement_id parentPlacementId,position FROM placements WHERE id IN (?,?) ORDER BY position")
+      .all(firstChildPlacement.id, secondChildPlacement.id);
+    expect(children).toEqual([
+      { id: firstChildPlacement.id, parentPlacementId: parentPlacement.id, position: 0 },
+      { id: secondChildPlacement.id, parentPlacementId: parentPlacement.id, position: 1 },
+    ]);
+  });
+
   it("converges every sibling after a desktop-style reorder", () => {
     const peerA = freshDb();
     const peerB = freshDb();

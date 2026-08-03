@@ -63,7 +63,7 @@ main {
   content: "";
 }
 .sidebar-resizer:hover::after {
-  background: #0f6cbd;
+  background: var(--color-accent);
 }
 .inspector-resizer {
   position: absolute;
@@ -84,7 +84,7 @@ main {
   content: "";
 }
 .inspector-resizer:hover::after {
-  background: #0f6cbd;
+  background: var(--color-accent);
 }
 .inspector-panel-collapsed .note-inspector {
   display: none;

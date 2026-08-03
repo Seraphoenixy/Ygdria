@@ -21,7 +21,7 @@
   --doc-muted: #686870;
   --doc-border: #d9dce1;
   --doc-surface-subtle: #f1f2f4;
-  --doc-link: #0f6cbd;
+  --doc-link: var(--color-accent);
   --doc-reference-bg: #efedff;
   --doc-code-bg: #f6f8fa;
   --doc-code-text: #24292f;
@@ -69,6 +69,10 @@
   color: #b6b6bc;
   content: "在这里输入你的笔记内容...";
   pointer-events: none;
+}
+/* Localized empty-editor placeholder (see <html lang> set from the app locale). */
+:lang(en) .ygdria-editor > p:only-child:has(> br:only-child)::before {
+  content: "Start writing your note...";
 }
 .ygdria-editor:focus-within {
   box-shadow: none;
@@ -611,11 +615,11 @@
   background: #ebebee;
 }
 .editor-toolbar .mode-btn.mode-read.is-active {
-  background: #0f6cbd;
+  background: var(--color-accent);
   color: #fff;
 }
 .editor-toolbar .mode-btn.mode-edit.is-active {
-  background: #0f6cbd;
+  background: var(--color-accent);
   color: #fff;
 }
 .editor-toolbar .mode-btn:disabled {
@@ -656,8 +660,8 @@
 .editor-toolbar > button.is-active,
 .editor-toolbar-group > button.is-active,
 .editor-toolbar-dropdown > button.is-active {
-  color: #0f6cbd;
-  background: #e5f1fb;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
 .editor-toolbar > button:disabled,
@@ -739,8 +743,8 @@
 }
 
 .editor-toolbar-dropdown-panel button.is-active {
-  color: #0f6cbd;
-  background: #e5f1fb;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 .editor-toolbar-dropdown-panel.is-compact-options {
   display: flex;
@@ -773,8 +777,8 @@
   background: #edf3f8;
 }
 .editor-toolbar-dropdown-panel.is-compact-options .editor-toolbar-group > button.is-active {
-  color: #0f6cbd;
-  background: #e5f1fb;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 .editor-toolbar-overflow-panel {
   z-index: 20;
@@ -808,8 +812,8 @@
   background: #edf3f8;
 }
 .editor-toolbar-overflow-panel .editor-toolbar-group > button.is-active {
-  color: #0f6cbd;
-  background: #e5f1fb;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 .editor-toolbar.overflow-level-1 .editor-toolbar-secondary-overflow,
 .editor-toolbar.overflow-level-2 .editor-toolbar-secondary {
@@ -836,8 +840,8 @@
   background: #edf3f8;
 }
 .editor-toolbar-more-trigger > button.is-active {
-  color: #0f6cbd;
-  background: #e5f1fb;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
 .editor-toolbar-separator {
@@ -958,7 +962,7 @@
   padding: 0 8px;
   border: 1px solid #d9d9de;
   border-radius: 5px;
-  color: #0f6cbd;
+  color: var(--color-accent);
   background: #fff;
   cursor: pointer;
 }
@@ -977,7 +981,7 @@
 
 .editor-toolbar-color-panel .editor-toolbar-color-swatches button:hover,
 .editor-toolbar-color-panel .editor-toolbar-color-swatches button.is-active {
-  outline: 2px solid #0f6cbd;
+  outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
 
@@ -1009,7 +1013,7 @@
 }
 
 .editor-toolbar-link-popover input:focus {
-  border-color: #0f6cbd;
+  border-color: var(--color-accent);
 }
 
 .editor-toolbar-link-popover button {
@@ -1023,7 +1027,7 @@
   border-radius: 6px;
   font-size: 15px;
   color: #fff;
-  background: #0f6cbd;
+  background: var(--color-accent);
   cursor: pointer;
 }
 
@@ -1114,8 +1118,8 @@
 }
 
 .editor-toolbar-md-btn.is-active {
-  color: #0f6cbd;
-  background: #e5f1fb;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1172,7 +1176,7 @@
   outline: none;
 }
 .ygdria-search-input:focus {
-  border-color: #0f6cbd;
+  border-color: var(--color-accent);
 }
 .ygdria-search-option {
   display: inline-flex;

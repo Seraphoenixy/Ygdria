@@ -216,7 +216,7 @@ export function useProtectedSession({
             const config = await client.authConfig();
             assertAuthConfigSupported(config);
             if (!config.accessSalt || !config.srpSalt)
-              throw new Error("服务尚未初始化主密码，无法验证当前主密码。");
+              throw new Error(t(locale, "protectedNoMasterPassword"));
             const accessSecret = await deriveAccessSecret(
               currentPassword!,
               config.accessSalt,
@@ -233,7 +233,7 @@ export function useProtectedSession({
               challenge.challengeId,
               clientEphemeral.public,
               clientSession.proof,
-              "桌面端",
+              t(locale, "deviceLabelDesktop"),
             );
             srpVerifyServer(clientEphemeral, clientSession, credential.serverSessionProof);
             reauthToken = credential.reauthToken;
@@ -266,7 +266,7 @@ export function useProtectedSession({
           if (requiresDeviceAuth) {
             const config = await client.authConfig();
             assertAuthConfigSupported(config);
-            if (!config.accessSalt) throw new Error("服务尚未初始化主密码，请刷新后重试。");
+            if (!config.accessSalt) throw new Error(t(locale, "protectedSetupNoMasterPassword"));
             const accessSecret = await deriveAccessSecret(password, config.accessSalt);
             const registration = srpRegister(accessSecret);
             await client.setupProtectedSession(

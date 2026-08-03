@@ -1,3 +1,4 @@
+@import "./styles/foundation/tokens.css";
 @import "./styles/foundation/base.css";
 @import "./styles/layout/application-shell.css";
 @import "./styles/navigation/sidebar.css";

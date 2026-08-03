@@ -23,11 +23,11 @@ export function NoteTree({
   onToggle: (placementId: string) => void;
   onCreateChild: (placementId: string) => void;
   onContextMenu: (placement: TreePlacement, event: React.MouseEvent<HTMLElement>) => void;
-  onMove: (placementId: string, parentPlacementId: string, position: number) => void;
+  onMove: (placementIds: string[], parentPlacementId: string, position: number) => void;
   creatingNote: boolean;
 }) {
   type DropMode = "before" | "inside" | "after";
-  const [draggingId, setDraggingId] = useState<string>();
+  const [draggingIds, setDraggingIds] = useState<string[]>();
   const [dropTarget, setDropTarget] = useState<{ placementId: string; mode: DropMode }>();
   const childrenByParent = new Map<string | null, TreePlacement[]>();
   for (const placement of placements) {
@@ -53,11 +53,11 @@ export function NoteTree({
     const offset = (event.clientY - top) / height;
     return offset < 0.25 ? "before" : offset > 0.75 ? "after" : "inside";
   };
-  const destinationFor = (target: TreePlacement, mode: DropMode, sourceId: string) => {
+  const destinationFor = (target: TreePlacement, mode: DropMode, sourceIds: string[]) => {
     const parentPlacementId = mode === "inside" ? target.placementId : target.parentPlacementId;
-    if (!parentPlacementId || !canMoveTo(sourceId, parentPlacementId)) return;
+    if (!parentPlacementId || sourceIds.some((sourceId) => !canMoveTo(sourceId, parentPlacementId))) return;
     const siblings = (childrenByParent.get(parentPlacementId) ?? [])
-      .filter((placement) => placement.placementId !== sourceId && !placement.isSystem && !placement.isTrash);
+      .filter((placement) => !sourceIds.includes(placement.placementId) && !placement.isSystem && !placement.isTrash);
     const targetIndex = siblings.findIndex((placement) => placement.placementId === target.placementId);
     const position = mode === "inside" ? siblings.length : targetIndex + (mode === "after" ? 1 : 0);
     if (position < 0) return;
@@ -84,20 +84,28 @@ export function NoteTree({
         style={{ "--tree-guide-left": `${2 + depth * 10}px` } as React.CSSProperties}
       >
         <div
-          className={`tree-item ${placement.placementId === selectedPlacementId ? "active" : ""} ${selectedPlacementIds.has(placement.placementId) ? "multi-selected" : ""} ${placement.isTrashed ? "trashed" : ""} ${placement.isArchived ? "archived" : ""} ${draggingId === placement.placementId ? "dragging" : ""} ${isDropTarget ? `drop-${dropTarget.mode}` : ""}`}
+          className={`tree-item ${placement.placementId === selectedPlacementId ? "active" : ""} ${selectedPlacementIds.has(placement.placementId) ? "multi-selected" : ""} ${placement.isTrashed ? "trashed" : ""} ${placement.isArchived ? "archived" : ""} ${draggingIds?.includes(placement.placementId) ? "dragging" : ""} ${isDropTarget ? `drop-${dropTarget.mode}` : ""}`}
           style={{ marginLeft: -13 + depth * 10 }}
           draggable={isDraggable}
           onDragStart={(event) => {
+            const sourceIds = selectedPlacementIds.has(placement.placementId)
+              ? placements
+                .filter((item) => selectedPlacementIds.has(item.placementId) && !item.isSystem && !item.isTrash && !item.isTrashed)
+                .sort((a, b) => a.position - b.position || a.placementId.localeCompare(b.placementId))
+                .map((item) => item.placementId)
+              : [placement.placementId];
             event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData("text/plain", placement.placementId);
-            setDraggingId(placement.placementId);
+            event.dataTransfer.setData("text/plain", JSON.stringify(sourceIds));
+            setDraggingIds(sourceIds);
           }}
-          onDragEnd={() => { setDraggingId(undefined); setDropTarget(undefined); }}
+          onDragEnd={() => { setDraggingIds(undefined); setDropTarget(undefined); }}
           onDragOver={(event) => {
-            const sourceId = draggingId || event.dataTransfer.getData("text/plain");
+            const sourceIds = draggingIds ?? (() => {
+              try { return JSON.parse(event.dataTransfer.getData("text/plain")) as string[]; } catch { return []; }
+            })();
             const mode = dropModeFor(event);
             const parentId = mode === "inside" ? placement.placementId : placement.parentPlacementId;
-            if (!sourceId || !parentId || !canMoveTo(sourceId, parentId) || (placement.isTrash || (placement.isSystem && mode !== "inside"))) return;
+            if (!sourceIds.length || !parentId || sourceIds.some((sourceId) => !canMoveTo(sourceId, parentId)) || (placement.isTrash || (placement.isSystem && mode !== "inside"))) return;
             event.preventDefault();
             event.dataTransfer.dropEffect = "move";
             setDropTarget({ placementId: placement.placementId, mode });
@@ -107,11 +115,13 @@ export function NoteTree({
           }}
           onDrop={(event) => {
             event.preventDefault();
-            const sourceId = draggingId || event.dataTransfer.getData("text/plain");
+            const sourceIds = draggingIds ?? (() => {
+              try { return JSON.parse(event.dataTransfer.getData("text/plain")) as string[]; } catch { return []; }
+            })();
             const mode = dropModeFor(event);
-            const destination = sourceId ? destinationFor(placement, mode, sourceId) : undefined;
-            if (sourceId && destination) onMove(sourceId, destination.parentPlacementId, destination.position);
-            setDraggingId(undefined);
+            const destination = sourceIds.length ? destinationFor(placement, mode, sourceIds) : undefined;
+            if (sourceIds.length && destination) onMove(sourceIds, destination.parentPlacementId, destination.position);
+            setDraggingIds(undefined);
             setDropTarget(undefined);
           }}
           onContextMenu={(event) => onContextMenu(placement, event)}

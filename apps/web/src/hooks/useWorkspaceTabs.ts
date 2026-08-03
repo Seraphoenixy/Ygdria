@@ -86,13 +86,14 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
     if (closed && remember) setClosedTabs((current) => [...current, closed].slice(-20));
     if (activeTabId === tabId) activateTab(next[index] ?? next[index - 1]);
   };
-  const closeTabs = (tabIds: string[]) => {
-    const ids = new Set(tabIds.filter((id) => !pinnedTabIds.has(id)));
+  const closeTabs = (tabIds: string[], force = false) => {
+    const ids = new Set(tabIds.filter((id) => force || !pinnedTabIds.has(id)));
     if (!ids.size) return;
     const closingIndex = tabs.findIndex((tab) => tab.id === activeTabId);
     const closed = tabs.filter((tab) => ids.has(tab.id));
     const next = tabs.filter((tab) => !ids.has(tab.id));
     setTabs(next);
+    if (force) setPinnedTabIds((current) => new Set([...current].filter((id) => !ids.has(id))));
     setClosedTabs((current) => [...current, ...closed].slice(-20));
     if (activeTabId && ids.has(activeTabId)) activateTab(next[closingIndex] ?? next[closingIndex - 1] ?? next.at(-1));
   };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
-import type { YgdriaClient } from "@ygdria/api-client";
+import type { YgdriaClient, RejectedSyncChange } from "@ygdria/api-client";
 import { YgdriaClient as YgdriaClientClass } from "@ygdria/api-client";
 import { RemoteProxyClient } from "../app/RemoteProxyClient";
 import type { Locale } from "../lib/i18n";
@@ -22,6 +22,23 @@ type AttachmentTransferClient = Pick<
   YgdriaClient,
   "hasAttachmentByHash" | "downloadAttachmentByHash" | "uploadAttachmentByHash" | "syncNoteContent"
 >;
+
+/** A note whose local edit was rejected by last-write-wins during sync, so the
+ * peer's version won. Captured so the user can consciously choose which side
+ * to keep instead of silently losing the losing edit. */
+export type SyncConflict = {
+  noteId: string;
+  peerId: string;
+  detectedAt: number;
+  title: string;
+  noteType: "text" | "code" | "file";
+  isProtected: boolean;
+  mineContent: unknown;
+  mineVersion: number;
+  mineUpdatedAt: number;
+  theirsUpdatedAt: number;
+  theirsVersion: number;
+};
 
 const DESKTOP_ONBOARDING_COMPLETE_KEY = "ygdria.desktop-onboarding-complete";
 
@@ -94,6 +111,39 @@ export function useSync({
   const [syncState, setSyncState] = useState<"unconfigured" | "synced" | "pending">("unconfigured");
   const [syncProgress, setSyncProgress] = useState<string>();
   const [syncing, setSyncing] = useState(false);
+  const [lastSyncedAtByPeer, setLastSyncedAtByPeer] = useState<Record<string, number>>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("ygdria.sync.lastSyncedAt") ?? "{}");
+      return stored && typeof stored === "object" && !Array.isArray(stored) ? stored as Record<string, number> : {};
+    } catch {
+      return {};
+    }
+  });
+  const [syncItemCount, setSyncItemCount] = useState<{ out: number; in: number }>({ out: 0, in: 0 });
+  const [lastSyncError, setLastSyncError] = useState<string | undefined>();
+  const [syncConflictsByPeer, setSyncConflictsByPeer] = useState<Record<string, SyncConflict[]>>(() => {
+    try {
+      const raw = window.localStorage.getItem("ygdria.sync.conflicts");
+      const stored = raw ? JSON.parse(raw) : {};
+      return stored && typeof stored === "object" && !Array.isArray(stored) ? stored as Record<string, SyncConflict[]> : {};
+    } catch {
+      return {};
+    }
+  });
+  const activeSyncPeer = remoteClient?.peerId();
+  const lastSyncedAt = activeSyncPeer ? lastSyncedAtByPeer[activeSyncPeer] : undefined;
+  const syncConflicts = activeSyncPeer ? (syncConflictsByPeer[activeSyncPeer] ?? []) : [];
+
+  // Pending conflicts and last-sync status are scoped to their remote peer so
+  // switching servers can never surface or resolve another server's conflict.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("ygdria.sync.conflicts", JSON.stringify(syncConflictsByPeer));
+      window.localStorage.setItem("ygdria.sync.lastSyncedAt", JSON.stringify(lastSyncedAtByPeer));
+    } catch {
+      /* ignore quota / serialization errors */
+    }
+  }, [syncConflictsByPeer, lastSyncedAtByPeer]);
   const syncEpochRef = useRef(0);
   const [syncAfterBootstrap, setSyncAfterBootstrap] = useState(false);
 
@@ -103,7 +153,7 @@ export function useSync({
       if (isDesktopApp) {
         const status = await window.ygdria?.remote?.status();
         if (status?.configured && status.serverUrl) {
-          setRemoteClient(new RemoteProxyClient(status.serverUrl));
+          setRemoteClient(new RemoteProxyClient(status.serverUrl, locale));
           setDesktopOnboarding("complete");
           return;
         }
@@ -267,6 +317,52 @@ export function useSync({
         }
       };
       const peer = remoteClient.peerId();
+      // Notes whose local edit the remote rejected via last-write-wins during
+      // this sync. Captured here (before the download phase can overwrite the
+      // losing local edit) so the panel can show exactly what was discarded.
+      const builtConflicts: SyncConflict[] = [];
+      const buildConflict = async (
+        rejected: RejectedSyncChange,
+        peerId: string,
+      ): Promise<SyncConflict> => {
+        const base = {
+          noteId: rejected.entityId,
+          peerId,
+          detectedAt: Date.now(),
+          theirsUpdatedAt: rejected.localUpdatedAt,
+          theirsVersion: rejected.localVersion,
+        };
+        try {
+          const note = await client.getNote(rejected.entityId);
+          if (note) {
+            const rawUpdatedAt = note.updatedAt;
+            const mineUpdatedAt =
+              typeof rawUpdatedAt === "string"
+                ? new Date(rawUpdatedAt).getTime()
+                : Number(rawUpdatedAt) || 0;
+            return {
+              ...base,
+              title: typeof note.title === "string" ? note.title : "",
+              noteType: note.type === "code" ? "code" : note.type === "file" ? "file" : "text",
+              isProtected: Boolean(note.isProtected),
+              mineContent: note.isProtected ? null : note.content,
+              mineVersion: typeof note.version === "number" ? note.version : 0,
+              mineUpdatedAt,
+            };
+          }
+        } catch {
+          /* fall through to a metadata-only conflict record */
+        }
+        return {
+          ...base,
+          title: "",
+          noteType: "text",
+          isProtected: false,
+          mineContent: null,
+          mineVersion: 0,
+          mineUpdatedAt: 0,
+        };
+      };
       let incomingCursor = await client.getSyncCursor(`in:${peer}`);
       if (incomingCursor.advancedAt === null) {
         let snapshot = await remoteClient.syncSnapshot(0, 500, true);
@@ -287,8 +383,12 @@ export function useSync({
         setSyncProgress(
           `${t(locale, "syncUploadMeta")} · ${outgoing.changes.length} · ${formatSyncBytes(outgoing.stats?.serializedBytes ?? 0)}`,
         );
+        setSyncItemCount((current) => ({ out: outgoing.changes.length, in: current.in }));
         const hydrated = await hydrateNoteContents(outgoing.changes, client);
-        await remoteClient.pushSyncChanges(hydrated);
+        const pushResult = await remoteClient.pushSyncChanges(hydrated);
+        for (const rejected of pushResult.rejected) {
+          if (rejected.entityType === "note") builtConflicts.push(await buildConflict(rejected, peer));
+        }
         await copyAttachments(outgoing.changes, client, remoteClient);
         await client.advanceSyncCursor(`out:${peer}`, outgoing.cursor);
         if (!outgoing.hasMore) break;
@@ -304,6 +404,7 @@ export function useSync({
         setSyncProgress(
           `${t(locale, "syncDownloadMeta")} · ${incoming.changes.length} · ${formatSyncBytes(incoming.stats?.serializedBytes ?? 0)}`,
         );
+        setSyncItemCount((current) => ({ out: current.out, in: incoming.changes.length }));
         const hydrated = await hydrateNoteContents(incoming.changes, remoteClient);
         await client.pushSyncChanges(hydrated, "remote");
         await copyAttachments(incoming.changes, remoteClient, client, "remote");
@@ -311,9 +412,21 @@ export function useSync({
         if (!incoming.hasMore) break;
         incoming = await remoteClient.syncChanges(incoming.cursor, 500, undefined, true);
       }
+      if (builtConflicts.length && syncEpoch === syncEpochRef.current) {
+        setSyncConflictsByPeer((current) => {
+          const byId = new Map((current[peer] ?? []).map((c) => [c.noteId, c]));
+          for (const conflict of builtConflicts) byId.set(conflict.noteId, conflict);
+          return { ...current, [peer]: Array.from(byId.values()) };
+        });
+      }
       await refreshTree();
       const finalState = await computeSyncState(peer);
       if (syncEpoch === syncEpochRef.current) setSyncState(finalState);
+      if (syncEpoch === syncEpochRef.current) {
+        setLastSyncedAtByPeer((current) => ({ ...current, [peer]: Date.now() }));
+        setLastSyncError(undefined);
+        setSyncItemCount({ out: 0, in: 0 });
+      }
       showSyncComplete();
       setSyncProgress(undefined);
     })()
@@ -322,7 +435,10 @@ export function useSync({
         const message = error instanceof Error ? error.message : String(error);
         showToast(`${t(locale, "syncFailed")}${message ? `: ${message}` : ""}`);
         setSyncProgress(`${t(locale, "syncFailedRetry")}: ${message}`);
-        if (syncEpoch === syncEpochRef.current) setSyncState("pending");
+        if (syncEpoch === syncEpochRef.current) {
+          setSyncState("pending");
+          setLastSyncError(message);
+        }
         if (
           isDesktopApp &&
           isInvalidDeviceToken(error) &&
@@ -406,7 +522,7 @@ export function useSync({
         challenge.challengeId,
         clientEphemeral.public,
         clientSession.proof,
-        "桌面端",
+        t(locale, "deviceLabelDesktop"),
       );
       srpVerifyServer(clientEphemeral, clientSession, credential.serverSessionProof);
       if (credential.deviceToken) {
@@ -442,7 +558,7 @@ export function useSync({
         throw new Error(t(locale, "localProtectedNotConfigured"));
       await session.unlock(password, localProtected.salt, localProtected.verifier);
       await window.ygdria!.remote!.configure(target.origin);
-      const remote = new RemoteProxyClient(target.origin);
+      const remote = new RemoteProxyClient(target.origin, locale);
       const health = await remote.health();
       if (health.authInitialized || health.bootstrapped)
         throw new Error(t(locale, "targetAlreadyInitialized"));
@@ -472,6 +588,15 @@ export function useSync({
     [client, isDesktopApp, session, setProtectedSession, locale],
   );
 
+  const removeSyncConflict = useCallback((noteId: string) => {
+    const peer = remoteClient?.peerId();
+    if (!peer) return;
+    setSyncConflictsByPeer((current) => ({
+      ...current,
+      [peer]: (current[peer] ?? []).filter((conflict) => conflict.noteId !== noteId),
+    }));
+  }, [remoteClient]);
+
   return {
     // Remote client
     remoteClient,
@@ -490,6 +615,11 @@ export function useSync({
     syncState,
     syncProgress,
     syncing,
+    lastSyncedAt,
+    syncItemCount,
+    lastSyncError,
+    syncConflicts,
+    removeSyncConflict,
     syncEpochRef,
     syncAfterBootstrap,
     setSyncAfterBootstrap,

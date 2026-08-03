@@ -48,8 +48,8 @@
   gap: 5px;
   padding: 6px 8px;
   border-radius: 6px;
-  background: #e5f1fb;
-  color: #0f6cbd;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
 }
 .archived-notes-page {
   margin: 56px 0 120px;
@@ -158,7 +158,7 @@
   text-align: left;
 }
 .history-day .history-entry-open:hover strong {
-  color: #0f6cbd;
+  color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -180,7 +180,7 @@
   line-height: 1.35;
 }
 .history-day .history-entry-restore:hover:not(:disabled) {
-  color: #0f6cbd;
+  color: var(--color-accent);
 }
 .history-day .history-entry-restore:disabled {
   color: #a8a8ad;
@@ -392,18 +392,18 @@
   color: #5d6770;
   background: #fff;
 }
-.search-page-input:focus-within { border-color: #0f6cbd; box-shadow: 0 0 0 2px rgba(15, 108, 189, 0.12); }
+.search-page-input:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 2px rgba(15, 108, 189, 0.12); }
 .search-page-input input { width: 100%; border: 0; outline: 0; color: #333; background: transparent; font: inherit; font-size: 16px; }
-.search-page-form > button { min-width: 84px; border-radius: 6px; color: #fff; background: #0f6cbd; font-weight: 600; }
+.search-page-form > button { min-width: 84px; border-radius: 6px; color: #fff; background: var(--color-accent); font-weight: 600; }
 .search-page-form > button:hover:not(:disabled) { background: #115ea3; }
 .search-page-form > button:disabled { opacity: 0.45; cursor: default; }
 .search-page-message { margin: 22px 0; color: #737b83; }
 .search-results { display: grid; gap: 8px; margin-top: 20px; }
 .search-result { display: grid; gap: 5px; width: 100%; padding: 16px 18px; border: 1px solid #dde1e5; border-radius: 6px; color: #333; background: #fff; text-align: left; }
-.search-result:hover, .search-result:focus-visible { border-color: #0f6cbd; background: #f5f9fc; outline: 0; }
+.search-result:hover, .search-result:focus-visible { border-color: var(--color-accent); background: #f5f9fc; outline: 0; }
 .search-result strong { color: #1f4e79; font-size: 16px; }
 .search-result span { color: #5f6870; font-size: 14px; line-height: 1.55; }
-.search-result mark { padding: 0 1px; background: #e5f1fb; color: inherit; }
+.search-result mark { padding: 0 1px; background: var(--color-accent-soft); color: inherit; }
 .search-result time { color: #858b91; font-size: 12px; }
 .search-page-error { color: #a23d3d; }
 .outline-list button {
@@ -419,12 +419,12 @@
 }
 .outline-list button:hover,
 .outline-list button:focus-visible {
-  color: #0f6cbd;
+  color: var(--color-accent);
   outline: 0;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 .outline-list li.outline-active > button {
-  color: #0f6cbd;
+  color: var(--color-accent);
   font-weight: 600;
 }

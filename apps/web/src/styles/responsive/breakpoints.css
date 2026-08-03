@@ -193,8 +193,8 @@
   background: #dde1e5;
 }
 .phone .mobile-tree-actions button.active {
-  color: #0f6cbd;
-  background: #e5f1fb;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 .phone .mobile-tree-actions button.sync-shortcut.sync-synced {
   color: #16794b;
@@ -205,8 +205,8 @@
   background: #fff0d6;
 }
 .phone .mobile-tree-actions button.sync-shortcut.sync-syncing {
-  color: #0f6cbd;
-  background: #e5f1fb;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 .phone .mobile-tree-actions button.sync-shortcut.sync-syncing svg {
   animation: quickbar-sync-spin 1s linear infinite;
@@ -307,7 +307,7 @@
   stroke-width: 2;
 }
 .phone .mobile-tab.active {
-  color: #0f6cbd;
+  color: var(--color-accent);
   font-weight: 600;
 }
 .phone .mobile-tab:active {

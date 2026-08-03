@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": {
+  "devDependencies": {
     "@ygdria/shared": "workspace:*"
   }
 }

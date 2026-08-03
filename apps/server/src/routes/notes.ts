@@ -5,6 +5,7 @@ import { NotFoundError, ConflictError } from "@ygdria/domain";
 import {
   createNoteSchema,
   archiveNoteSchema,
+  movePlacementsSchema,
   placementSchema,
   restoreRevisionSchema,
   updateNoteSchema,
@@ -174,6 +175,12 @@ export function registerNoteRoutes(app: FastifyInstance, deps: NoteRouteDeps) {
   app.patch("/api/v1/placements/:id", async (req) => {
     const b = parse(placementSchema.pick({ parentPlacementId: true, position: true }), req.body);
     notes.movePlacement((req.params as { id: string }).id, b.parentPlacementId, b.position ?? 0);
+    return { ok: true };
+  });
+
+  app.patch("/api/v1/placements", async (req) => {
+    const b = parse(movePlacementsSchema, req.body);
+    notes.movePlacements(b.placementIds, b.parentPlacementId, b.position);
     return { ok: true };
   });
 

@@ -336,11 +336,22 @@ export function cleanupUnreferencedSyncAttachments(sqlite: SyncSqlite, candidate
   }
 }
 
+/** A change that was NOT applied because last-write-wins rejected it: the local
+ * entity was newer than the incoming record. Surfaced so clients can flag a
+ * sync divergence instead of silently losing the losing side's edit. */
+export type RejectedSyncChange = {
+  entityType: string;
+  entityId: string;
+  localUpdatedAt: number;
+  localVersion: number;
+};
+
 /** Apply peer records with strict timestamp comparison so echoed records do
  * not create an endless sync loop. Attachments themselves are copied through
  * the by-hash endpoint after their owning note has been accepted. */
-export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[], recordOutbound = true) {
+export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[], recordOutbound = true): { applied: number; rejected: RejectedSyncChange[] } {
   let applied = 0;
+  const rejected: RejectedSyncChange[] = [];
   const attachmentCleanupCandidates = new Set<string>();
   const logChange = (entityType: string, entityId: string, changeKind: ChangeKind) => {
     if (recordOutbound) recordChange(sqlite, entityType, entityId, changeKind);
@@ -414,6 +425,16 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
         const d = change.data as Record<string, unknown> | null;
         if (!d || typeof d.contentData !== "string" || typeof d.updatedAt !== "number") continue;
         const acceptsUpdate = noteWouldAcceptSyncUpdate(sqlite, String(d.id), d.updatedAt);
+        if (!acceptsUpdate) {
+          // Local note is newer than the incoming record: last-write-wins keeps
+          // ours and discards the peer's edit. Record it so the client can flag
+          // the divergence instead of silently dropping the peer's change.
+          const local = sqlite
+            .prepare("SELECT updated_at updatedAt, version FROM notes WHERE id=?")
+            .get(String(d.id)) as { updatedAt: number; version: number } | undefined;
+          if (local) rejected.push({ entityType: "note", entityId: String(d.id), localUpdatedAt: local.updatedAt, localVersion: local.version });
+          continue;
+        }
         if (acceptsUpdate) {
           const previous = sqlite
             .prepare("SELECT content_data contentData,content_codec contentCodec,is_protected isProtected,type FROM notes WHERE id=?")
@@ -627,7 +648,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
     }
     cleanupUnreferencedSyncAttachments(sqlite, attachmentCleanupCandidates, recordOutbound);
   })();
-  return applied;
+  return { applied, rejected };
 }
 
 export function parseExpectedVersion(ifMatch: string | string[] | undefined) {

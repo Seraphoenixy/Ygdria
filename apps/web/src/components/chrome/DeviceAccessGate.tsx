@@ -26,7 +26,7 @@ export function DeviceAccessGate({
   const [serverUrl, setServerUrl] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [label, setLabel] = useState("当前浏览器");
+  const [label, setLabel] = useState(t(locale, "deviceLabelBrowser"));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
   const validPassword = password.length >= 8 && password.length <= 64;
@@ -93,7 +93,7 @@ export function DeviceAccessGate({
               minLength={8}
               maxLength={64}
               value={password}
-              placeholder="8–64 位"
+              placeholder={t(locale, "passwordPlaceholder")}
               onChange={(event) => { setPassword(event.target.value); setError(undefined); }}
             />
           </label>}

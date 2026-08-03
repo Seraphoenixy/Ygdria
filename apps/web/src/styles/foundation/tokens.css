@@ -1,0 +1,157 @@
+/*
+ * Design tokens — single source of truth for themeable values.
+ *
+ * Radius / spacing / shadow scales are transcribed from scripts/tokenize_css.py
+ * (RADIUS / SPACING / SHADOW maps). Color tokens are the semantic layer that
+ * the dark theme overrides under :root[data-theme="dark"], so the already
+ * authored dark styles only need these tokens rather than per-rule rewrites.
+ *
+ * Imported first in style.css so every later stylesheet can consume the vars.
+ */
+
+:root {
+  /* ---- Radius (collapsed clean scale) ---- */
+  --radius-none: 0;
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+  --radius-circle: 50%;
+
+  /* ---- Spacing (exact-value scale) ---- */
+  --space-0: 0;
+  --space-1: 1px;
+  --space-2: 2px;
+  --space-3: 3px;
+  --space-4: 4px;
+  --space-5: 5px;
+  --space-6: 6px;
+  --space-7: 7px;
+  --space-8: 8px;
+  --space-9: 9px;
+  --space-10: 10px;
+  --space-11: 11px;
+  --space-12: 12px;
+  --space-13: 13px;
+  --space-14: 14px;
+  --space-15: 15px;
+  --space-16: 16px;
+  --space-18: 18px;
+  --space-20: 20px;
+  --space-22: 22px;
+  --space-24: 24px;
+  --space-25: 25px;
+  --space-28: 28px;
+  --space-30: 30px;
+  --space-32: 32px;
+  --space-36: 36px;
+  --space-44: 44px;
+  --space-48: 48px;
+  --space-56: 56px;
+  --space-60: 60px;
+  --space-120: 120px;
+
+  /* ---- Elevation / rings / drawer shadows ---- */
+  --elevation-1: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --elevation-2: 0 12px 30px rgba(24, 25, 29, 0.16);
+  --elevation-2b: 0 8px 24px rgb(0 0 0 / 22%);
+  --elevation-2c: 0 20px 55px rgba(24, 27, 32, 0.15);
+  --elevation-3: 0 20px 56px rgba(20, 23, 28, 0.24);
+  --elevation-1-accent: 0 1px 2px rgba(15, 108, 189, 0.25);
+  --ring-accent: 0 0 0 3px rgba(15, 108, 189, 0.12);
+  --ring-accent-sm: 0 0 0 2px rgba(15, 108, 189, 0.14);
+  /* Accent edge shadows keep the literal hue so they don't depend on --color-accent. */
+  --shadow-accent-left: inset 3px 0 #0f6cbd;
+  --shadow-accent-top: inset 0 2px #0f6cbd;
+  --ring-success: inset 0 0 0 1px rgba(22, 121, 75, 0.2);
+  --ring-warning: inset 0 0 0 1px rgba(164, 90, 0, 0.2);
+  --shadow-drawer-left: -2px 0 18px rgba(0, 0, 0, 0.24);
+  --shadow-drawer-right: 2px 0 18px rgba(0, 0, 0, 0.24);
+
+  /* ---- Color: light (default) ---- */
+  --color-bg: #f2f3f5;
+  --color-surface: #ffffff;
+  --color-surface-2: #f6f8fa;
+  --color-fg: #333333;
+  --color-fg-muted: #57606a;
+  --color-border: #d0d7de;
+  --color-border-strong: #afb8c1;
+  --color-accent: #0f6cbd;
+  --color-accent-strong: #0a558c;
+  --color-accent-soft: #e5f1fb;
+  --color-danger: #cf222e;
+  --color-danger-soft: #ffebe9;
+  --color-success: #1a7f37;
+  --color-success-soft: #dafbe1;
+  --color-warning: #9a6700;
+  --color-warning-soft: #fff8c5;
+
+  /* ---- Editor color palette (content colors, theme-independent) ----
+   * These are the editor toolbar text/highlight swatches. They live in :root
+   * only (not overridden in dark) so a color a user picks stays identical
+   * across themes and remains portable inside the note document. The toolbar
+   * references them by name instead of hardcoding hex in EditorToolbar.tsx. */
+  --editor-text-default: #333333;
+  --editor-text-1: #000000;
+  --editor-text-2: #3a3a3e;
+  --editor-text-3: #5e6770;
+  --editor-text-4: #8a949e;
+  --editor-text-5: #1f4e79;
+  --editor-text-6: #2f6b55;
+  --editor-text-7: #7a5a22;
+  --editor-text-8: #7a3e48;
+  --editor-text-9: #5c4b8a;
+  --editor-text-10: #9c2d2d;
+  --editor-highlight-default: #e2f0d9;
+  --editor-highlight-1: #fff2cc;
+  --editor-highlight-2: #e2f0d9;
+  --editor-highlight-3: #ddebf7;
+  --editor-highlight-4: #e4dfec;
+  --editor-highlight-5: #fce4d6;
+  --editor-highlight-6: #f4cccc;
+  --editor-highlight-7: #d9ead3;
+  --editor-highlight-8: #d0e0e3;
+  --editor-highlight-9: #d9d2e9;
+  --editor-highlight-10: #ead1dc;
+
+  /* ---- Fonts ---- */
+  --font-sans: Inter, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", -apple-system,
+    BlinkMacSystemFont, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+
+  /* ---- Type scale (rem-free, px-based for predictable UI sizing) ---- */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+  --line-normal: 1.5;
+  --line-tight: 1.3;
+}
+
+:root[data-theme="dark"] {
+  /* Color overrides for dark. Surfaces/fg/border follow the GitHub-dark
+   * palette already used by the authored :root[data-theme="dark"] rules;
+   * --color-accent keeps the same hue as light so the other #0f6cbd occurrences
+   * in dark mode stay consistent. */
+  --color-bg: #0d1117;
+  --color-surface: #161b22;
+  --color-surface-2: #21262d;
+  --color-fg: #e6edf3;
+  --color-fg-muted: #8b949e;
+  --color-border: #30363d;
+  --color-border-strong: #444c56;
+  --color-accent: #0f6cbd;
+  --color-accent-strong: #2f81f7;
+  --color-accent-soft: #17314a;
+  --color-danger: #f85149;
+  --color-danger-soft: #67060c;
+  --color-success: #3fb950;
+  --color-success-soft: #033a16;
+  --color-warning: #d29922;
+  --color-warning-soft: #4d3800;
+}

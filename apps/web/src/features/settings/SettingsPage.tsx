@@ -2,7 +2,8 @@ import { useState, type ChangeEvent, type ReactNode } from "react";
 import { ListTree } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 import { APP_VERSION } from "../../lib/appVersion";
-import { readSettings, writeSettings, type StoredSettings, type TimeUnit } from "./settingsStore";
+import { readSettings, writeSettings, type StoredSettings, type ThemePreference, type TimeUnit } from "./settingsStore";
+import { applyTheme } from "../../lib/theme";
 
 export { readSettings, type StoredSettings, type TimeUnit } from "./settingsStore";
 
@@ -102,6 +103,26 @@ export function SettingsPage({
           <output className="settings-version">v{APP_VERSION}</output>
         </div></div>
       </section>
+      <h2 id="settings-appearance-cat" className="settings-category">{t(locale, "settingsAppearance")}</h2>
+      <section id="settings-appearance" className="settings-section">
+        <h3>{t(locale, "theme")}</h3>
+        <div className="settings-card"><div className="settings-row">
+          <div><strong>{t(locale, "theme")}</strong><p>{t(locale, "themeHint")}</p></div>
+          <select
+            className="settings-select"
+            value={settings.theme}
+            onChange={(event) => {
+              const next = event.target.value as ThemePreference;
+              updateSettings({ theme: next });
+              applyTheme();
+            }}
+          >
+            <option value="light">{t(locale, "themeLight")}</option>
+            <option value="dark">{t(locale, "themeDark")}</option>
+            <option value="system">{t(locale, "themeSystem")}</option>
+          </select>
+        </div></div>
+      </section>
       <SettingsSection id="settings-sync" title={t(locale, "syncServer")} hint={t(locale, "syncServerHint")} rows={[
         <SettingsTextRow key="sync-server-url" title={t(locale, "syncServerUrl")} description={t(locale, "syncServerUrlHint")} value={settings.syncServerUrl} placeholder="https://notes.example.com" onChange={(value) => updateSettings({ syncServerUrl: value })} onBlur={reconnectMobileEndpoint} />,
         <SettingsNumberRow key="sync-timeout" title={t(locale, "syncConnectionTimeout")} description={t(locale, "syncServerHint")} value={settings.syncConnectionTimeoutSeconds} min={1} unit={t(locale, "seconds")} onChange={(event) => updateSettings({ syncConnectionTimeoutSeconds: Math.max(1, Math.floor(Number(event.target.value)) || 1) })} />,
@@ -151,7 +172,7 @@ function SettingsSection({ id, title, hint, rows }: { id?: string; title: string
 
 export function SettingsOutline({ locale }: { locale: Locale }) {
   const groups = [
-    ["settings-general", t(locale, "settingsGeneral"), [["settings-language", t(locale, "settingsLanguage")], ["settings-about", t(locale, "about")], ["settings-sync", t(locale, "syncServer")]]],
+    ["settings-general", t(locale, "settingsGeneral"), [["settings-language", t(locale, "settingsLanguage")], ["settings-about", t(locale, "about")], ["settings-appearance-cat", t(locale, "settingsAppearance")], ["settings-sync", t(locale, "syncServer")]]],
     ["settings-data", t(locale, "settingsData"), [["settings-transfer", t(locale, "importExport")], ["settings-trash", t(locale, "deletedNotes")], ["settings-attachments", t(locale, "unusedAttachments")], ["settings-revisions", t(locale, "noteRevisions")], ["settings-database", t(locale, "databaseMaintenance")]]],
     ["settings-security", t(locale, "settingsSecurity"), [["settings-protected", t(locale, "protectedSession")]]],
   ] as const;

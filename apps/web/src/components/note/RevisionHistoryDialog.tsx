@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, type QueryClient } from "@tanstack/react-query";
-import { History, X, RotateCcw } from "lucide-react";
+import { History, X, RotateCcw, Search } from "lucide-react";
 import type { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 import { buildHunks, lcsDiff, linesFromContent, revertHunk, type DiffHunk, DiffView } from "./DiffView";
@@ -15,6 +15,8 @@ type RevisionHistoryDialogProps = {
 
 export function RevisionHistoryDialog({ client, locale, note, queryClient, onClose }: RevisionHistoryDialogProps) {
   const [selectedRevisionId, setSelectedRevisionId] = useState<string>();
+  const [diffMode, setDiffMode] = useState<"unified" | "split">("unified");
+  const [diffQuery, setDiffQuery] = useState("");
   const revisions = useQuery({ queryKey: ["revisions", note.id], queryFn: () => client.revisions(note.id) });
   const revision = useQuery({
     queryKey: ["revision", note.id, selectedRevisionId],
@@ -38,6 +40,12 @@ export function RevisionHistoryDialog({ client, locale, note, queryClient, onClo
     const oldLines = linesFromContent(revision.data.content);
     return buildHunks(lcsDiff(oldLines, currentLines));
   }, [note.content, revision.data]);
+  const filteredHunks = useMemo(() => {
+    const query = diffQuery.trim().toLowerCase();
+    return hunks.map((hunk, originalIndex) => ({ hunk, originalIndex })).filter(({ hunk }) =>
+      !query || hunk.lines.some((line) => line.text.toLowerCase().includes(query)),
+    );
+  }, [hunks, diffQuery]);
 
   const invalidateAfterRevert = () => {
     queryClient.invalidateQueries({ queryKey: ["note", note.id] });
@@ -73,6 +81,15 @@ export function RevisionHistoryDialog({ client, locale, note, queryClient, onClo
             <p>{t(locale, "revisionHistoryHint")}</p>
           </div>
           <div className="revision-dialog-actions">
+            <button
+              type="button"
+              className="revision-mode-btn"
+              onClick={() => setDiffMode((mode) => (mode === "unified" ? "split" : "unified"))}
+              aria-pressed={diffMode === "split"}
+              title={diffMode === "unified" ? t(locale, "diffModeSplit") : t(locale, "diffModeUnified")}
+            >
+              {diffMode === "unified" ? t(locale, "diffModeSplit") : t(locale, "diffModeUnified")}
+            </button>
             {canFullRestore && (
               <button
                 type="button"
@@ -109,19 +126,44 @@ export function RevisionHistoryDialog({ client, locale, note, queryClient, onClo
             )}
           </aside>
           <div className="revision-diff">
+            {revision.data && (
+              <div className="revision-search">
+                <Search size={14} />
+                <input
+                  type="search"
+                  value={diffQuery}
+                  onChange={(event) => setDiffQuery(event.target.value)}
+                  placeholder={t(locale, "revisionSearch")}
+                  aria-label={t(locale, "revisionSearch")}
+                />
+                {diffQuery.trim() && (
+                  <span className="revision-search-count">
+                    {t(locale, "revisionSearchMatches", {
+                      count: String(filteredHunks.length),
+                      total: String(hunks.length),
+                    })}
+                  </span>
+                )}
+              </div>
+            )}
             {revision.isLoading ? (
               <p>{t(locale, "loading")}</p>
             ) : revision.data ? (
               <>
                 {!isCode && <p className="revision-diff-hint">{t(locale, "codeOnlyRevertHint")}</p>}
-                <DiffView
-                  hunks={hunks}
-                  locale={locale}
-                  onRevertHunk={isCode ? (hi) => revertHunkMutation.mutate(hi) : undefined}
-                  revertHunkLabel={t(locale, "revertHunk")}
-                  revertHunkTitle={t(locale, "revertHunkTitle")}
-                  isReverting={revertHunkMutation.isPending}
-                />
+                {diffQuery.trim() && filteredHunks.length === 0 ? (
+                  <p className="revision-diff-hint">{t(locale, "revisionSearchNoMatch")}</p>
+                ) : (
+                  <DiffView
+                    hunks={filteredHunks.map((entry) => entry.hunk)}
+                    locale={locale}
+                    mode={diffMode}
+                    onRevertHunk={isCode ? (hi) => revertHunkMutation.mutate(filteredHunks[hi].originalIndex) : undefined}
+                    revertHunkLabel={t(locale, "revertHunk")}
+                    revertHunkTitle={t(locale, "revertHunkTitle")}
+                    isReverting={revertHunkMutation.isPending}
+                  />
+                )}
               </>
             ) : (
               <p>{t(locale, "selectRevision")}</p>

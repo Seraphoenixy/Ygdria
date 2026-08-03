@@ -28,10 +28,9 @@
     "@tiptap/pm": "^3.0.0",
     "@tiptap/react": "^3.0.0",
     "@tiptap/starter-kit": "^3.0.0",
-    "@ygdria/shared": "workspace:*",
     "dompurify": "^3.2.6",
     "highlight.js": "~11.11.1",
-    "jsdom": "^26.1.0",
+    "happy-dom": "^17.6.3",
     "katex": "^0.16.47",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.525.0",
@@ -40,7 +39,7 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@types/jsdom": "^21.1.7",
+    "@ygdria/shared": "workspace:*",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6"
   }

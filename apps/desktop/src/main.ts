@@ -248,7 +248,6 @@ app
       databaseUrl,
       webDist,
       origin: "http://localhost:5173",
-      prettyLogs: false,
       localToken: localApiToken,
     });
     apiUrl = await localApi.listen({

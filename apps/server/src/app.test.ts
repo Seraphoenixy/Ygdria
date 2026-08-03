@@ -293,7 +293,7 @@ describe("ETAPI", () => {
     expect(response.json().error.message).toBe("Invalid request data");
   });
   it("does not disclose internal exception details in 5xx responses", async () => {
-    const localApp = buildApp({ databaseUrl: ":memory:", prettyLogs: false });
+    const localApp = buildApp({ databaseUrl: ":memory:" });
     localApp.get("/test-only/internal-error", async () => {
       throw new Error("SQLITE_CONSTRAINT: UNIQUE constraint failed: notes.id");
     });

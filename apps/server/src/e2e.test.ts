@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { buildApp } from "./app.js";
 
 function createApp() {
-  return buildApp({ databaseUrl: ":memory:", prettyLogs: false });
+  return buildApp({ databaseUrl: ":memory:" });
 }
 
 describe("incremental sync", () => {
