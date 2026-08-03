@@ -46,14 +46,17 @@ export class RemoteProxyClient {
       throw new Error(t(this.locale, "remoteProxyRequestFailed", { method, path, reason }));
     }
     if (response.status >= 400) {
-      const body = response.body as { error?: { message?: string } } | string | null;
+      const body = response.body as { error?: { code?: string; message?: string } } | string | null;
       const message =
         typeof body === "object" && body?.error?.message
           ? body.error.message
           : typeof body === "string" && body
             ? body
             : `HTTP ${response.status}`;
-      throw new Error(`${message}（${method} ${path}）`);
+      const error = new Error(`${message}（${method} ${path}）`);
+      const code = typeof body === "object" ? body?.error?.code : undefined;
+      if (code) (error as Error & { code?: string }).code = code;
+      throw error;
     }
     return response.body;
   }
@@ -116,8 +119,9 @@ export class RemoteProxyClient {
       reauthToken: string;
     }>;
   }
-  syncChanges(cursor = 0, limit = 200, maxBytes = 4 * 1024 * 1024, metadataOnly = false) {
-    return this.request(`/api/v1/sync/changes?cursor=${cursor}&limit=${limit}&maxBytes=${maxBytes}${metadataOnly ? "&metadataOnly=1" : ""}`) as Promise<{
+  syncChanges(cursor = 0, limit = 200, maxBytes = 4 * 1024 * 1024, metadataOnly = false, peerId?: string) {
+    const peer = peerId ? `&peerId=${encodeURIComponent(peerId)}` : "";
+    return this.request(`/api/v1/sync/changes?cursor=${cursor}&limit=${limit}&maxBytes=${maxBytes}${metadataOnly ? "&metadataOnly=1" : ""}${peer}`) as Promise<{
       cursor: number;
       hasMore: boolean;
       changes: Array<{
@@ -132,8 +136,9 @@ export class RemoteProxyClient {
       stats?: { serializedBytes: number; returnedEntities: number; coalescedChanges: number };
     }>;
   }
-  syncSnapshot(cursor = 0, limit = 200, metadataOnly = false) {
-    return this.request(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}`) as Promise<{
+  syncSnapshot(cursor = 0, limit = 200, metadataOnly = false, peerId?: string) {
+    const peer = peerId ? `&peerId=${encodeURIComponent(peerId)}` : "";
+    return this.request(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}${peer}`) as Promise<{
       cursor: number; hasMore: boolean; maxChangeId: number;
       changes: Array<{ changeId: number; entityType: string; entityId: string; changeKind: string; createdAt: number; data: Record<string, unknown> | null }>;
     }>;
@@ -147,8 +152,10 @@ export class RemoteProxyClient {
       createdAt: number;
       data: Record<string, unknown> | null;
     }>,
+    _syncOrigin?: "remote",
+    peerId?: string,
   ) {
-    const json = JSON.stringify({ changes });
+    const json = JSON.stringify(peerId ? { changes, peerId } : { changes });
     let body: string | ArrayBuffer = json;
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (typeof CompressionStream !== "undefined" && json.length >= 1024) {

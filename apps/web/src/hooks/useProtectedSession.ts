@@ -341,7 +341,6 @@ export function useProtectedSession({
         }
         if (note.isProtected === protect) continue;
         if (note.deletedAt) continue;
-        if (note.type === "file") continue;
         try {
           if (protect) {
             const payload: { title: string; content: any; codeLanguage?: string } = {

@@ -41,6 +41,7 @@ corepack pnpm dev:server
 | --- | --- |
 | [运行与维护](docs/operations.md) | 安装依赖、启动应用、构建前端、迁移数据库、运行 FTS 或 doctor、设备配对、桌面端打包、备份与恢复。 |
 | [API 与内容格式](docs/api.md) | 对接 REST、ETAPI、设备管理、受保护笔记、自动化脚本或导入导出。 |
+| [ETAPI：AI 与外部自动化](docs/etapi.md) | 给 AI 签发短期令牌，读取笔记层级、正文与 tag，并安全地创建和编辑笔记。 |
 | [认证与同步](docs/auth-and-sync.md) | 部署形态 A/B、设备认证、端到端加密、桌面端远端代理、多端访问与同步边界。 |
 | [附件协议](docs/attachment-protocol.md) | 实现文件存储适配器、共享附件或清理任务。 |
 

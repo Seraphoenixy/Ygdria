@@ -95,6 +95,7 @@ export interface WorkspaceContentProps {
   canOpenFrontendConsole: boolean;
   syncRunsAutomatically?: boolean;
   canEditMobileEndpoint?: boolean;
+  etapiTokenManagementAvailable?: boolean;
   onOpenFrontendConsole: () => void;
   onProtectedSessionTimeoutChange: (minutes: number) => void;
   onMaintainDatabase: (rebuildFts?: boolean) => void;
@@ -182,6 +183,7 @@ export function WorkspaceContent({
   canOpenFrontendConsole,
   syncRunsAutomatically,
   canEditMobileEndpoint,
+  etapiTokenManagementAvailable,
   onOpenFrontendConsole,
   onProtectedSessionTimeoutChange,
   onMaintainDatabase,
@@ -238,13 +240,13 @@ export function WorkspaceContent({
         onToggleTree={onToggleTree}
         noteType={noteData?.type}
         canConvertNote={Boolean(
-          noteData && !selectedTrashed && !noteData.isProtected && noteData.type !== "file",
+          noteData && !selectedTrashed && !noteData.isProtected,
         )}
         onConvertNote={() =>
           noteData && convertNote.mutate(noteData.type === "code" ? "text" : "code")
         }
         canViewRevisionHistory={Boolean(
-          noteData && !selectedTrashed && !noteData.isProtected && noteData.type !== "file",
+          noteData && !selectedTrashed && !noteData.isProtected,
         )}
         onViewRevisionHistory={onViewRevisionHistory}
         onToggleMarkdownView={
@@ -265,11 +267,12 @@ export function WorkspaceContent({
           onImportMarkdown={noteData.type === "text" ? importMarkdown : undefined}
         />
       )}
-      {activeTabId === "search" ? (
-        <div className="document-scroll">
-          <SearchPage client={client} locale={locale} onOpenNote={(noteId) => openNote(noteId)} />
+      {tabs.some((tab) => tab.id === "search") && (
+        <div className="document-scroll" hidden={activeTabId !== "search"}>
+          <SearchPage client={client} locale={locale} isActive={activeTabId === "search"} onOpenNote={(noteId, openInNewTab) => openNote(noteId, false, false, openInNewTab)} />
         </div>
-      ) : activeTabId === "archive" ? (
+      )}
+      {activeTabId === "search" ? null : activeTabId === "archive" ? (
         <div className="document-scroll">
           <ArchivedNotesPage
             items={archivedNotes.data ?? []}
@@ -331,6 +334,8 @@ export function WorkspaceContent({
             onOpenFrontendConsole={onOpenFrontendConsole}
             syncRunsAutomatically={syncRunsAutomatically}
             canEditMobileEndpoint={canEditMobileEndpoint}
+            etapiTokenManagementAvailable={etapiTokenManagementAvailable}
+            client={client}
             onProtectedSessionTimeoutChange={onProtectedSessionTimeoutChange}
             onMaintainDatabase={onMaintainDatabase}
           />

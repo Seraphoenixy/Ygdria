@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { EtapiSessions } from "../security/etapi-sessions.js";
 import { consumeRateLimit } from "../security/rate-limit.js";
 import { httpError, LOGIN_RATE_LIMIT_WINDOW_MS } from "./errors.js";
 
@@ -26,7 +27,11 @@ export function registerSecurityHeaders(app: FastifyInstance, loginRequestCounts
   });
 }
 
-export function registerLocalTokenHook(app: FastifyInstance, localToken?: string) {
+export function registerLocalTokenHook(
+  app: FastifyInstance,
+  localToken?: string,
+  etapiSessions?: EtapiSessions,
+) {
   app.addHook("onRequest", async (req) => {
     if (req.method === "OPTIONS") return;
     // The embedded desktop window navigates to the local server's static
@@ -37,7 +42,20 @@ export function registerLocalTokenHook(app: FastifyInstance, localToken?: string
     // per-launch local-token boundary on those routes.
     const pathname = req.url.split("?")[0];
     if (!pathname.startsWith("/api/") && !pathname.startsWith("/etapi/")) return;
-    if (localToken && req.headers["x-ygdria-local-token"] !== localToken)
-      throw httpError(401, "Missing local token");
+    if (!localToken || req.headers["x-ygdria-local-token"] === localToken) return;
+
+    // The desktop app's own requests retain the per-launch loopback secret.
+    // External local AI tools instead present a scoped ETAPI token, which is
+    // deliberately the only credential accepted without that secret.
+    if (pathname.startsWith("/etapi/")) {
+      const authorization = req.headers.authorization;
+      const token = authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined;
+      const session = token ? etapiSessions?.verify(token) : undefined;
+      if (session) {
+        req.etapiSession = session;
+        return;
+      }
+    }
+    throw httpError(401, "Missing local token");
   });
 }

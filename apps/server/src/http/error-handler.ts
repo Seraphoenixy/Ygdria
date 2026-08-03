@@ -21,6 +21,10 @@ export function registerErrorHandler(app: FastifyInstance) {
     // Internal exceptions can carry SQLite, filesystem, or implementation
     // details. Log them above, but never disclose them to an API client.
     const message = code >= 500 ? "Internal server error" : issue.message;
-    reply.code(code).send({ error: { code: issue.constructor.name, message } });
+    // Prefer an explicit machine code (e.g. SYNC_REBASELINE_REQUIRED) when the
+    // error carries one; otherwise fall back to the constructor name so existing
+    // clients that branch on the code string keep working.
+    const errorCode = (issue as Error & { code?: string }).code ?? issue.constructor.name;
+    reply.code(code).send({ error: { code: errorCode, message } });
   });
 }

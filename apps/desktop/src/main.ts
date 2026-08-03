@@ -249,6 +249,7 @@ app
       webDist,
       origin: "http://localhost:5173",
       localToken: localApiToken,
+      enableEtapi: true,
     });
     apiUrl = await localApi.listen({
       // Keep the loopback endpoint discoverable for local integrations. The

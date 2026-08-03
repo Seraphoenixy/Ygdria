@@ -13,8 +13,8 @@
  * enforceable.
  */
 
-import type { SqliteDatabase } from "@ygdria/database";
-import { createDatabase } from "@ygdria/database";
+import type { SqliteDatabase, SyncMaintenanceStats } from "@ygdria/database";
+import { collectSyncMaintenanceStats, createDatabase, runSyncDataMaintenance } from "@ygdria/database";
 import { randomUUID } from "node:crypto";
 import {
   PLACEMENT_DELETION_MAX_RECORDS,
@@ -45,6 +45,7 @@ export class MaintenanceRunner {
   private lastFullMaintenanceCompletedAt: number | null = null;
   private dbPath: string;
   private mainSqlite: SqliteDatabase | null = null;
+  private lastSyncStats: SyncMaintenanceStats | null = null;
 
   /**
    * @param dbPath      Filesystem path to the SQLite database file.
@@ -65,6 +66,11 @@ export class MaintenanceRunner {
    */
   getStatus(): MaintenanceTask | null {
     return this.currentTask;
+  }
+
+  /** Replication-metadata capacity snapshot taken during the last full run. */
+  getLastSyncStats(): SyncMaintenanceStats | null {
+    return this.lastSyncStats;
   }
 
   /**
@@ -173,6 +179,21 @@ export class MaintenanceRunner {
       // Do not call NoteService here: it owns the server's main connection.
       const removedUndoSnapshots = prunePlacementDeletions(sqlite);
 
+      // Step 1b: Bound the replication metadata. This expires silent peers,
+      // prunes the change log up to the boundary the surviving peers still
+      // need, drops tombstones every active peer has acknowledged, and retires
+      // completed attachment cleanup jobs past their audit window. Nothing
+      // unacknowledged is ever removed — a backlog is reported, not deleted.
+      const syncMaintenance = runSyncDataMaintenance(sqlite);
+      const syncStats = collectSyncMaintenanceStats(sqlite);
+      if (syncMaintenance.expiredPeers.length > 0) {
+        console.warn(
+          "[maintenance] expired inactive sync peers; they will re-baseline from the snapshot endpoint:",
+          syncMaintenance.expiredPeers.join(", "),
+        );
+      }
+      reportSyncCapacity(syncStats);
+
       // Step 2: Repair ghost records — notes with deleted_at set but no
       // placement in the trash. Add a trash placement so they become visible
       // and can be restored or purged.
@@ -221,7 +242,13 @@ export class MaintenanceRunner {
         beforeBytes,
         afterBytes,
         savedBytes: beforeBytes - afterBytes,
+        expiredSyncPeers: syncMaintenance.expiredPeers.length,
+        removedChangeLogRows: syncMaintenance.removedChangeLogRows,
+        removedTombstones: syncMaintenance.removedTombstones,
+        removedStorageCleanupJobs: syncMaintenance.removedStorageCleanupJobs,
+        syncWarnings: syncStats.warnings,
       };
+      this.lastSyncStats = syncStats;
 
       // Step 7: Optional FTS rebuild.
       if (rebuildFts) {
@@ -243,6 +270,25 @@ export class MaintenanceRunner {
       task.result = null;
     }
   }
+}
+
+/**
+ * Surface capacity pressure instead of resolving it destructively. A large
+ * change log usually means a peer is far behind, and those rows are exactly the
+ * ones that must survive for it to catch up, so the only correct action is to
+ * make the situation visible.
+ */
+function reportSyncCapacity(stats: SyncMaintenanceStats) {
+  if (stats.warnings.length === 0) return;
+  console.warn("[maintenance] sync data capacity warnings", {
+    warnings: stats.warnings,
+    changeLogRows: stats.changeLog.rows,
+    unacknowledgedChangeLogRows: stats.changeLog.rows - stats.changeLog.prunableRows,
+    tombstoneRows: stats.tombstones.rows,
+    peers: stats.peers,
+    storageCleanupJobs: stats.storageCleanupJobs,
+    databaseBytes: stats.database.bytes,
+  });
 }
 
 function prunePlacementDeletions(sqlite: SqliteDatabase) {

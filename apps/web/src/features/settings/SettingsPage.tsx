@@ -1,5 +1,6 @@
-import { useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
 import { ListTree } from "lucide-react";
+import type { EtapiScope, EtapiSession, YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 import { APP_VERSION } from "../../lib/appVersion";
 import { readSettings, writeSettings, type StoredSettings, type ThemePreference, type TimeUnit } from "./settingsStore";
@@ -34,6 +35,8 @@ export function SettingsPage({
   onOpenFrontendConsole,
   syncRunsAutomatically = false,
   canEditMobileEndpoint = false,
+  etapiTokenManagementAvailable = false,
+  client,
 }: {
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
@@ -61,8 +64,27 @@ export function SettingsPage({
   onOpenFrontendConsole?: () => void;
   syncRunsAutomatically?: boolean;
   canEditMobileEndpoint?: boolean;
+  /** True when this is the desktop app's local ETAPI server. */
+  etapiTokenManagementAvailable?: boolean;
+  client: YgdriaClient;
 }) {
-  const [settings, setSettings] = useState<StoredSettings>(readSettings);
+  // `syncServerUrl` used to be initialized exclusively from localStorage, so
+  // the settings page could show a stale address even after the client had
+  // connected to another server. The active client's endpoint is authoritative.
+  const activeServerUrl = displayServerUrl(client.getServerUrl());
+  const [settings, setSettings] = useState<StoredSettings>(() => {
+    const saved = readSettings();
+    return activeServerUrl ? { ...saved, syncServerUrl: activeServerUrl } : saved;
+  });
+  useEffect(() => {
+    if (!activeServerUrl) return;
+    setSettings((current) => {
+      if (current.syncServerUrl === activeServerUrl) return current;
+      const updated = { ...current, syncServerUrl: activeServerUrl };
+      writeSettings(updated);
+      return updated;
+    });
+  }, [activeServerUrl]);
   const updateSettings = (next: Partial<StoredSettings>) => {
     const updated = { ...settings, ...next };
     setSettings(updated);
@@ -103,7 +125,6 @@ export function SettingsPage({
           <output className="settings-version">v{APP_VERSION}</output>
         </div></div>
       </section>
-      <h2 id="settings-appearance-cat" className="settings-category">{t(locale, "settingsAppearance")}</h2>
       <section id="settings-appearance" className="settings-section">
         <h3>{t(locale, "theme")}</h3>
         <div className="settings-card"><div className="settings-row">
@@ -123,6 +144,7 @@ export function SettingsPage({
           </select>
         </div></div>
       </section>
+      <h2 id="settings-connection" className="settings-category">{t(locale, "settingsConnection")}</h2>
       <SettingsSection id="settings-sync" title={t(locale, "syncServer")} hint={t(locale, "syncServerHint")} rows={[
         <SettingsTextRow key="sync-server-url" title={t(locale, "syncServerUrl")} description={t(locale, "syncServerUrlHint")} value={settings.syncServerUrl} placeholder="https://notes.example.com" onChange={(value) => updateSettings({ syncServerUrl: value })} onBlur={reconnectMobileEndpoint} />,
         <SettingsNumberRow key="sync-timeout" title={t(locale, "syncConnectionTimeout")} description={t(locale, "syncServerHint")} value={settings.syncConnectionTimeoutSeconds} min={1} unit={t(locale, "seconds")} onChange={(event) => updateSettings({ syncConnectionTimeoutSeconds: Math.max(1, Math.floor(Number(event.target.value)) || 1) })} />,
@@ -158,11 +180,16 @@ export function SettingsPage({
         <SettingsActionRow key="database-maintenance" title={t(locale, "compactDatabase")} description={t(locale, "databaseMaintenanceHint")} action={t(locale, "compactDatabase")} disabled={maintainingDatabase} onClick={() => onMaintainDatabase?.(false)} status={databaseMaintenanceMessageTarget === "compact" ? databaseMaintenanceMessage : undefined} />,
         <SettingsActionRow key="search-index-rebuild" title={t(locale, "rebuildSearchIndex")} description={t(locale, "rebuildSearchIndexHint")} action={t(locale, "rebuildSearchIndex")} disabled={maintainingDatabase} onClick={() => onMaintainDatabase?.(true)} status={databaseMaintenanceMessageTarget === "fts" ? databaseMaintenanceMessage : undefined} />,
       ]} />
-      <h2 id="settings-security" className="settings-category">{t(locale, "settingsSecurity")}</h2>
+      <h2 id="settings-security" className="settings-category">{t(locale, "settingsSecurityAndAi")}</h2>
       <SettingsSection id="settings-protected" title={t(locale, "protectedSession")} hint={t(locale, "protectedSessionHint")} rows={[
         <SettingsActionRow key="protected-password" title={t(locale, "changeProtectedPassword")} description={t(locale, "changeProtectedPasswordHint")} action={t(locale, "changeProtectedPassword")} disabled={!canChangeProtectedPassword} onClick={onChangeProtectedPassword} />,
         <SettingsNumberRow key="protected-timeout" title={t(locale, "protectedSessionTimeout")} description={t(locale, "protectedSessionHint")} value={protectedSessionTimeoutMinutes ?? 10} min={1} unit={t(locale, "minutes")} onChange={(event) => onProtectedSessionTimeoutChange?.(Number(event.target.value))} />,
       ]} />
+      <EtapiTokenSettings
+        locale={locale}
+        client={client}
+        available={etapiTokenManagementAvailable}
+      />
     </article>;
 }
 
@@ -172,11 +199,107 @@ function SettingsSection({ id, title, hint, rows }: { id?: string; title: string
 
 export function SettingsOutline({ locale }: { locale: Locale }) {
   const groups = [
-    ["settings-general", t(locale, "settingsGeneral"), [["settings-language", t(locale, "settingsLanguage")], ["settings-about", t(locale, "about")], ["settings-appearance-cat", t(locale, "settingsAppearance")], ["settings-sync", t(locale, "syncServer")]]],
+    ["settings-general", t(locale, "settingsGeneral"), [["settings-language", t(locale, "settingsLanguage")], ["settings-appearance", t(locale, "settingsAppearance")], ["settings-about", t(locale, "about")]]],
+    ["settings-connection", t(locale, "settingsConnection"), [["settings-sync", t(locale, "syncServer")]]],
     ["settings-data", t(locale, "settingsData"), [["settings-transfer", t(locale, "importExport")], ["settings-trash", t(locale, "deletedNotes")], ["settings-attachments", t(locale, "unusedAttachments")], ["settings-revisions", t(locale, "noteRevisions")], ["settings-database", t(locale, "databaseMaintenance")]]],
-    ["settings-security", t(locale, "settingsSecurity"), [["settings-protected", t(locale, "protectedSession")]]],
+    ["settings-security", t(locale, "settingsSecurityAndAi"), [["settings-protected", t(locale, "protectedSession")], ["settings-etapi", t(locale, "etapiTokens")]]],
   ] as const;
   return <aside className="note-inspector settings-outline"><div className="inspector-heading"><ListTree size={16} /> {t(locale, "onThisPage")}</div><ul className="outline-list">{groups.map(([id, label, sections]) => <li key={id}><button className="settings-outline-group" type="button" onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button><ul>{sections.map(([sectionId, sectionLabel]) => <li key={sectionId}><button type="button" onClick={() => document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{sectionLabel}</button></li>)}</ul></li>)}</ul></aside>;
+}
+
+function displayServerUrl(baseUrl: string): string {
+  const value = baseUrl.trim();
+  if (value) return value.replace(/\/$/, "");
+  // Same-origin browser deployments use an empty base URL in the API client.
+  return typeof window === "undefined" ? "" : window.location.origin;
+}
+
+function EtapiTokenSettings({ locale, client, available }: { locale: Locale; client: YgdriaClient; available: boolean }) {
+  const [label, setLabel] = useState("AI assistant");
+  const [scopes, setScopes] = useState<EtapiScope[]>(["notes:read"]);
+  const [ttlSeconds, setTtlSeconds] = useState(15 * 60);
+  const [sessions, setSessions] = useState<EtapiSession[]>([]);
+  const [createdToken, setCreatedToken] = useState<string>();
+  const [message, setMessage] = useState<string>();
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    if (!available) return;
+    setLoading(true);
+    try {
+      setSessions((await client.listEtapiSessions()).sessions);
+      setMessage(undefined);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, [available, client]);
+
+  const toggleScope = (scope: EtapiScope) => {
+    setScopes((current) => current.includes(scope)
+      ? (current.length === 1 ? current : current.filter((item) => item !== scope))
+      : [...current, scope]);
+  };
+  const create = async () => {
+    if (!label.trim() || scopes.length === 0) return;
+    setLoading(true);
+    try {
+      const issued = await client.createEtapiSession({ label: label.trim(), scopes, ttlSeconds });
+      setCreatedToken(issued.accessToken);
+      setSessions((current) => [issued, ...current.filter((session) => session.id !== issued.id)]);
+      setMessage(undefined);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+  const revoke = async (id: string) => {
+    setLoading(true);
+    try {
+      await client.revokeEtapiSession(id);
+      setSessions((current) => current.filter((session) => session.id !== id));
+      setMessage(undefined);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+  const copy = async () => {
+    if (!createdToken) return;
+    try {
+      await navigator.clipboard.writeText(createdToken);
+      setMessage(t(locale, "etapiTokenCopied"));
+    } catch {
+      setMessage(t(locale, "etapiCopyFailed"));
+    }
+  };
+
+  return <section id="settings-etapi" className="settings-section">
+    <h3>{t(locale, "etapiTokens")}</h3>
+    <div className="settings-card">
+      <p className="settings-intro">{available ? t(locale, "etapiTokensHint") : t(locale, "etapiTokensUnavailable")}</p>
+      {available && <>
+        <div className="settings-row settings-etapi-form">
+          <div>
+            <strong>{t(locale, "etapiNewToken")}</strong>
+            <p>{t(locale, "etapiTokenWarning")}</p>
+            <label className="settings-etapi-label">{t(locale, "etapiTokenLabel")}<input className="settings-text-control" value={label} maxLength={100} onChange={(event) => setLabel(event.target.value)} /></label>
+            <fieldset className="settings-etapi-scopes"><legend>{t(locale, "etapiPermissions")}</legend>
+              {(["notes:read", "notes:write"] as EtapiScope[]).map((scope) => <label key={scope}><input type="checkbox" checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} /> {t(locale, scope === "notes:read" ? "etapiRead" : "etapiWrite")}</label>)}
+            </fieldset>
+          </div>
+          <div className="settings-etapi-actions"><label>{t(locale, "etapiExpiry")}<select className="settings-select" value={ttlSeconds} onChange={(event) => setTtlSeconds(Number(event.target.value))}><option value={15 * 60}>{t(locale, "etapi15Minutes")}</option><option value={30 * 60}>{t(locale, "etapi30Minutes")}</option><option value={60 * 60}>{t(locale, "etapi1Hour")}</option></select></label><button className="settings-action" disabled={loading || !label.trim()} onClick={() => void create()}>{t(locale, "etapiCreateToken")}</button></div>
+        </div>
+        {createdToken && <div className="settings-row settings-etapi-issued"><div><strong>{t(locale, "etapiTokenCreated")}</strong><p>{t(locale, "etapiTokenOnce")}</p><input className="settings-text-control settings-etapi-secret" readOnly value={createdToken} aria-label={t(locale, "etapiTokenCreated")} /></div><button className="settings-action" onClick={() => void copy()}>{t(locale, "copy")}</button></div>}
+        <div className="settings-row settings-etapi-list"><div><strong>{t(locale, "etapiActiveTokens")}</strong><p>{t(locale, "etapiActiveTokensHint")}</p>{message && <p className="settings-status" role="status">{message}</p>}{sessions.length > 0 && <ul>{sessions.map((session) => <li key={session.id}><span><b>{session.label}</b> · {session.scopes.join(", ")} · {t(locale, "etapiExpiresAt")} {new Date(session.expiresAt).toLocaleString(locale)}</span><button className="settings-action" disabled={loading} onClick={() => void revoke(session.id)}>{t(locale, "revoke")}</button></li>)}</ul>}</div><button className="settings-action" disabled={loading} onClick={() => void load()}>{t(locale, "refresh")}</button></div>
+      </>}
+    </div>
+  </section>;
 }
 
 function SettingsNumberRow({ title, description, value, min, unit, onChange, onUnitChange, locale }: {

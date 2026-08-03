@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search } from "lucide-react";
-import type { SearchResult } from "@ygdria/shared";
+import { ExternalLink, Search, X } from "lucide-react";
+import type { SearchResult, TagStats } from "@ygdria/shared";
 import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 
-export function SearchPage({ client, locale, onOpenNote }: { client: YgdriaClient; locale: Locale; onOpenNote: (noteId: string) => void }) {
+export function SearchPage({ client, locale, isActive, onOpenNote }: { client: YgdriaClient; locale: Locale; isActive: boolean; onOpenNote: (noteId: string, openInNewTab?: boolean) => void }) {
   const [query, setQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
+  const [contextMenu, setContextMenu] = useState<{ noteId: string; x: number; y: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const term = submittedQuery.trim();
-  const canSearch = isSearchableQuery(query);
+  const canSearch = isSearchableQuery(query) || query.trim().startsWith("tag:");
   const showingSubmittedResults = term.length > 0 && term === query.trim();
   const results = useQuery({
     queryKey: ["full-text-search", term],
@@ -19,26 +20,89 @@ export function SearchPage({ client, locale, onOpenNote }: { client: YgdriaClien
     retry: false,
   });
 
-  useEffect(() => inputRef.current?.focus(), []);
+  const tagStats = useQuery({
+    queryKey: ["tag-stats"],
+    queryFn: () => client.tagStats() as Promise<TagStats[]>,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => { if (isActive) inputRef.current?.focus(); }, [isActive]);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [contextMenu]);
+
+  const selectTag = (tag: string) => {
+    const next = `tag:${tag}`;
+    setQuery(next);
+    setSubmittedQuery(next);
+  };
+
+  const clearTagFilter = () => {
+    setQuery("");
+    setSubmittedQuery("");
+    inputRef.current?.focus();
+  };
+
+  const isTagSearch = term.startsWith("tag:");
 
   return <article className="search-page">
     <h1>{t(locale, "searchTitle")}</h1>
-    <form className="search-page-form" onSubmit={(event) => { event.preventDefault(); const next = query.trim(); if (!isSearchableQuery(next)) return; if (next === term) void results.refetch(); else setSubmittedQuery(next); }}>
+    <form className="search-page-form" onSubmit={(event) => { event.preventDefault(); const next = query.trim(); if (!isSearchableQuery(next) && !next.startsWith("tag:")) return; if (next === term) void results.refetch(); else setSubmittedQuery(next); }}>
       <label className="search-page-input">
         <Search size={20} aria-hidden="true" />
         <input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t(locale, "searchNotes")} aria-label={t(locale, "searchNotes")} />
+        {isTagSearch && (
+          <button type="button" className="search-page-tag-clear" onClick={clearTagFilter} title={t(locale, "removeTag")}>
+            <X size={16} />
+          </button>
+        )}
       </label>
       <button type="submit" disabled={!canSearch}>{t(locale, "searchAction")}</button>
     </form>
-    {!showingSubmittedResults ? (query.trim().length > 0 && !canSearch ? <p className="search-page-message">{t(locale, "minSearchLength")}</p> : <p className="search-page-message">{t(locale, "searchHint")}</p>) : results.isPending ? <p className="search-page-message">{t(locale, "loading")}</p> : results.isError ? <p className="search-page-message search-page-error">{t(locale, "searchFailed")} {results.error.message}</p> : results.data?.length ? <div className="search-results">{results.data.map((result) => <button type="button" key={result.noteId} className="search-result" onClick={() => onOpenNote(result.noteId)}>
+    {!isTagSearch && tagStats.data && tagStats.data.length > 0 && (
+      <div className="search-page-tag-suggestions">
+        {tagStats.data.slice(0, 10).map((ts) => (
+          <button key={ts.tag} type="button" className="search-page-tag-suggestion" onClick={() => selectTag(ts.tag)}>
+            {ts.tag} <span className="search-page-tag-count">{ts.count}</span>
+          </button>
+        ))}
+      </div>
+    )}
+    {!showingSubmittedResults ? (query.trim().length > 0 && !canSearch ? <p className="search-page-message">{t(locale, "minSearchLength")}</p> : isTagSearch ? null : <p className="search-page-message">{t(locale, "searchHint")}</p>) : results.isPending ? <p className="search-page-message">{t(locale, "loading")}</p> : results.isError ? <p className="search-page-message search-page-error">{t(locale, "searchFailed")} {results.error.message}</p> : results.data?.length ? <div className="search-results">{results.data.map((result) => <button type="button" key={result.noteId} className="search-result" onClick={() => onOpenNote(result.noteId)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ noteId: result.noteId, x: event.clientX, y: event.clientY }); }}>
       <strong>{result.title}</strong><span><Snippet value={result.snippet} /></span><time>{new Date(result.updatedAt).toLocaleString()}</time>
+      {result.tags && result.tags.length > 0 && (
+        <div className="search-result-tags">
+          {result.tags.slice(0, 2).map((tag) => (
+            <span key={tag} className="tag-badge">{tag}</span>
+          ))}
+          {result.tags.length > 2 && (
+            <span className="tag-badge tag-more">+{result.tags.length - 2}</span>
+          )}
+        </div>
+      )}
     </button>)}</div> : <p className="search-page-message">{t(locale, "searchNoResults")}</p>}
+    {contextMenu && (
+      <div className="action-menu search-result-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+        <button role="menuitem" onClick={() => { onOpenNote(contextMenu.noteId, true); setContextMenu(null); }}>
+          <ExternalLink size={16} /> {t(locale, "openInNewTab")}
+        </button>
+      </div>
+    )}
   </article>;
 }
 
 function isSearchableQuery(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return false;
+  if (trimmed.startsWith("tag:")) return true;
   return !Array.from(trimmed.matchAll(/\p{Script=Han}+/gu), (match) => match[0]).some((term) => Array.from(term).length < 2);
 }
 

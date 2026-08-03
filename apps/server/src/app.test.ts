@@ -317,7 +317,7 @@ describe("desktop local-token boundary", () => {
     writeFileSync(join(webDist, "index.html"), "<!doctype html><title>Ygdria</title>");
     writeFileSync(join(webDist, "favicon.ico"), "test favicon");
     writeFileSync(join(webDist, "ygdria-forest-mark.png"), "test brand mark");
-    app = buildApp({ databaseUrl: ":memory:", localToken: token, webDist });
+    app = buildApp({ databaseUrl: ":memory:", localToken: token, webDist, enableEtapi: true });
   });
   afterAll(async () => {
     await app.close();
@@ -351,6 +351,32 @@ describe("desktop local-token boundary", () => {
     const brandMark = await app.inject({ method: "GET", url: "/ygdria-forest-mark.png" });
     expect(brandMark.statusCode).toBe(200);
     expect(brandMark.headers["content-type"]).toContain("image/png");
+  });
+
+  it("lets a short-lived ETAPI token access only the local ETAPI surface", async () => {
+    const issued = await app.inject({
+      method: "POST",
+      url: "/api/v1/etapi/sessions",
+      headers: { "x-ygdria-local-token": token },
+      payload: { label: "local AI", scopes: ["notes:read"], ttlSeconds: 300 },
+    });
+    expect(issued.statusCode).toBe(201);
+    const authorization = `Bearer ${issued.json().accessToken}`;
+
+    expect((await app.inject({ url: "/etapi/tree", headers: { authorization } })).statusCode).toBe(200);
+    expect(
+      (await app.inject({ url: "/api/v1/tree", headers: { authorization } })).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v1/etapi/sessions",
+          headers: { authorization },
+          payload: { label: "escalation", scopes: ["notes:read"] },
+        })
+      ).statusCode,
+    ).toBe(401);
   });
 });
 

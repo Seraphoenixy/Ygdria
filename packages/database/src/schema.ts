@@ -13,7 +13,7 @@ const timestamps = {
 export const notes = sqliteTable("notes", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
-  type: text("type", { enum: ["text", "code", "file"] })
+  type: text("type", { enum: ["text", "code"] })
     .notNull()
     .default("text"),
   contentData: blob("content_data", { mode: "buffer" }).notNull(),
@@ -135,11 +135,19 @@ export const storageCleanupJobs = sqliteTable(
  * A null cursor means "no prior sync" — the client should request a full
  * snapshot as a baseline.
  */
-export const syncCursors = sqliteTable("sync_cursors", {
-  peerId: text("peer_id").primaryKey(),
-  lastAdvanceId: integer("last_advance_id").notNull().default(0),
-  advancedAt: integer("advanced_at", { mode: "timestamp_ms" }).notNull(),
-});
+export const syncCursors = sqliteTable(
+  "sync_cursors",
+  {
+    peerId: text("peer_id").primaryKey(),
+    lastAdvanceId: integer("last_advance_id").notNull().default(0),
+    advancedAt: integer("advanced_at", { mode: "timestamp_ms" }).notNull(),
+    /** Last proof of liveness. A peer silent past the configured window stops
+     *  holding back pruning and loses its cursor, which forces its next sync
+     *  through the snapshot baseline. */
+    lastActiveAt: integer("last_active_at", { mode: "timestamp_ms" }),
+  },
+  (table) => [index("sync_cursors_last_active_idx").on(table.lastActiveAt)],
+);
 
 /** Ordered change log for incremental sync. Each mutation writes one row. */
 export const syncChangeLog = sqliteTable(

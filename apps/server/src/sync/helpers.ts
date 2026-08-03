@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   decodeStoredContent,
   recordChange,
+  NEXT_CHANGE_LOG_ID_SQL,
   type ChangeKind,
   type ContentCodec,
   type SqliteDatabase,
@@ -447,9 +448,15 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           }
         }
         if (acceptsUpdate) removeNoteFromSearchIndex(sqlite, String(d.id));
+        // The anti-resurrection guard mirrors the `relation` and `setting`
+        // branches: a note that was permanently deleted here leaves a tombstone,
+        // and a peer carrying an older copy must not be able to re-create it.
+        // Without this a device that went silent for months would re-seed every
+        // note the user purged while it was away. A genuinely newer edit
+        // (updatedAt past the deletion) still wins, matching last-write-wins.
         const result = sqlite
           .prepare(
-            "INSERT INTO notes (id,title,type,content_data,content_codec,content_size,content_hash,plain_text,is_protected,properties_json,version,deleted_at,archived_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,type=excluded.type,content_data=excluded.content_data,content_codec=excluded.content_codec,content_size=excluded.content_size,content_hash=excluded.content_hash,plain_text=excluded.plain_text,is_protected=excluded.is_protected,properties_json=excluded.properties_json,version=excluded.version,deleted_at=excluded.deleted_at,archived_at=excluded.archived_at,updated_at=excluded.updated_at WHERE excluded.updated_at > notes.updated_at",
+            "INSERT INTO notes (id,title,type,content_data,content_codec,content_size,content_hash,plain_text,is_protected,properties_json,version,deleted_at,archived_at,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM sync_tombstones WHERE entity_type='note' AND entity_id=? AND deleted_at>=?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,type=excluded.type,content_data=excluded.content_data,content_codec=excluded.content_codec,content_size=excluded.content_size,content_hash=excluded.content_hash,plain_text=excluded.plain_text,is_protected=excluded.is_protected,properties_json=excluded.properties_json,version=excluded.version,deleted_at=excluded.deleted_at,archived_at=excluded.archived_at,updated_at=excluded.updated_at WHERE excluded.updated_at > notes.updated_at",
           )
           .run(
             d.id,
@@ -466,6 +473,8 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
             d.deletedAt,
             d.archivedAt,
             d.createdAt,
+            d.updatedAt,
+            d.id,
             d.updatedAt,
           );
         if (result.changes) {
@@ -515,7 +524,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
         if (!d || typeof d.noteId !== "string" || typeof d.updatedAt !== "number") continue;
         const result = sqlite
           .prepare(
-            "INSERT INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM notes WHERE id=?) ON CONFLICT(id) DO UPDATE SET note_id=excluded.note_id,parent_placement_id=excluded.parent_placement_id,position=excluded.position,updated_at=excluded.updated_at WHERE excluded.updated_at > placements.updated_at",
+            "INSERT INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM notes WHERE id=?) AND NOT EXISTS(SELECT 1 FROM sync_tombstones WHERE entity_type='placement' AND entity_id=? AND deleted_at>=?) ON CONFLICT(id) DO UPDATE SET note_id=excluded.note_id,parent_placement_id=excluded.parent_placement_id,position=excluded.position,updated_at=excluded.updated_at WHERE excluded.updated_at > placements.updated_at",
           )
           .run(
             d.id,
@@ -525,6 +534,8 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
             d.createdAt,
             d.updatedAt,
             d.noteId,
+            d.id,
+            d.updatedAt,
           );
         if (result.changes) {
           logChange("placement", String(d.id), "updated");
@@ -614,9 +625,12 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           const result = sqlite
             .prepare("DELETE FROM settings WHERE key=? AND updated_at < ?")
             .run(change.entityId, timestamp);
+          // The recorded boundary is the change-log position that will carry
+          // this deletion onward, so maintenance can later tell whether every
+          // peer has seen it. Without it the tombstone would be unprunable.
           sqlite
             .prepare(
-              "INSERT INTO sync_tombstones (entity_type,entity_id,deleted_at) VALUES ('setting',?,?) ON CONFLICT(entity_type,entity_id) DO UPDATE SET deleted_at=excluded.deleted_at WHERE excluded.deleted_at > sync_tombstones.deleted_at",
+              `INSERT INTO sync_tombstones (entity_type,entity_id,deleted_at,change_log_id) VALUES ('setting',?,?,${NEXT_CHANGE_LOG_ID_SQL}) ON CONFLICT(entity_type,entity_id) DO UPDATE SET deleted_at=excluded.deleted_at,change_log_id=excluded.change_log_id WHERE excluded.deleted_at > sync_tombstones.deleted_at`,
             )
             .run(change.entityId, timestamp);
           if (result.changes) {

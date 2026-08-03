@@ -6,6 +6,8 @@ const app = buildApp({
   // Standalone servers are the multi-device/remote deployment boundary.
   // Do not allow a missing environment variable to expose their API.
   enableDeviceAuth: true,
+  // AI integrations are deliberately local to the desktop loopback service.
+  enableEtapi: false,
   databaseUrl: config.databaseUrl,
   origin: config.origin,
   trustedProxy: config.trustedProxy,

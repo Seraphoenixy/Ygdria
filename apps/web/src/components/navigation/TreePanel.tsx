@@ -105,6 +105,10 @@ export function TreePanel({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const autoExpandedRef = useRef<Set<string>>(new Set());
   const pendingAutoCollapsesRef = useRef<Map<string, number>>(new Map());
+  // A placement move refreshes `tree`, but that structural update must not be
+  // treated like opening a note and reveal the move destination.
+  const suppressNextMoveAutoExpandRef = useRef(false);
+  const previousTreeRef = useRef(tree);
 
   const childrenByParent = useMemo(() => {
     const byParent = new Map<string | null, TreePlacement[]>();
@@ -190,7 +194,16 @@ export function TreePanel({
   // needed stay open initially and only become collapse candidates; this
   // avoids disrupting someone who is still browsing the same area.
   useEffect(() => {
+    const treeChanged = previousTreeRef.current !== tree;
+    previousTreeRef.current = tree;
     if (isSearching) return; // Don't auto-recalc during search — search has its own expanded view.
+    if (suppressNextMoveAutoExpandRef.current && treeChanged) {
+      suppressNextMoveAutoExpandRef.current = false;
+      // Keep existing disclosure choices, only discarding ids no longer in the
+      // refreshed tree. In particular, do not add the moved note's new path.
+      setExpanded((current) => new Set([...current].filter((id) => byId.has(id))));
+      return;
+    }
 
     const openNoteInfos = tabs
       .filter((tab): tab is Extract<WorkspaceTab, { kind: "note" }> => tab.kind === "note")
@@ -545,6 +558,7 @@ export function TreePanel({
             onCreateChild={(placementId) => onCreateNote(placementId)}
             creatingNote={creatingNote}
             onMove={(placementIds, parentPlacementId, position) => {
+              suppressNextMoveAutoExpandRef.current = true;
               void onMovePlacement(placementIds, parentPlacementId, position);
             }}
             onContextMenu={(placement, event) => {

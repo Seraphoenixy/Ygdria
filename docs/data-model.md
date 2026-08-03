@@ -42,7 +42,7 @@ notes_fts         从 notes 投影出的全文搜索索引（external-content FT
 | ----------------- | ------------------------------------------ | --------------------------------------------------------------------------------------- |
 | `id`              | `TEXT PRIMARY KEY`                         | 笔记 UUID。内部引用（例如编辑器中的笔记链接）使用此稳定 ID。                            |
 | `title`           | `TEXT NOT NULL`                            | 显示标题；不要求唯一，移动或改名不会影响引用。                                          |
-| `type`            | `TEXT NOT NULL DEFAULT 'text' CHECK (...)` | 笔记类型，只允许 `text`、`code`、`file`，避免拼写或大小写不一致。                       |
+| `type`            | `TEXT NOT NULL DEFAULT 'text' CHECK (...)` | 笔记类型，只允许 `text`、`code`，避免拼写或大小写不一致。                       |
 | `content_data`    | `BLOB NOT NULL`                            | 正文字节流，是正文的权威存储。`content_codec` 决定如何解码为 Tiptap JSON 或受保护笔记密文。 |
 | `content_codec`   | `TEXT NOT NULL CHECK (...)`                | 内容编码：`identity`（UTF-8 JSON 原文）、`zstd-v1`（zstd 压缩的 UTF-8 JSON，≥2 KiB 时按压缩率自动启用）、`ciphertext-v1`（受保护笔记的密文 UTF-8 字符串，**永不压缩**）。 |
 | `content_size`    | `INTEGER NOT NULL`                         | **未压缩**的正文字节长度，用于存储占用量统计与 `sizeForPlacement`。                    |
@@ -221,7 +221,7 @@ GROUP BY f.id HAVING COUNT(*) > 1;
 | 字段           | SQLite 类型 / 约束                                              | 含义                                                                 |
 | -------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `id`           | `INTEGER PRIMARY KEY AUTOINCREMENT`                            | 自增变更 ID，即同步游标的推进位点；`0` 表示无历史同步。               |
-| `entity_type`  | `TEXT NOT NULL`                                                | 实体类型：`note`、`placement`、`relation`、`attachment`。            |
+| `entity_type`  | `TEXT NOT NULL`                                                | 实体类型：`note`、`placement`、`relation`、`attachment`、`revision`、`setting`。            |
 | `entity_id`    | `TEXT NOT NULL`                                                | 实体 ID。                                                            |
 | `change_kind`  | `TEXT NOT NULL`（`created` / `updated` / `deleted`）          | 变更类型。                                                           |
 | `created_at`   | `INTEGER NOT NULL`（毫秒时间戳）                              | 变更写入时间。                                                       |
@@ -234,7 +234,7 @@ GROUP BY f.id HAVING COUNT(*) > 1;
 
 | 字段          | SQLite 类型 / 约束                  | 含义                                                                 |
 | ------------- | ----------------------------------- | -------------------------------------------------------------------- |
-| `entity_type` | `TEXT NOT NULL`                     | 实体类型：`note`、`placement`、`relation`、`attachment`。 |
+| `entity_type` | `TEXT NOT NULL`                     | 实体类型：`note`、`placement`、`relation`、`attachment`、`setting`。 |
 | `entity_id`   | `TEXT NOT NULL`                     | 实体 ID。                                                |
 | `deleted_at`  | `INTEGER NOT NULL`                 | 删除时间戳（毫秒）。                                                 |
 

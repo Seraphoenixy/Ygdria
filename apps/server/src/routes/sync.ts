@@ -10,11 +10,16 @@ import {
   advanceCursor,
   getCursor,
   pruneChangeLog,
+  touchPeerActivity,
+  isPeerRebaselineRequired,
+  markPeerSnapshotCompleted,
+  canCompletePeerRebaseline,
+  clearPeerRebaseline,
   type SqliteDatabase,
 } from "@ygdria/database";
 import { NotFoundError } from "@ygdria/domain";
 import { validPeerId, cursorKey } from "../security/srp-sessions.js";
-import { httpError } from "../http/errors.js";
+import { httpError, SyncRebaselineRequiredError } from "../http/errors.js";
 import {
   resolveChangeEntities,
   fullSnapshotChanges,
@@ -39,9 +44,17 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
    * Use /api/v1/attachments/by-hash/:hash for binary content.
    */
   app.get("/api/v1/sync/changes", async (req) => {
-    const query = req.query as { cursor?: string; limit?: string; maxBytes?: string; metadataOnly?: string };
+    const query = req.query as { cursor?: string; limit?: string; maxBytes?: string; metadataOnly?: string; peerId?: string };
     const cursorId = Number(query.cursor ?? 0);
     if (!Number.isSafeInteger(cursorId) || cursorId < 0) throw httpError(400, "cursor must be a non-negative integer");
+    // A gated peer must re-baseline from the snapshot; incremental pull is
+    // refused until it confirms a fresh cursor. An unknown peer stays unknown.
+    const peerId = query.peerId;
+    if (validPeerId(peerId)) {
+      const key = cursorKey(req.device?.id, peerId);
+      if (isPeerRebaselineRequired(sqlite, key)) throw new SyncRebaselineRequiredError(key);
+      touchPeerActivity(sqlite, key);
+    }
     const requestedLimit = Number(query.limit ?? 200);
     const requestedMaxBytes = Number(query.maxBytes ?? 4 * 1024 * 1024);
     const limit = Number.isSafeInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 200;
@@ -79,15 +92,26 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
   /** A full-state fallback for a new local database. Unlike the incremental
    * change log, this remains available after old log rows are pruned. */
   app.get("/api/v1/sync/snapshot", async (req) => {
-    const query = req.query as { cursor?: string; limit?: string; metadataOnly?: string };
+    const query = req.query as { cursor?: string; limit?: string; metadataOnly?: string; peerId?: string };
     const cursor = Number(query.cursor ?? 0);
     const requestedLimit = Number(query.limit ?? 200);
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw httpError(400, "cursor must be a non-negative integer");
+    // The snapshot is the re-baseline path, so it is always allowed — even for
+    // a gated peer. Refreshing liveness here keeps the gate from being treated
+    // as freshly silent, but the gate itself only clears on /advance.
+    if (validPeerId(query.peerId)) touchPeerActivity(sqlite, cursorKey(req.device?.id, query.peerId));
     const limit = Number.isSafeInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 200;
     const all = fullSnapshotChanges(sqlite);
     const page = all.slice(cursor, cursor + limit);
     const changes = await resolveChangeEntities(sqlite, attachmentRoot, page, query.metadataOnly !== "1");
-    return { cursor: cursor + page.length, hasMore: cursor + page.length < all.length, changes, maxChangeId: getMaxChangeId(sqlite) };
+    const nextCursor = cursor + page.length;
+    const hasMore = nextCursor < all.length;
+    const maxChangeId = getMaxChangeId(sqlite);
+    // Only the final page proves that this peer received a complete snapshot.
+    // Do not let a partial page, or a forged /advance call, lift the gate.
+    if (!hasMore && validPeerId(query.peerId))
+      markPeerSnapshotCompleted(sqlite, cursorKey(req.device?.id, query.peerId), maxChangeId);
+    return { cursor: nextCursor, hasMore, changes, maxChangeId };
   });
 
   app.get("/api/v1/sync/notes/:id/content", async (req) => {
@@ -140,17 +164,36 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     const cursor = Number(body.cursor ?? NaN);
     if (!validPeerId(body.peerId) || !Number.isSafeInteger(cursor) || cursor < 0)
       throw httpError(400, "peerId and cursor (non-negative integer) are required");
-    const result = advanceCursor(sqlite, cursorKey(req.device?.id, body.peerId), cursor);
+    const key = cursorKey(req.device?.id, body.peerId);
+    if (isPeerRebaselineRequired(sqlite, key) && !canCompletePeerRebaseline(sqlite, key, cursor))
+      throw new SyncRebaselineRequiredError(key);
+    const result = advanceCursor(sqlite, key, cursor);
+    clearPeerRebaseline(sqlite, key);
     pruneChangeLog(sqlite);
     return { ...result, peerId: body.peerId };
   });
 
-  /** Get a peer's cursor state. */
+  /**
+   * Get a peer's cursor state.
+   *
+   * Reading the cursor is itself proof that the peer is still participating, so
+   * it refreshes the liveness timestamp. Without this, a device that is fully
+   * caught up — and therefore never calls /advance — would eventually look
+   * abandoned and be pushed back onto the snapshot baseline for no reason.
+   * A missing cursor is left missing: an unknown peer must still re-baseline.
+   */
   app.get("/api/v1/sync/cursor", async (req) => {
     const peerId = (req.query as { peerId?: string }).peerId;
     if (!validPeerId(peerId)) throw httpError(400, "peerId is required");
-    const cursor = getCursor(sqlite, cursorKey(req.device?.id, peerId));
-    return cursor ? { ...cursor, peerId } : { peerId, lastAdvanceId: 0, advancedAt: null };
+    const key = cursorKey(req.device?.id, peerId);
+    // Tell the client up front that it must re-baseline, so it switches to the
+    // snapshot flow immediately instead of discovering it on the first pull.
+    if (isPeerRebaselineRequired(sqlite, key)) throw new SyncRebaselineRequiredError(key);
+    touchPeerActivity(sqlite, key);
+    const cursor = getCursor(sqlite, key);
+    return cursor
+      ? { ...cursor, peerId }
+      : { peerId, lastAdvanceId: 0, advancedAt: null, lastActiveAt: null };
   });
 
   /**
@@ -163,11 +206,20 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
   /** Apply a peer's metadata changes using last-write-wins timestamps. Binary
    * attachments are deliberately transferred separately by hash. */
   app.post("/api/v1/sync/push", { bodyLimit: 16 * 1024 * 1024 }, async (req) => {
-    const body = req.body as { changes?: SyncEntityChange[] };
+    const body = req.body as { changes?: SyncEntityChange[]; peerId?: string };
     if (!Array.isArray(body?.changes) || body.changes.length > 500)
       throw httpError(400, "changes must contain at most 500 entries");
     if (Buffer.byteLength(JSON.stringify(body)) > 16 * 1024 * 1024)
       throw httpError(413, "sync push payload exceeds 16 MiB");
+    // A gated peer may not write incremental changes: its old cursor position is
+    // gone, so accepting a push would let it seed stale state. It must snapshot
+    // first. An unknown peer is simply ignored for liveness (no cursor created).
+    const peerId = body.peerId;
+    if (validPeerId(peerId)) {
+      const key = cursorKey(req.device?.id, peerId);
+      if (isPeerRebaselineRequired(sqlite, key)) throw new SyncRebaselineRequiredError(key);
+      touchPeerActivity(sqlite, key);
+    }
     const serializedBytes = Buffer.byteLength(JSON.stringify(body));
     const { applied, rejected } = applySyncChanges(sqlite, body.changes, recordOutbound(req));
     req.log.info({ syncBatch: "push", entities: body.changes.length, serializedBytes, applied, rejected: rejected.length }, "applied sync batch");

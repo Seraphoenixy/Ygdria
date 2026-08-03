@@ -1,10 +1,157 @@
 import { decodeStoredContent, encodeDocumentContent, recordChange, type ContentCodec } from "@ygdria/database";
 import { markdownToTiptap, tiptapToMarkdown } from "@ygdria/editor/markdown";
-import { CALENDAR_PLACEMENT_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, type NoteContent, type SearchResult } from "@ygdria/shared";
+import { CALENDAR_NOTE_ID, CALENDAR_PLACEMENT_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID, type NoteContent, type SearchResult, type TagStats } from "@ygdria/shared";
 import { ConflictError, escapeHtml, id, NotFoundError, now, type RevisionRow, type SearchRow } from "./note-service-base.js";
 import { PlacementService } from "./placement-service.js";
+import { readCodeLanguage, readTags } from "./properties-utils.js";
 
 export class NoteService extends PlacementService {
+  externalTree(includeArchived = false) {
+    const rows = this.store.sqlite
+      .prepare(
+        `SELECT p.id placementId,p.note_id noteId,p.parent_placement_id parentPlacementId,p.position,
+                n.title,n.type,n.properties_json propertiesJson,n.version,n.created_at createdAt,
+                n.updated_at updatedAt,n.archived_at archivedAt,n.is_protected isProtected,
+                n.id IN (?,?) isSystem,n.id=? isCalendar
+         FROM placements p
+         JOIN notes n ON n.id=p.note_id
+         WHERE n.deleted_at IS NULL
+           AND p.id<>?
+           AND (?=1 OR n.archived_at IS NULL)
+         ORDER BY p.parent_placement_id,p.position,p.id`,
+      )
+      .all(
+        SYSTEM_ROOT_NOTE_ID,
+        SYSTEM_TRASH_NOTE_ID,
+        CALENDAR_NOTE_ID,
+        SYSTEM_TRASH_PLACEMENT_ID,
+        includeArchived ? 1 : 0,
+      ) as Array<{
+        placementId: string;
+        noteId: string;
+        parentPlacementId: string | null;
+        position: number;
+        title: string;
+        type: "text" | "code";
+        propertiesJson: string;
+        version: number;
+        createdAt: number;
+        updatedAt: number;
+        archivedAt: number | null;
+        isProtected: 0 | 1;
+        isSystem: 0 | 1;
+        isCalendar: 0 | 1;
+      }>;
+    return rows.map((row) => ({
+      placementId: row.placementId,
+      noteId: row.noteId,
+      parentPlacementId: row.parentPlacementId,
+      position: row.position,
+      title: row.isProtected ? "" : row.title,
+      type: row.type,
+      properties: row.isProtected
+        ? { tags: [] as string[] }
+        : {
+            tags: readTags(row.propertiesJson),
+            ...(row.type === "code"
+              ? { codeLanguage: readCodeLanguage(row.propertiesJson) }
+              : {}),
+          },
+      version: row.version,
+      createdAt: new Date(row.createdAt).toISOString(),
+      updatedAt: new Date(row.updatedAt).toISOString(),
+      archivedAt: row.archivedAt === null ? null : new Date(row.archivedAt).toISOString(),
+      isProtected: Boolean(row.isProtected),
+      isSystem: Boolean(row.isSystem),
+      isCalendar: Boolean(row.isCalendar),
+    }));
+  }
+
+  externalNote(noteId: string, format: "markdown" | "json" = "markdown") {
+    const note = this.get(noteId);
+    if (!note) throw new NotFoundError();
+    if (note.isProtected) throw new ConflictError("Cannot access protected notes via ETAPI");
+    const placements = this.store.sqlite
+      .prepare(
+        `SELECT id placementId,parent_placement_id parentPlacementId,position
+         FROM placements WHERE note_id=? ORDER BY created_at,id`,
+      )
+      .all(noteId) as Array<{
+        placementId: string;
+        parentPlacementId: string | null;
+        position: number;
+      }>;
+    return {
+      id: note.id,
+      title: note.title,
+      type: note.type,
+      content: this.content(noteId, format),
+      contentFormat: format,
+      properties: {
+        tags: note.tags,
+        ...(note.type === "code" ? { codeLanguage: note.codeLanguage } : {}),
+      },
+      placements,
+      version: note.version,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      archivedAt:
+        note.archivedAt === null
+          ? null
+          : new Date(note.archivedAt).toISOString(),
+    };
+  }
+
+  createExternal(input: {
+    title: string;
+    parentPlacementId?: string;
+    type?: "text" | "code";
+    content?: string;
+    tags?: string[];
+  }) {
+    const type = input.type ?? "text";
+    return this.create({
+      title: input.title,
+      parentPlacementId: input.parentPlacementId,
+      type,
+      ...(type === "code"
+        ? { code: input.content ?? "" }
+        : input.content === undefined
+          ? {}
+          : { content: markdownToTiptap(input.content).document }),
+      tags: input.tags,
+    });
+  }
+
+  updateExternal(
+    noteId: string,
+    input: {
+      title?: string;
+      content?: string;
+      tags?: string[];
+      codeLanguage?: string;
+      expectedVersion: number;
+    },
+  ) {
+    const note = this.get(noteId);
+    if (!note) throw new NotFoundError();
+    if (note.isProtected) throw new ConflictError("Cannot modify protected notes via ETAPI");
+    if (input.codeLanguage !== undefined && note.type !== "code") {
+      throw new ConflictError("codeLanguage is only valid for code notes");
+    }
+    return this.update(noteId, {
+      title: input.title,
+      tags: input.tags,
+      codeLanguage: input.codeLanguage,
+      expectedVersion: input.expectedVersion,
+      ...(input.content === undefined
+        ? {}
+        : note.type === "code"
+          ? { code: input.content }
+          : { content: markdownToTiptap(input.content).document }),
+    });
+  }
+
   content(noteId: string, format: "markdown" | "json" | "html") {
     const note = this.get(noteId);
     if (!note) throw new NotFoundError();
@@ -190,7 +337,10 @@ export class NoteService extends PlacementService {
     // note more than once, then rank FTS relevance before recency.
     return Array.from(new Map(rows.map((row) => [row.noteId, row])).values())
       .sort((left, right) => left.relevance - right.relevance || right.updatedAt - left.updatedAt)
-      .map((row) => ({ ...row, matchedField: "content" as const, updatedAt: new Date(row.updatedAt).toISOString() }));
+      .map((row) => {
+        const tags = this.getTagsForNoteId(row.noteId);
+        return { noteId: row.noteId, title: row.title, snippet: row.snippet, matchedField: "content" as const, updatedAt: new Date(row.updatedAt).toISOString(), tags };
+      });
   }
   protected ensureCalendarDay() {
     const date = new Date();
@@ -215,5 +365,68 @@ export class NoteService extends PlacementService {
     // An FTS external-content index is keyed by the source rowid, so duplicates
     // are structurally impossible.
     return [];
+  }
+
+  /**
+   * Search notes by exact tag match using json_each on properties_json.
+   * Only returns non-deleted, non-protected notes.
+   */
+  searchByTag(tag: string, includeArchived = false): SearchResult[] {
+    if (!tag || tag.trim().length === 0) return [];
+    const resultLimit = 30;
+    const rows = this.store.sqlite
+      .prepare(
+        `SELECT n.id noteId, n.title title, n.plain_text plainText, n.updated_at updatedAt
+         FROM notes n
+         JOIN json_each(n.properties_json, '$.tags') jt
+         WHERE n.deleted_at IS NULL AND n.is_protected=0 ${includeArchived ? "" : "AND n.archived_at IS NULL"}
+         AND jt.value = ?
+         ORDER BY n.updated_at DESC
+         LIMIT ?`,
+      )
+      .all(tag, resultLimit) as Array<{ noteId: string; title: string; plainText: string; updatedAt: number }>;
+    return rows.map((row) => {
+      const tags = readTags(
+        (this.store.sqlite
+          .prepare("SELECT properties_json FROM notes WHERE id=?")
+          .get(row.noteId) as { properties_json: string } | undefined)?.properties_json ?? "{}",
+      );
+      const snippet = row.plainText.length > 200 ? row.plainText.slice(0, 200) + "…" : row.plainText;
+      return {
+        noteId: row.noteId,
+        title: row.title,
+        snippet,
+        matchedField: "property" as const,
+        updatedAt: new Date(row.updatedAt).toISOString(),
+        tags,
+      };
+    });
+  }
+
+  /**
+   * Aggregate non-deleted, non-protected note tags with usage counts,
+   * ordered by count descending.
+   */
+  tagStats(): TagStats[] {
+    const rows = this.store.sqlite
+      .prepare(
+        `SELECT jt.value tag, COUNT(*) count
+         FROM notes n
+         JOIN json_each(n.properties_json, '$.tags') jt
+         WHERE n.deleted_at IS NULL AND n.is_protected=0
+         GROUP BY jt.value
+         ORDER BY count DESC, tag ASC
+         LIMIT 100`,
+      )
+      .all() as Array<{ tag: string; count: number }>;
+    return rows;
+  }
+
+  private getTagsForNoteId(noteId: string): string[] {
+    const row = this.store.sqlite
+      .prepare("SELECT properties_json, is_protected FROM notes WHERE id=?")
+      .get(noteId) as { properties_json: string; is_protected: number } | undefined;
+    if (!row || row.is_protected) return [];
+    return readTags(row.properties_json);
   }
 }

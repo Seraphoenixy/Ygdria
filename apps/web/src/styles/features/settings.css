@@ -1,20 +1,22 @@
 .settings-page {
-  margin-top: 42px;
+  width: min(100%, 960px);
+  margin-top: 34px;
 }
 .settings-page > h1 {
-  margin-bottom: 34px;
+  margin-bottom: 30px;
 }
 .settings-category {
-  margin: 36px 0 16px;
+  margin: 40px 0 14px;
   color: #4b4e56;
-  font-size: 18px;
+  font-size: 17px;
+  letter-spacing: 0.01em;
 }
 .settings-page > h1 + .settings-category {
   margin-top: 0;
 }
 .settings-section {
   scroll-margin-top: 18px;
-  margin-bottom: 32px;
+  margin-bottom: 26px;
 }
 .settings-section h3 {
   margin: 0 0 10px;
@@ -24,8 +26,9 @@
 }
 .settings-card {
   overflow: hidden;
+  border: 1px solid #e3e3e6;
   border-radius: 12px;
-  background: #f1f1f2;
+  background: #f3f3f4;
 }
 .settings-intro {
   margin: 0;
@@ -36,10 +39,10 @@
 }
 .settings-row {
   display: flex;
-  min-height: 78px;
+  min-height: 74px;
   align-items: center;
   justify-content: space-between;
-  gap: 28px;
+  gap: 24px;
   margin: 0 24px;
   padding: 15px 0;
   border-top: 1px solid #dcdcdf;
@@ -63,7 +66,7 @@
 .settings-row strong {
   display: block;
   color: #292b30;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
 }
 .settings-row p {
@@ -159,6 +162,89 @@
 .settings-action:disabled {
   color: #a0a1a6;
   cursor: not-allowed;
+}
+.settings-etapi-form {
+  align-items: flex-start;
+}
+.settings-etapi-label,
+.settings-etapi-actions > label {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: #55575e;
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-etapi-label .settings-text-control {
+  width: min(100%, 320px);
+}
+.settings-etapi-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+  color: #55575e;
+  font-size: 13px;
+}
+.settings-etapi-scopes legend {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.settings-etapi-scopes label {
+  white-space: nowrap;
+}
+.settings-etapi-actions {
+  display: grid;
+  gap: 12px;
+  justify-items: end;
+}
+.settings-etapi-actions .settings-select {
+  min-width: 144px;
+}
+.settings-etapi-secret {
+  width: min(100%, 540px);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.settings-etapi-list > div {
+  width: 100%;
+}
+.settings-etapi-list ul {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.settings-etapi-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #55575e;
+  font-size: 13px;
+}
+.settings-etapi-list li .settings-action {
+  min-width: auto;
+  padding: 5px 10px;
+}
+@media (max-width: 640px) {
+  .settings-etapi-form,
+  .settings-etapi-list,
+  .settings-etapi-issued {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .settings-etapi-actions {
+    justify-items: stretch;
+  }
+  .settings-etapi-actions .settings-select,
+  .settings-etapi-actions .settings-action,
+  .settings-etapi-issued .settings-action {
+    width: 100%;
+  }
 }
 .settings-version {
   flex: 0 0 auto;

@@ -6,6 +6,11 @@ import { readSettings, type TimeUnit } from "../features/settings/settingsStore"
 
 function durationMs(value: number, unit: TimeUnit) {
   const multiplier = { seconds: 1_000, minutes: 60_000, hours: 3_600_000, days: 86_400_000 }[unit];
+  // Settings live in localStorage and can outlast schema changes or be
+  // manually corrupted. Never let an invalid revision preference serialize as
+  // `null` in a note PATCH request (JSON.stringify(NaN) === "null"), because
+  // the API correctly requires revisionIntervalMs to be an integer.
+  if (!Number.isFinite(value) || !Number.isFinite(multiplier)) return 0;
   return Math.max(0, Math.floor(value)) * multiplier;
 }
 
@@ -25,7 +30,7 @@ type UseNotesOptions = {
 type ContentSaveRequest = {
   noteId: string;
   expectedVersion: number;
-  type?: "text" | "code" | "file";
+  type?: "text" | "code";
   isProtected?: boolean;
   content: any;
 };
@@ -225,14 +230,29 @@ export function useNotes({
           client.updateNote(noteId, {
             code: contentOrCiphertext.code,
             codeLanguage: contentOrCiphertext.codeLanguage,
+            tags: contentOrCiphertext.tags,
             revisionIntervalMs,
+            expectedVersion: version,
+          }),
+        );
+      }
+      if (contentOrCiphertext && typeof contentOrCiphertext === "object" && "tags" in contentOrCiphertext && !("content" in contentOrCiphertext) && !("code" in contentOrCiphertext)) {
+        return enqueueNoteWrite(noteId, expectedVersion, (version) =>
+          client.updateNote(noteId, {
+            tags: contentOrCiphertext.tags,
             expectedVersion: version,
           }),
         );
       }
       return enqueueNoteWrite(noteId, expectedVersion, (version) =>
         client.updateNote(noteId, {
-          content: contentOrCiphertext,
+          // NoteContent wraps rich-text editor updates as `{ content, tags }`
+          // so tags can be saved atomically with the document. The API's
+          // `content` field expects the TipTap document itself, not that
+          // wrapper; passing it through produced `content.content` and the
+          // server correctly rejected the PATCH as malformed.
+          content: contentOrCiphertext?.content ?? contentOrCiphertext,
+          tags: contentOrCiphertext?.tags,
           revisionIntervalMs,
           expectedVersion: version,
         }),

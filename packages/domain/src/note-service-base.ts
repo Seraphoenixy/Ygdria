@@ -22,6 +22,12 @@ import {
   type NoteContent,
   type SearchResult,
 } from "@ygdria/shared";
+import {
+  readCodeLanguage,
+  readTags,
+  codeProperties,
+  tagsProperties,
+} from "./properties-utils.js";
 type Store = ReturnType<typeof createDatabase>;
 // `updated_at` is used as a last-writer-wins version by sync. Date.now() alone
 // can return the same value for consecutive mutations, causing a causally later
@@ -112,7 +118,7 @@ export class ConflictError extends Error {
 }
 export class NoteServiceBase {
   constructor(protected store: Store) {}
-  create(input: { title: string; parentPlacementId?: string | null; type?: "text" | "code"; content?: NoteContent; code?: string }) {
+  create(input: { title: string; parentPlacementId?: string | null; type?: "text" | "code"; content?: NoteContent; code?: string; tags?: string[] }) {
     const t = now(),
       noteId = id(),
       placementId = id(),
@@ -124,6 +130,9 @@ export class NoteServiceBase {
     this.assertCanUseAsNormalParent(parentPlacementId);
     const rawContent = noteType === "code" ? code : JSON.stringify(document);
     const stored = encodeDocumentContent(rawContent);
+    const propsJson = noteType === "code"
+      ? codeProperties("plaintext", tagsProperties(input.tags))
+      : tagsProperties(input.tags);
     const p = this.store.sqlite
       .prepare(
         "SELECT COALESCE(MAX(position),-1)+1 p FROM placements WHERE parent_placement_id IS ?",
@@ -143,7 +152,7 @@ export class NoteServiceBase {
           stored.size,
           rawContentHash(rawContent),
           noteType === "code" ? code : plainText(document),
-          noteType === "code" ? codeProperties("plaintext") : "{}",
+          propsJson,
           1,
           null,
           t,
@@ -197,6 +206,7 @@ export class NoteServiceBase {
       title: row.title,
       type: row.type,
       codeLanguage: row.type === "code" ? readCodeLanguage(row.properties_json) : undefined,
+      tags: row.is_protected ? [] : readTags(row.properties_json),
       content: row.type === "code"
         ? decodeStoredContent(row.content_data, row.content_codec as ContentCodec)
         : JSON.parse(decodeStoredContent(row.content_data, row.content_codec as ContentCodec)) as NoteContent,
@@ -314,7 +324,7 @@ export class NoteServiceBase {
   }
   update(
     noteId: string,
-    input: { title?: string; type?: "text" | "code"; content?: NoteContent; code?: string; codeLanguage?: string; contentCiphertext?: string; revisionIntervalMs?: number; createRevision?: boolean; expectedVersion: number },
+    input: { title?: string; type?: "text" | "code"; content?: NoteContent; code?: string; codeLanguage?: string; tags?: string[]; contentCiphertext?: string; revisionIntervalMs?: number; createRevision?: boolean; expectedVersion: number },
   ) {
     this.assertNotSystemNote(noteId);
     const old = this.get(noteId);
@@ -360,8 +370,12 @@ export class NoteServiceBase {
         recordChange(this.store.sqlite, "revision", revisionId, "created");
         const rawContent = nextType === "code" ? code : JSON.stringify(document);
         const stored = encodeDocumentContent(rawContent);
+        const oldPropsJson = (this.store.sqlite.prepare("SELECT properties_json FROM notes WHERE id=?").get(noteId) as { properties_json: string } | undefined)?.properties_json ?? "{}";
+        const nextPropsJson = nextType === "code"
+          ? codeProperties(input.codeLanguage ?? old.codeLanguage ?? "plaintext", tagsProperties(input.tags, oldPropsJson))
+          : tagsProperties(input.tags, oldPropsJson);
         const updated = this.store.sqlite.prepare("UPDATE notes SET title=?,type=?,content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text=?,properties_json=?,version=version+1,updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL")
-          .run(title, nextType, stored.data, stored.codec, stored.size, nextType === "code" ? rawContentHash(rawContent) : contentHash(document), nextType === "code" ? code : plainText(document), nextType === "code" ? codeProperties(input.codeLanguage ?? old.codeLanguage ?? "plaintext") : "{}", t, noteId, input.expectedVersion);
+          .run(title, nextType, stored.data, stored.codec, stored.size, nextType === "code" ? rawContentHash(rawContent) : contentHash(document), nextType === "code" ? code : plainText(document), nextPropsJson, t, noteId, input.expectedVersion);
         if (!updated.changes) throw new ConflictError();
         this.index(noteId, title);
         recordChange(this.store.sqlite, "note", noteId, "updated");
@@ -380,9 +394,13 @@ export class NoteServiceBase {
       const titleChanged = title !== old.title;
       const language = input.codeLanguage ?? old.codeLanguage ?? "plaintext";
       const languageChanged = language !== (old.codeLanguage ?? "plaintext");
-      if (!contentChanged && !titleChanged && !languageChanged) return old;
+      const tagsChanged = input.tags !== undefined;
+      if (!contentChanged && !titleChanged && !languageChanged && !tagsChanged) return old;
+      const oldRow = this.store.sqlite.prepare("SELECT properties_json FROM notes WHERE id=?").get(noteId) as { properties_json: string } | undefined;
+      const oldPropsJson = oldRow?.properties_json ?? "{}";
       this.store.sqlite.transaction(() => {
         this.deleteIndex(noteId);
+        const newPropsJson = codeProperties(language, tagsProperties(input.tags, oldPropsJson));
         if (contentChanged) {
           const previous = encodeDocumentContent(typeof old.content === "string" ? old.content : "");
           if (input.createRevision !== false && this.shouldCreateRevision(noteId, t, input.revisionIntervalMs)) {
@@ -393,11 +411,11 @@ export class NoteServiceBase {
           }
           const stored = encodeDocumentContent(code);
           const updated = this.store.sqlite.prepare("UPDATE notes SET title=?,content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text=?,properties_json=?,version=version+1,updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL")
-            .run(title, stored.data, stored.codec, stored.size, rawContentHash(code), code, codeProperties(language), t, noteId, input.expectedVersion);
+            .run(title, stored.data, stored.codec, stored.size, rawContentHash(code), code, newPropsJson, t, noteId, input.expectedVersion);
           if (!updated.changes) throw new ConflictError();
         } else {
           const updated = this.store.sqlite.prepare("UPDATE notes SET title=?,properties_json=?,version=version+1,updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL")
-            .run(title, codeProperties(language), t, noteId, input.expectedVersion);
+            .run(title, newPropsJson, t, noteId, input.expectedVersion);
           if (!updated.changes) throw new ConflictError();
         }
         this.index(noteId, title);
@@ -408,7 +426,8 @@ export class NoteServiceBase {
     const contentChanged =
       input.content !== undefined && contentHash(document) !== contentHash(oldDocument);
     const titleChanged = title !== old.title;
-    if (!contentChanged && !titleChanged) return old;
+    const tagsChanged = input.tags !== undefined;
+    if (!contentChanged && !titleChanged && !tagsChanged) return old;
     this.store.sqlite.transaction(() => {
       this.deleteIndex(noteId);
       if (contentChanged) {
@@ -421,9 +440,12 @@ export class NoteServiceBase {
           recordChange(this.store.sqlite, "revision", revisionId, "created");
         }
         const stored = encodeDocumentContent(JSON.stringify(document));
+        const oldRow = this.store.sqlite.prepare("SELECT properties_json FROM notes WHERE id=?").get(noteId) as { properties_json: string } | undefined;
+        const oldPropsJson = oldRow?.properties_json ?? "{}";
+        const newPropsJson = tagsProperties(input.tags, oldPropsJson);
         const updated = this.store.sqlite
           .prepare(
-            "UPDATE notes SET title=?, content_data=?, content_codec=?, content_size=?, content_hash=?, plain_text=?, version=version+1, updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL",
+            "UPDATE notes SET title=?, content_data=?, content_codec=?, content_size=?, content_hash=?, plain_text=?, properties_json=?, version=version+1, updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL",
           )
           .run(
             title,
@@ -432,17 +454,21 @@ export class NoteServiceBase {
             stored.size,
             contentHash(document),
             plainText(document),
+            newPropsJson,
             t,
             noteId,
             input.expectedVersion,
           );
         if (!updated.changes) throw new ConflictError();
       } else {
+        const oldRow = this.store.sqlite.prepare("SELECT properties_json FROM notes WHERE id=?").get(noteId) as { properties_json: string } | undefined;
+        const oldPropsJson = oldRow?.properties_json ?? "{}";
+        const newPropsJson = tagsProperties(input.tags, oldPropsJson);
         const updated = this.store.sqlite
           .prepare(
-            "UPDATE notes SET title=?, version=version+1, updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL",
+            "UPDATE notes SET title=?, properties_json=?, version=version+1, updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL",
           )
-          .run(title, t, noteId, input.expectedVersion);
+          .run(title, newPropsJson, t, noteId, input.expectedVersion);
         if (!updated.changes) throw new ConflictError();
       }
       if (contentChanged || titleChanged) this.index(noteId, title);
@@ -619,15 +645,6 @@ function attachmentIds(content: NoteContent): Set<string> {
 }
 function rawContentHash(content: string) {
   return createHash("sha256").update(content).digest("hex");
-}
-function readCodeLanguage(propertiesJson: string): string {
-  try {
-    const value = JSON.parse(propertiesJson) as { codeLanguage?: unknown };
-    return typeof value.codeLanguage === "string" && value.codeLanguage ? value.codeLanguage : "plaintext";
-  } catch { return "plaintext"; }
-}
-function codeProperties(codeLanguage: string) {
-  return JSON.stringify({ codeLanguage });
 }
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;

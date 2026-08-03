@@ -59,6 +59,7 @@ export function lcsDiff(a: string[], b: string[]): DiffOp[] {
 
 export type DiffLineView = { type: "context" | "added" | "removed"; oldNo: number | null; newNo: number | null; text: string };
 export type DiffHunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: DiffLineView[] };
+type SplitRow = { old: DiffLineView | null; new: DiffLineView | null };
 
 const CONTEXT_LINES = 3;
 
@@ -114,6 +115,32 @@ export function buildHunks(ops: DiffOp[]): DiffHunk[] {
     });
   }
   return hunks;
+}
+
+/**
+ * Pair adjacent removal/addition runs into rows for the split view. This
+ * mirrors GitHub's side-by-side presentation: a replacement occupies one
+ * red/green row rather than two rows with an empty cell in between.
+ */
+export function buildSplitRows(lines: DiffLineView[]): SplitRow[] {
+  const rows: SplitRow[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (line.type === "context") {
+      rows.push({ old: line, new: line });
+      index += 1;
+      continue;
+    }
+
+    const removed: DiffLineView[] = [];
+    const added: DiffLineView[] = [];
+    while (lines[index]?.type === "removed") removed.push(lines[index++]);
+    while (lines[index]?.type === "added") added.push(lines[index++]);
+    const count = Math.max(removed.length, added.length);
+    for (let row = 0; row < count; row++) rows.push({ old: removed[row] ?? null, new: added[row] ?? null });
+  }
+  return rows;
 }
 
 /**
@@ -192,19 +219,19 @@ export function DiffView({
           </div>
           {mode === "split" ? (
             <div className="revision-hunk-split">
-              {hunk.lines.map((line, li) => (
+              {buildSplitRows(hunk.lines).map((row, li) => (
                 <div className="split-row" key={li}>
                   <code
-                    className={`split-cell old ${line.type === "removed" ? "removed" : line.type === "context" ? "context" : "blank"}`}
+                    className={`split-cell old ${row.old?.type === "removed" ? "removed" : row.old?.type === "context" ? "context" : "blank"}`}
                   >
-                    <span className="ln">{line.type === "added" ? "" : (line.oldNo ?? "")}</span>
-                    <span className="txt">{line.type === "added" ? "" : line.text || " "}</span>
+                    <span className="ln">{row.old?.oldNo ?? ""}</span>
+                    <span className="txt">{row.old?.text || " "}</span>
                   </code>
                   <code
-                    className={`split-cell new ${line.type === "added" ? "added" : line.type === "context" ? "context" : "blank"}`}
+                    className={`split-cell new ${row.new?.type === "added" ? "added" : row.new?.type === "context" ? "context" : "blank"}`}
                   >
-                    <span className="ln">{line.type === "removed" ? "" : (line.newNo ?? "")}</span>
-                    <span className="txt">{line.type === "removed" ? "" : line.text || " "}</span>
+                    <span className="ln">{row.new?.newNo ?? ""}</span>
+                    <span className="txt">{row.new?.text || " "}</span>
                   </code>
                 </div>
               ))}

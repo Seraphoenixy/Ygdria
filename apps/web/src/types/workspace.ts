@@ -4,7 +4,7 @@ export type TreePlacement = {
   parentPlacementId: string | null;
   position: number;
   title: string;
-  type?: "text" | "code" | "file";
+  type?: "text" | "code";
   /** Present for protected notes — the ciphertext payload stored on the server. */
   contentJson?: string;
   isTrashed?: boolean;

@@ -64,11 +64,15 @@ HTTPS 远端服务（形态 B）
 - **内存存储，不持久化**：服务器重启后所有设备令牌失效，需要重新登录或配对。这是刻意设计——保证设备凭据绝不进入数据库同步路径，避免一份库被复制后旧令牌仍然有效。
 - **只保留 `sha256(token)`**：明文 `deviceToken` 和 `pairingToken` 仅在签发时返回一次，之后不再存储。
 - **5 天滑动空闲超时**（`DEVICE_TOKEN_IDLE_TIMEOUT_MS`，固定不可配置）：每次认证请求刷新 `lastActiveAt`；超过 5 天未使用的令牌在下次校验时被删除并返回 `401`。
-- 静态资源与 SPA 壳始终公开；`/api/*` 与 `/etapi/*` 受保护。
+- 静态资源与 SPA 壳始终公开；`/api/*` 与 `/etapi/*` 受保护。`/api/*` 只接受设备令牌；`/etapi/*` 还接受由设备令牌签发、带 scope 的短期 ETAPI 令牌。
 - 公开路径白名单：`/api/v1/health`、`/api/v1/auth/config`、`/api/v1/devices/initialize`、`/api/v1/auth/login/challenge`、`/api/v1/auth/login/verify`、`/api/v1/devices/pair`。
 - 校验通过后把 `device` 挂到请求对象上，供 `/api/v1/devices/me` 等端点读取。
 
 设备凭据不与数据库绑定，因此它不是"用户账户"：它只授权某台设备在当前服务器进程生命周期内（且 5 天内有活动）访问该库。
+
+### 2.3 ETAPI 短期凭据
+
+已认证设备可通过 `POST /api/v1/etapi/sessions` 签发 1～60 分钟有效的短期令牌，并限定为 `notes:read`、`notes:write` 或两者。短期令牌只可调用 `/etapi/*`，明文同样只返回一次，服务端只在内存中保留 SHA-256 摘要；到期、主动撤销、签发设备撤销、主密码变更或服务器重启都会使其失效。接口契约见 [ETAPI：AI 与外部自动化](etapi.md)。
 
 ## 3. 统一主密码模型
 

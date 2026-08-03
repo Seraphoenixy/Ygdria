@@ -20,6 +20,7 @@
   "build": {
     "appId": "com.ygdria.app",
     "productName": "Ygdria",
+    "electronDist": "node_modules/electron/dist",
     "asar": true,
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**"

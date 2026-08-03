@@ -8,7 +8,7 @@ import { buildHunks, lcsDiff, linesFromContent, revertHunk, type DiffHunk, DiffV
 type RevisionHistoryDialogProps = {
   client: YgdriaClient;
   locale: Locale;
-  note: { id: string; type: "text" | "code" | "file"; version: number; isProtected?: boolean; content: unknown };
+  note: { id: string; type: "text" | "code"; version: number; isProtected?: boolean; content: unknown };
   queryClient: QueryClient;
   onClose: () => void;
 };

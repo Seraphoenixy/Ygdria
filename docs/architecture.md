@@ -17,12 +17,12 @@ Ygdria 是单用户、自托管的个人知识库。生产或本地正常使用�
        ├─ /api/v1/auth/login/{challenge,verify}                 ← 公开（SRP-6a 挑战/响应）
        ├─ /api/v1/devices/pair                                   ← 公开（一次性配对）
        ├─ /api/v1        REST（受保护：本地令牌 + Bearer deviceToken）
-       └─ /etapi         导入导出与自动化（受保护：同上）
+       └─ /etapi         AI 与自动化（受保护：deviceToken 或短期 scope 令牌）
              │
              ▼
    ┌─────────────── 设备认证层（onRequest hook）───────────────┐
    │ • 形态 B 强制启用；形态 A 默认关闭（loopback 即信任边界）   │
-   │ • 校验 Authorization: Bearer <deviceToken>                  │
+   │ • /api 校验 deviceToken；/etapi 也接受短期 scope 令牌         │
    │ • Devices（纯内存）只保留 sha256(token)，5 天滑动闲置超时    │
    │ • 公开路径白名单见 auth-and-sync.md §2.2                    │
    └─────────────────────────────────────────────────────────┘

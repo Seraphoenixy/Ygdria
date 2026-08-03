@@ -199,12 +199,17 @@ export function registerNoteRoutes(app: FastifyInstance, deps: NoteRouteDeps) {
     ),
   );
 
-  app.get("/api/v1/search", async (req) =>
-    notes.search(
-      String((req.query as { q?: string }).q ?? ""),
-      String((req.query as { includeArchived?: string }).includeArchived ?? "") === "true",
-    ),
-  );
+  app.get("/api/v1/search", async (req) => {
+    const query = String((req.query as { q?: string }).q ?? "");
+    const includeArchived = String((req.query as { includeArchived?: string }).includeArchived ?? "") === "true";
+    const tagMatch = query.trim().match(/^tag:(.+)$/);
+    if (tagMatch) {
+      return notes.searchByTag(tagMatch[1].trim());
+    }
+    return notes.search(query, includeArchived);
+  });
+
+  app.get("/api/v1/tags", async () => notes.tagStats());
 
   app.get("/api/v1/history", async (req) => {
     const limit = Number((req.query as { limit?: string }).limit ?? 200);

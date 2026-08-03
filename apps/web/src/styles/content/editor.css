@@ -312,10 +312,10 @@
 .ygdria-code-block-gutter {
   position: relative;
   flex-shrink: 0;
-  width: 52px;
+  width: 44px;
   user-select: none;
   padding: 0 0 12px;
-  text-align: right;
+  text-align: left;
   color: #8b8e96;
   font-size: 14px;
   line-height: 1.65;
@@ -324,12 +324,12 @@
 }
 .ygdria-code-block-gutter span {
   display: block;
-  padding: 0 12px 0 16px;
+  padding: 0 0 0 13px;
 }
 .ygdria-code-block-gutter.is-measured span {
   position: absolute;
-  right: 0;
-  padding: 0 12px 0 0;
+  left: 13px;
+  padding: 0;
 }
 .ygdria-code-block-body > pre {
   margin: 0;
@@ -1312,4 +1312,153 @@
 :root[data-theme="dark"] .ygdria-document .ygdria-search-current {
   background: rgba(219, 139, 0, 0.75);
   color: #fff;
+}
+
+/* ── Tag editor ── */
+.tag-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+}
+.tag-editor-readonly { min-height: 26px; }
+.note-content-footer {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+.tag-editor-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  max-width: min(100%, 18rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tag-badge-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.tag-badge-remove:hover {
+  opacity: 1;
+  background: rgba(15, 108, 189, 0.15);
+}
+.tag-more {
+  opacity: 0.7;
+  font-style: italic;
+}
+.tag-editor-input {
+  flex: 1;
+  min-width: 120px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--doc-border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  outline: none;
+}
+.tag-editor-input:focus {
+  border-color: var(--color-accent);
+}
+.tag-editor-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tag-editor-error {
+  width: 100%;
+  margin: 0;
+  color: #cf222e;
+  font-size: 12px;
+}
+.tag-display {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+/* ── Search page tags ── */
+.search-result-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+.search-page-tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 0;
+}
+.search-page-tag-suggestion {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--doc-border);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--doc-muted);
+  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  cursor: pointer;
+}
+.search-page-tag-suggestion:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+/* The tag footer stays at the document's end (it is intentionally not sticky),
+   but its controls need phone-sized hit areas and keyboard/safe-area clearance. */
+.phone .note-content-footer {
+  padding-bottom: max(12px, var(--sab));
+  scroll-margin-bottom: calc(var(--mt-tabbar-h) + var(--sab));
+}
+.phone .tag-editor {
+  gap: 8px;
+  min-height: 44px;
+}
+.phone .tag-editor-input {
+  min-width: 100%;
+  height: 44px;
+  font-size: 16px;
+}
+.phone .tag-badge-remove {
+  width: 32px;
+  height: 32px;
+  margin: -5px -6px -5px 0;
+}
+.phone .search-page-tag-suggestion {
+  min-height: 40px;
+  padding-inline: 14px;
 }

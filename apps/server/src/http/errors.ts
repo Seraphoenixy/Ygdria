@@ -42,3 +42,18 @@ export function isPulledRemoteWrite(
 ) {
   return Boolean(localToken) && req.headers["x-ygdria-sync-origin"] === "remote";
 }
+
+/**
+ * Returned when a sync peer has been silent long enough that the server has
+ * gated it behind a mandatory snapshot re-baseline. The peer must rebuild from
+ * `/api/v1/sync/snapshot` and confirm its cursor before incremental
+ * pull/push is accepted again. Carries `code: SYNC_REBASELINE_REQUIRED` so the
+ * HTTP client can branch without matching message text.
+ */
+export class SyncRebaselineRequiredError extends Error {
+  statusCode = 409;
+  code = "SYNC_REBASELINE_REQUIRED";
+  constructor(public peerId: string) {
+    super("Sync peer must re-baseline from the full snapshot before resuming incremental sync");
+  }
+}

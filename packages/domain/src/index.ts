@@ -4,3 +4,4 @@ export { ConflictError, NotFoundError } from "./note-service-base.js";
 export * from "./attachment-service.js";
 export * from "./relation-service.js";
 export * from "./devices.js";
+export * from "./properties-utils.js";

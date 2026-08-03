@@ -1,4 +1,14 @@
-import type { NoteContent } from "@ygdria/shared";
+import type { NoteContent, SyncMaintenanceStats } from "@ygdria/shared";
+
+export type EtapiScope = "notes:read" | "notes:write";
+export type EtapiSession = {
+  id: string;
+  label: string;
+  scopes: EtapiScope[];
+  createdAt: number;
+  expiresAt: number;
+  issuedByDeviceId: string | null;
+};
 
 /** A sync change the server rejected because last-write-wins kept a newer
  * local version. Surfaced so clients can flag a divergence to the user. */
@@ -94,6 +104,22 @@ export class YgdriaClient {
     if (this.deviceToken) headers["Authorization"] = `Bearer ${this.deviceToken}`;
     return fetch(this.baseUrl + path, { headers });
   }
+  private async requestText(path: string): Promise<string> {
+    const headers: Record<string, string> = {};
+    if (this.token) headers["X-Ygdria-Local-Token"] = this.token;
+    if (this.deviceToken) headers["Authorization"] = `Bearer ${this.deviceToken}`;
+    const response = await fetch(this.baseUrl + path, { headers });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as
+        | { error?: { code?: string; message?: string } }
+        | null;
+      const error = new Error(body?.error?.message ?? response.statusText);
+      (error as Error & { statusCode?: number; code?: string }).statusCode = response.status;
+      (error as Error & { statusCode?: number; code?: string }).code = body?.error?.code;
+      throw error;
+    }
+    return response.text();
+  }
   tree() {
     return this.request<any[]>("/api/v1/tree");
   }
@@ -125,6 +151,7 @@ export class YgdriaClient {
     type?: "text" | "code";
     content?: NoteContent;
     code?: string;
+    tags?: string[];
   }) {
     return this.request<any>("/api/v1/notes", {
       method: "POST",
@@ -144,7 +171,8 @@ export class YgdriaClient {
    * Metadata-only mode is opt-in so existing consumers retain the complete
    * snapshot contract. New sync flows should request metadata-only batches.
    */
-  syncChanges(cursor = 0, limit = 200, maxBytes = 4 * 1024 * 1024, metadataOnly = false) {
+  syncChanges(cursor = 0, limit = 200, maxBytes = 4 * 1024 * 1024, metadataOnly = false, peerId?: string) {
+    const peer = peerId ? `&peerId=${encodeURIComponent(peerId)}` : "";
     return this.request<{
       cursor: number;
       hasMore: boolean;
@@ -158,7 +186,7 @@ export class YgdriaClient {
       }>;
       maxChangeId: number;
       stats?: { serializedBytes: number; returnedEntities: number; coalescedChanges: number };
-    }>(`/api/v1/sync/changes?cursor=${cursor}&limit=${limit}&maxBytes=${maxBytes}${metadataOnly ? "&metadataOnly=1" : ""}`);
+    }>(`/api/v1/sync/changes?cursor=${cursor}&limit=${limit}&maxBytes=${maxBytes}${metadataOnly ? "&metadataOnly=1" : ""}${peer}`);
   }
   async pushSyncChanges(
     changes: Array<{
@@ -170,8 +198,9 @@ export class YgdriaClient {
       data: Record<string, unknown> | null;
     }>,
     syncOrigin?: "remote",
+    peerId?: string,
   ) {
-    const json = JSON.stringify({ changes });
+    const json = JSON.stringify(peerId ? { changes, peerId } : { changes });
     let body: BodyInit = json;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -210,11 +239,12 @@ export class YgdriaClient {
       `/api/v1/sync/cursor?peerId=${encodeURIComponent(peerId)}`,
     );
   }
-  syncSnapshot(cursor = 0, limit = 200, metadataOnly = false) {
+  syncSnapshot(cursor = 0, limit = 200, metadataOnly = false, peerId?: string) {
+    const peer = peerId ? `&peerId=${encodeURIComponent(peerId)}` : "";
     return this.request<{
       cursor: number; hasMore: boolean; maxChangeId: number;
       changes: Array<{ changeId: number; entityType: string; entityId: string; changeKind: string; createdAt: number; data: Record<string, unknown> | null }>;
-    }>(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}`);
+    }>(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}${peer}`);
   }
   /** Record every current entity as a fresh baseline for a newly initialized peer. */
   rebuildSyncBaseline() {
@@ -296,6 +326,7 @@ export class YgdriaClient {
       content?: NoteContent;
       code?: string;
       codeLanguage?: string;
+      tags?: string[];
       contentCiphertext?: string;
       revisionIntervalMs?: number;
       expectedVersion: number;
@@ -376,7 +407,63 @@ export class YgdriaClient {
     });
   }
   content(id: string, format: "markdown" | "json" = "markdown") {
-    return this.request<any>(`/etapi/notes/${id}/content?format=${format}`);
+    return format === "json"
+      ? this.request<any>(`/etapi/notes/${id}/content?format=json`)
+      : this.requestText(`/etapi/notes/${id}/content?format=markdown`);
+  }
+  etapiTree(includeArchived = false) {
+    return this.request<{ items: any[] }>(
+      `/etapi/tree?includeArchived=${includeArchived ? "true" : "false"}`,
+    );
+  }
+  etapiNote(id: string, format: "markdown" | "json" = "markdown") {
+    return this.request<any>(`/etapi/notes/${id}?format=${format}`);
+  }
+  etapiSearch(input: { q?: string; tag?: string; includeArchived?: boolean }) {
+    const params = new URLSearchParams();
+    if (input.q) params.set("q", input.q);
+    if (input.tag) params.set("tag", input.tag);
+    params.set("includeArchived", input.includeArchived ? "true" : "false");
+    return this.request<{ items: any[] }>(`/etapi/search?${params}`);
+  }
+  etapiTags() {
+    return this.request<{ items: Array<{ tag: string; count: number }> }>("/etapi/tags");
+  }
+  createEtapiNote(input: {
+    title: string;
+    parentPlacementId?: string;
+    type?: "text" | "code";
+    content?: string;
+    tags?: string[];
+  }) {
+    return this.request<any>("/etapi/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+  updateEtapiNote(
+    id: string,
+    input: {
+      expectedVersion: number;
+      title?: string;
+      content?: string;
+      tags?: string[];
+      codeLanguage?: string;
+    },
+  ) {
+    return this.request<any>(`/etapi/notes/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+  moveEtapiPlacement(id: string, parentPlacementId: string, position = 0) {
+    return this.request<{ ok: true }>(`/etapi/placements/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parentPlacementId, position }),
+    });
   }
   putMarkdown(id: string, markdown: string, expectedVersion: number, importMode = false) {
     return this.request<any>(`/etapi/notes/${id}/content`, {
@@ -552,6 +639,23 @@ export class YgdriaClient {
       } | null;
     }>("/api/v1/maintenance/status");
   }
+  /**
+   * Capacity report for the sync change log, cursors, tombstones and the
+   * durable attachment cleanup queue. Read-only.
+   */
+  syncMaintenanceStatus() {
+    return this.request<{
+      stats: SyncMaintenanceStats;
+      lastRun: SyncMaintenanceStats | null;
+      peers: Array<{
+        peerId: string;
+        lastAdvanceId: number;
+        advancedAt: number;
+        lastActiveAt: number;
+        expired: boolean;
+      }>;
+    }>("/api/v1/maintenance/sync-status");
+  }
   deletePlacement(id: string) {
     return this.request<{ undoId: string }>(`/api/v1/placements/${id}`, { method: "DELETE" });
   }
@@ -564,6 +668,9 @@ export class YgdriaClient {
     return this.request<any[]>(
       `/api/v1/search?q=${encodeURIComponent(q)}&includeArchived=${includeArchived}`,
     );
+  }
+  tagStats() {
+    return this.request<Array<{ tag: string; count: number }>>("/api/v1/tags");
   }
   history(limit = 200, includeArchived = false) {
     return this.request<
@@ -680,6 +787,25 @@ export class YgdriaClient {
         body: JSON.stringify({ ttlMs }),
       },
     );
+  }
+  createEtapiSession(input: {
+    label: string;
+    scopes: EtapiScope[];
+    ttlSeconds?: number;
+  }) {
+    return this.request<EtapiSession & { accessToken: string }>("/api/v1/etapi/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+  listEtapiSessions() {
+    return this.request<{ sessions: EtapiSession[] }>("/api/v1/etapi/sessions");
+  }
+  revokeEtapiSession(id: string) {
+    return this.request<{ revoked: string }>(`/api/v1/etapi/sessions/${id}`, {
+      method: "DELETE",
+    });
   }
   revokeDevice(id: string) {
     return this.request<{ revoked: string }>(`/api/v1/devices/${id}`, { method: "DELETE" });

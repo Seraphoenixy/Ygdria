@@ -71,6 +71,16 @@ import { configureShareReceiver } from "../lib/shareReceiver";
 // Local development uses Vite's same-origin proxy; deployments can set VITE_API_URL.
 const SESSION_DEVICE_TOKEN_KEY = "ygdria.device-token";
 const DESKTOP_ONBOARDING_COMPLETE_KEY = "ygdria.desktop-onboarding-complete";
+const TREE_PANEL_MIN_WIDTH = 220;
+const TREE_PANEL_MAX_WIDTH = 420;
+const TREE_PANEL_VIEWPORT_RATIO = 0.2;
+
+function defaultTreePanelWidth(viewportWidth: number) {
+  return Math.min(
+    TREE_PANEL_MAX_WIDTH,
+    Math.max(TREE_PANEL_MIN_WIDTH, Math.round(viewportWidth * TREE_PANEL_VIEWPORT_RATIO)),
+  );
+}
 
 /** Persist the freshly issued device token to every location a later launch
  *  might read from. `sessionStorage` is enough for the same-tab refresh path
@@ -145,9 +155,8 @@ export function App({
   const [treeCollapsed, setTreeCollapsed] = useState(
     () => typeof window !== "undefined" && (isNativePhone() || window.innerWidth <= 680),
   );
-  const [treePanelWidth, setTreePanelWidth] = useState(() =>
-    Math.min(360, Math.max(180, Math.round(window.innerWidth * 0.18))),
-  );
+  const [treePanelWidth, setTreePanelWidth] = useState(() => defaultTreePanelWidth(window.innerWidth));
+  const treePanelManuallyResizedRef = useRef(false);
   // On the phone / compact layout the inspector is an off-canvas drawer, so it
   // starts collapsed too — otherwise, the moment `note.data` resolves,
   // `showInspector` flips true and the right drawer would cover the document
@@ -200,6 +209,19 @@ export function App({
     const onResize = () => apply();
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Keep the desktop tree at a viewport-relative default while the window is
+  // being resized. Once the user drags the separator, their explicit choice
+  // takes precedence for the rest of the session. Phone layouts use their own
+  // drawer width and are intentionally unaffected by this desktop default.
+  useEffect(() => {
+    const applyDefaultWidth = () => {
+      if (treePanelManuallyResizedRef.current || isPhoneLayout()) return;
+      setTreePanelWidth(defaultTreePanelWidth(window.innerWidth));
+    };
+    window.addEventListener("resize", applyDefaultWidth);
+    return () => window.removeEventListener("resize", applyDefaultWidth);
   }, []);
 
   // Keep the inspector's collapsed state in sync with the layout mode. In the
@@ -795,10 +817,16 @@ export function App({
 
   const resizeTreePanel = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    treePanelManuallyResizedRef.current = true;
     const startX = event.clientX;
     const startWidth = treePanelWidth;
     const onPointerMove = (moveEvent: PointerEvent) => {
-      setTreePanelWidth(Math.min(420, Math.max(220, startWidth + moveEvent.clientX - startX)));
+      setTreePanelWidth(
+        Math.min(
+          TREE_PANEL_MAX_WIDTH,
+          Math.max(TREE_PANEL_MIN_WIDTH, startWidth + moveEvent.clientX - startX),
+        ),
+      );
     };
     const onPointerUp = () => {
       document.removeEventListener("pointermove", onPointerMove);
@@ -1391,6 +1419,7 @@ export function App({
             }}
             syncRunsAutomatically={!isDesktopApp}
             canEditMobileEndpoint={Capacitor.isNativePlatform()}
+            etapiTokenManagementAvailable={isDesktopApp}
             onProtectedSessionTimeoutChange={handleProtectedSessionTimeoutChange}
             onMaintainDatabase={maintainDatabase}
             noteIsLoading={note.isLoading}

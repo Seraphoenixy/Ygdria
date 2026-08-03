@@ -7,6 +7,8 @@ import type { Locale } from "../lib/i18n";
 import { t } from "../lib/i18n";
 import { loadRemoteCredential, saveRemoteCredential } from "../lib/credentialStorage";
 import { readSettings } from "../features/settings/settingsStore";
+import { SYNC_REBASELINE_REQUIRED } from "@ygdria/shared";
+import { localSyncPeerId, isRebaselineRequiredError } from "../lib/syncIdentity";
 import {
   assertAuthConfigSupported,
   deriveAccessSecret,
@@ -31,7 +33,7 @@ export type SyncConflict = {
   peerId: string;
   detectedAt: number;
   title: string;
-  noteType: "text" | "code" | "file";
+  noteType: "text" | "code";
   isProtected: boolean;
   mineContent: unknown;
   mineVersion: number;
@@ -201,11 +203,22 @@ export function useSync({
         client.getSyncCursor(`out:${peer}`),
         client.getSyncCursor(`in:${peer}`),
       ]);
+      // Probing the remote under our own peer id doubles as the liveness ping
+      // for a device that only ever pulls: a peer that stays caught up never
+      // calls /advance, so without this it would eventually look abandoned and
+      // be pushed back onto the snapshot baseline for no reason.
       const [outgoing, incoming] = await Promise.all([
         client.syncChanges(outgoingCursor.lastAdvanceId, 1, undefined, true),
-        remoteClient.syncChanges(incomingCursor.lastAdvanceId, 1, undefined, true),
+        remoteClient
+          .syncChanges(incomingCursor.lastAdvanceId, 1, undefined, true, localSyncPeerId())
+          .catch((error: unknown) => {
+            // Being gated is pending work, not a broken status check: report it
+            // as "pending" so the next sync run performs the re-baseline.
+            if (isRebaselineRequiredError(error, SYNC_REBASELINE_REQUIRED)) return null;
+            throw error;
+          }),
       ]);
-      return outgoing.changes.length || incoming.changes.length ? "pending" : "synced";
+      return !incoming || outgoing.changes.length || incoming.changes.length ? "pending" : "synced";
     },
     [client, remoteClient],
   );
@@ -343,7 +356,7 @@ export function useSync({
             return {
               ...base,
               title: typeof note.title === "string" ? note.title : "",
-              noteType: note.type === "code" ? "code" : note.type === "file" ? "file" : "text",
+              noteType: note.type === "code" ? "code" : "text",
               isProtected: Boolean(note.isProtected),
               mineContent: note.isProtected ? null : note.content,
               mineVersion: typeof note.version === "number" ? note.version : 0,
@@ -363,54 +376,90 @@ export function useSync({
           mineUpdatedAt: 0,
         };
       };
-      let incomingCursor = await client.getSyncCursor(`in:${peer}`);
-      if (incomingCursor.advancedAt === null) {
-        let snapshot = await remoteClient.syncSnapshot(0, 500, true);
+      // Identity this device reports to the remote. The remote's own key for us
+      // is `device token + this id`, which is what lets the server distinguish
+      // an active peer from an abandoned one.
+      const selfPeer = localSyncPeerId();
+      /**
+       * Rebuild the local mirror from the remote's full snapshot, then confirm
+       * the resulting cursor back to the remote.
+       *
+       * This serves both the first-run baseline and the recovery path for a
+       * peer the server has gated with SYNC_REBASELINE_REQUIRED. The closing
+       * cursor confirmation is what lifts that gate and re-registers this
+       * device, so it must run even when the snapshot came back empty.
+       */
+      const rebaselineFromSnapshot = async () => {
+        let snapshot = await remoteClient.syncSnapshot(0, 500, true, selfPeer);
         while (snapshot.changes.length) {
           setSyncProgress(`${t(locale, "syncDownloadBaseline")} · ${snapshot.changes.length}`);
           const hydrated = await hydrateNoteContents(snapshot.changes, remoteClient);
           await client.pushSyncChanges(hydrated, "remote");
           await copyAttachments(snapshot.changes, remoteClient, client, "remote");
           if (!snapshot.hasMore) break;
-          snapshot = await remoteClient.syncSnapshot(snapshot.cursor, 500, true);
+          snapshot = await remoteClient.syncSnapshot(snapshot.cursor, 500, true, selfPeer);
         }
         await client.advanceSyncCursor(`in:${peer}`, snapshot.maxChangeId);
-        incomingCursor = await client.getSyncCursor(`in:${peer}`);
-      }
-      const outgoingCursor = await client.getSyncCursor(`out:${peer}`);
-      let outgoing = await client.syncChanges(outgoingCursor.lastAdvanceId, 500, undefined, true);
-      while (outgoing.changes.length) {
-        setSyncProgress(
-          `${t(locale, "syncUploadMeta")} · ${outgoing.changes.length} · ${formatSyncBytes(outgoing.stats?.serializedBytes ?? 0)}`,
-        );
-        setSyncItemCount((current) => ({ out: outgoing.changes.length, in: current.in }));
-        const hydrated = await hydrateNoteContents(outgoing.changes, client);
-        const pushResult = await remoteClient.pushSyncChanges(hydrated);
-        for (const rejected of pushResult.rejected) {
-          if (rejected.entityType === "note") builtConflicts.push(await buildConflict(rejected, peer));
+        await remoteClient.advanceSyncCursor(selfPeer, snapshot.maxChangeId);
+      };
+      const runSyncPass = async () => {
+        let incomingCursor = await client.getSyncCursor(`in:${peer}`);
+        if (incomingCursor.advancedAt === null) {
+          await rebaselineFromSnapshot();
+          incomingCursor = await client.getSyncCursor(`in:${peer}`);
         }
-        await copyAttachments(outgoing.changes, client, remoteClient);
-        await client.advanceSyncCursor(`out:${peer}`, outgoing.cursor);
-        if (!outgoing.hasMore) break;
-        outgoing = await client.syncChanges(outgoing.cursor, 500, undefined, true);
-      }
-      let incoming = await remoteClient.syncChanges(
-        incomingCursor.lastAdvanceId,
-        500,
-        undefined,
-        true,
-      );
-      while (incoming.changes.length) {
-        setSyncProgress(
-          `${t(locale, "syncDownloadMeta")} · ${incoming.changes.length} · ${formatSyncBytes(incoming.stats?.serializedBytes ?? 0)}`,
+        const outgoingCursor = await client.getSyncCursor(`out:${peer}`);
+        let outgoing = await client.syncChanges(outgoingCursor.lastAdvanceId, 500, undefined, true);
+        while (outgoing.changes.length) {
+          setSyncProgress(
+            `${t(locale, "syncUploadMeta")} · ${outgoing.changes.length} · ${formatSyncBytes(outgoing.stats?.serializedBytes ?? 0)}`,
+          );
+          setSyncItemCount((current) => ({ out: outgoing.changes.length, in: current.in }));
+          const hydrated = await hydrateNoteContents(outgoing.changes, client);
+          const pushResult = await remoteClient.pushSyncChanges(hydrated, undefined, selfPeer);
+          for (const rejected of pushResult.rejected) {
+            if (rejected.entityType === "note")
+              builtConflicts.push(await buildConflict(rejected, peer));
+          }
+          await copyAttachments(outgoing.changes, client, remoteClient);
+          await client.advanceSyncCursor(`out:${peer}`, outgoing.cursor);
+          if (!outgoing.hasMore) break;
+          outgoing = await client.syncChanges(outgoing.cursor, 500, undefined, true);
+        }
+        let incoming = await remoteClient.syncChanges(
+          incomingCursor.lastAdvanceId,
+          500,
+          undefined,
+          true,
+          selfPeer,
         );
-        setSyncItemCount((current) => ({ out: current.out, in: incoming.changes.length }));
-        const hydrated = await hydrateNoteContents(incoming.changes, remoteClient);
-        await client.pushSyncChanges(hydrated, "remote");
-        await copyAttachments(incoming.changes, remoteClient, client, "remote");
-        await client.advanceSyncCursor(`in:${peer}`, incoming.cursor);
-        if (!incoming.hasMore) break;
-        incoming = await remoteClient.syncChanges(incoming.cursor, 500, undefined, true);
+        while (incoming.changes.length) {
+          setSyncProgress(
+            `${t(locale, "syncDownloadMeta")} · ${incoming.changes.length} · ${formatSyncBytes(incoming.stats?.serializedBytes ?? 0)}`,
+          );
+          setSyncItemCount((current) => ({ out: current.out, in: incoming.changes.length }));
+          const hydrated = await hydrateNoteContents(incoming.changes, remoteClient);
+          await client.pushSyncChanges(hydrated, "remote");
+          await copyAttachments(incoming.changes, remoteClient, client, "remote");
+          await client.advanceSyncCursor(`in:${peer}`, incoming.cursor);
+          // Mirror the position back to the remote. Without this the server
+          // never learns that anyone consumed the batch, so its change log and
+          // the tombstones behind it could never be pruned.
+          await remoteClient.advanceSyncCursor(selfPeer, incoming.cursor);
+          if (!incoming.hasMore) break;
+          incoming = await remoteClient.syncChanges(incoming.cursor, 500, undefined, true, selfPeer);
+        }
+      };
+      try {
+        await runSyncPass();
+      } catch (error) {
+        if (!isRebaselineRequiredError(error, SYNC_REBASELINE_REQUIRED)) throw error;
+        // The server dropped this device's cursor after a long silence and now
+        // refuses incremental traffic from it. Rebuild from the snapshot rather
+        // than reporting a failure the user has no way to act on.
+        setSyncProgress(t(locale, "syncRebaselining"));
+        await rebaselineFromSnapshot();
+        await runSyncPass();
       }
       if (builtConflicts.length && syncEpoch === syncEpochRef.current) {
         setSyncConflictsByPeer((current) => {

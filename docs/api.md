@@ -5,7 +5,7 @@
 所有应用 API 使用 `/api/v1` 前缀。认证有两层（详见 [认证、受保护笔记与同步边界](auth-and-sync.md)）：
 
 - `X-Ygdria-Local-Token`：本地共享令牌，由 `buildApp({ localToken })` 启用时强制校验；形态 A 默认不设置。
-- `Authorization: Bearer <deviceToken>`：独立服务始终启用。`/api/v1/health`、`/api/v1/auth/config`、`/api/v1/devices/initialize`、`/api/v1/auth/login/challenge`、`/api/v1/auth/login/verify`、`/api/v1/devices/pair` 为公开路径，其余 `/api/*` 与 `/etapi/*` 均需设备令牌。设备令牌采用统一的 **主密码派生 + PAKE（SRP-6a）挑战响应** 模型签发，详见 [认证、受保护笔记与同步边界](auth-and-sync.md)。
+- `Authorization: Bearer <deviceToken>`：独立服务始终启用。`/api/v1/health`、`/api/v1/auth/config`、`/api/v1/devices/initialize`、`/api/v1/auth/login/challenge`、`/api/v1/auth/login/verify`、`/api/v1/devices/pair` 为公开路径，其余 `/api/*` 需设备令牌。`/etapi/*` 可使用设备令牌或具有对应 scope 的短期 ETAPI 令牌；短期令牌的签发和完整接口见 [ETAPI：AI 与外部自动化](etapi.md)。设备令牌采用统一的 **主密码派生 + PAKE（SRP-6a）挑战响应** 模型签发，详见 [认证、受保护笔记与同步边界](auth-and-sync.md)。
 - `X-Ygdria-Sync-Origin`：可选请求头，仅形态 A（桌面内嵌）有效。值为 `remote` 时，服务端跳过该请求的 `sync_change_log` 写入，避免远端拉取的变更在本地再次产生同步记录形成循环。形态 B 忽略此头部。
 
 主要资源：
@@ -21,6 +21,7 @@
 | `GET/PATCH`    | `/api/v1/notes/:id`                    | 读取、更新笔记。`PATCH` 可提交 `content`（明文 JSON）或 `contentCiphertext`（受保护笔记密文）。 |
 | `PATCH`        | `/api/v1/notes/:id/archive`            | 请求 `{ "archived": boolean }` 以归档或取消归档。 |
 | `GET`          | `/api/v1/notes/:id/revisions`          | 读取该笔记的正文修订历史。                  |
+| `GET`          | `/api/v1/notes/:id/revisions/:revisionId` | 读取指定 revision 的正文内容。 |
 | `POST`         | `/api/v1/notes/:id/revisions/:revisionId/restore` | 按 `expectedVersion` 恢复正文历史版本。 |
 | `POST`         | `/api/v1/revisions/cleanup`            | 裁剪超出保留上限的修订历史；请求体 `{ limit }`，`limit` 为 `-1`（保留全部）或非负整数；返回裁剪结果。 |
 | `GET`          | `/api/v1/history?limit=200&includeArchived=false` | 汇总普通与回收站笔记的最近修改记录及根路径；`includeArchived=true` 时包含归档笔记。 |
@@ -29,7 +30,6 @@
 | `POST`         | `/api/v1/notes/:id/restore`            | 恢复该笔记对应的最近一次可撤销删除动作。     |
 | `DELETE`       | `/api/v1/notes/:id/permanent`          | 永久删除笔记并触发数据库级联清理，返回 `{ attachmentStorageKeys }`。 |
 | `DELETE`       | `/api/v1/trash`                        | 永久删除回收站中所有笔记，返回 `{ count, attachmentStorageKeys }`。 |
-| `POST`         | `/api/v1/notes/:id/attachments`        | 上传附件：请求体 `{ filename, dataBase64, mimeType? }`，返回 `{ id, url }`。 |
 | `GET`          | `/api/v1/attachments/:id`              | 下载附件文件（字节流，MIME 类型由元数据决定）。 |
 | `GET`          | `/api/v1/attachments/by-hash/:hash`    | 按 SHA-256 哈希下载附件字节流（同步专用，去重传输）。 |
 | `POST`         | `/api/v1/attachments/by-hash/:hash`    | 按 SHA-256 哈希上传附件字节流（流式请求体，查询参数 `noteId`、`filename`）；已存在时只建立链接并返回 `existed: true`。 |
@@ -42,6 +42,7 @@
 | `DELETE`       | `/api/v1/relations/:id`                | 删除关系（由数据库触发器自动写同步墓碑）。 |
 | `POST`         | `/api/v1/placements`                   | 新增 placement，用于 clone，返回 `{ id, noteId, parentPlacementId, position }`。 |
 | `PATCH/DELETE` | `/api/v1/placements/:id`               | 移动（`PATCH`，返回 `{ ok: true }`）或删除（`DELETE`，返回撤销记录 ID）树中的位置。 |
+| `PATCH`        | `/api/v1/placements`                   | 批量移动多个 placement；请求体 `{ placementIds, parentPlacementId, position }`，返回 `{ ok: true }`。 |
 | `POST`         | `/api/v1/placement-deletions/:id/undo` | 撤销指定 placement 删除。                   |
 | `GET`          | `/api/v1/search?q=...&includeArchived=false` | FTS5 全文搜索；`includeArchived=true` 时包含归档笔记。受保护笔记不进 FTS，永远搜不到。 |
 | `GET`          | `/api/v1/archived`                     | 按归档时间倒序读取未删除的归档笔记；受保护笔记不在此列表。 |
@@ -137,7 +138,7 @@
 
 ## 2. ETAPI
 
-ETAPI 面向导入导出、自动化和外部脚本。正文接口：
+ETAPI 面向 AI、导入导出、自动化和外部脚本。它支持短期 scope 令牌、层级、笔记、搜索、tag、创建、更新和 placement 移动；完整契约和示例见 [ETAPI：AI 与外部自动化](etapi.md)。正文兼容接口：
 
 ```text
 GET /etapi/notes/:id/content?format=markdown   默认
@@ -148,7 +149,7 @@ PUT /etapi/notes/:id/content
 
 `PUT` 的 `Content-Type: text/markdown` 会走：Markdown 解析 → Tiptap JSON Schema → 纯文本提取 → 修订 + FTS 更新。`Content-Type: application/json` 接受经过校验的 Tiptap JSON。
 
-ZIP 导入在客户端解压：子目录会转换为笔记层级，Markdown 文件成为对应子笔记。Markdown 的相对图片引用会上传为该笔记附件，并改写为 `/api/v1/attachments/:id` URL。附件写入使用 `POST /api/v1/notes/:id/attachments`，请求体为文件名和 Base64 数据；`GET /api/v1/attachments/:id` 返回附件字节流。
+ZIP 导入在客户端解压：子目录会转换为笔记层级，Markdown 文件成为对应子笔记。Markdown 的相对图片引用会上传为该笔记附件，并改写为 `/api/v1/attachments/:id` URL。附件写入使用 `POST /api/v1/attachments/by-hash/:hash`；`GET /api/v1/attachments/:id` 返回附件字节流。
 
 ## 3. Markdown 约定
 

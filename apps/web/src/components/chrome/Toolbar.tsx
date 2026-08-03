@@ -20,7 +20,7 @@ type ToolbarProps = {
   inspectorCollapsed?: boolean;
   onToggleInspector?: () => void;
   onToggleTree?: () => void;
-  noteType?: "text" | "code" | "file";
+  noteType?: "text" | "code";
   canConvertNote?: boolean;
   onConvertNote?: () => void;
   canViewRevisionHistory?: boolean;

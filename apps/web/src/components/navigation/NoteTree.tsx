@@ -48,10 +48,18 @@ export function NoteTree({
     }
     return true;
   };
-  const dropModeFor = (event: DragEvent<HTMLDivElement>): DropMode => {
+  const dropModeFor = (event: DragEvent<HTMLDivElement>, target: TreePlacement, sourceIds: string[]): DropMode => {
     const { top, height } = event.currentTarget.getBoundingClientRect();
     const offset = (event.clientY - top) / height;
-    return offset < 0.25 ? "before" : offset > 0.75 ? "after" : "inside";
+    const rawMode = offset < 0.25 ? "before" : offset > 0.75 ? "after" : "inside";
+    // When reordering siblings, the middle of a row should still mean a
+    // sibling insertion. Otherwise a natural drop over the earlier sibling
+    // becomes an unintended nested move instead of moving up the list.
+    const sameParent = sourceIds.length > 0 && sourceIds.every(
+      (sourceId) => placements.find((placement) => placement.placementId === sourceId)?.parentPlacementId === target.parentPlacementId,
+    );
+    if (rawMode === "inside" && sameParent) return offset < 0.5 ? "before" : "after";
+    return rawMode;
   };
   const destinationFor = (target: TreePlacement, mode: DropMode, sourceIds: string[]) => {
     const parentPlacementId = mode === "inside" ? target.placementId : target.parentPlacementId;
@@ -103,7 +111,7 @@ export function NoteTree({
             const sourceIds = draggingIds ?? (() => {
               try { return JSON.parse(event.dataTransfer.getData("text/plain")) as string[]; } catch { return []; }
             })();
-            const mode = dropModeFor(event);
+            const mode = dropModeFor(event, placement, sourceIds);
             const parentId = mode === "inside" ? placement.placementId : placement.parentPlacementId;
             if (!sourceIds.length || !parentId || sourceIds.some((sourceId) => !canMoveTo(sourceId, parentId)) || (placement.isTrash || (placement.isSystem && mode !== "inside"))) return;
             event.preventDefault();
@@ -118,7 +126,7 @@ export function NoteTree({
             const sourceIds = draggingIds ?? (() => {
               try { return JSON.parse(event.dataTransfer.getData("text/plain")) as string[]; } catch { return []; }
             })();
-            const mode = dropModeFor(event);
+            const mode = dropModeFor(event, placement, sourceIds);
             const destination = sourceIds.length ? destinationFor(placement, mode, sourceIds) : undefined;
             if (sourceIds.length && destination) onMove(sourceIds, destination.parentPlacementId, destination.position);
             setDraggingIds(undefined);

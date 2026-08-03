@@ -6,16 +6,18 @@ import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement } from "../../types/workspace";
 import { ProtectedClientSession, type ProtectedPayload } from "../../lib/client-crypto";
 import { ChildNoteList } from "./ChildNoteList";
+import { TagEditor } from "./TagEditor";
 
 export type NoteContentData = {
   id: string;
   title: string;
-  type?: "text" | "code" | "file";
+  type?: "text" | "code";
   codeLanguage?: string;
   content: any;
   contentCiphertext?: string;
   archivedAt?: string | null;
   isProtected?: boolean;
+  tags?: string[];
 };
 
 export function NoteContent({ note, editing, isTrashed, locale, childNotes, childrenByParent, client, onSaveContent, onSaveTitle, onOpenChild, onChildMore, onUnarchive, onEditorReady, session, markdownView, onUnlock, onUploadError }: {
@@ -39,6 +41,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
 }) {
   const [decryptedPayload, setDecryptedPayload] = useState<ProtectedPayload | null>(null);
   const [title, setTitle] = useState(note.title);
+  const [tagDraft, setTagDraft] = useState<string[] | null>(null);
   const decryptingRef = useRef(false);
 
   // Decrypt protected note content when note or session state changes
@@ -68,6 +71,15 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
     ? readCodeLanguage(decryptedPayload?.propertiesJson)
     : note.codeLanguage ?? "plaintext";
   const isLockedProtected = note.isProtected && !session?.isUnlocked;
+  const persistedTags = note.isProtected
+    ? readTagsFromProperties(decryptedPayload?.propertiesJson)
+    : (note.tags ?? []);
+
+  // Tag writes are asynchronous. Keep an optimistic footer value so adding or
+  // removing a tag redraws immediately instead of waiting for the note query.
+  useEffect(() => {
+    setTagDraft(null);
+  }, [note.id, note.tags, decryptedPayload?.propertiesJson]);
 
   const handleSaveTitle = (nextTitle: string) => {
     if (note.isProtected && session?.isUnlocked) {
@@ -79,14 +91,32 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
     }
   };
 
-  const handleSaveContent = (content: any, codeLanguage?: string) => {
+  const handleSaveContent = (content: any, codeLanguage?: string, tags?: string[]) => {
     if (note.isProtected && session?.isUnlocked) {
-      const payload = { title: decryptedPayload?.title ?? "", content, propertiesJson: codeLanguage ? JSON.stringify({ codeLanguage }) : decryptedPayload?.propertiesJson ?? "{}" };
+      const currentProperties = safeParseProperties(decryptedPayload?.propertiesJson);
+      const nextProperties = { ...currentProperties };
+      if (codeLanguage !== undefined) nextProperties.codeLanguage = codeLanguage;
+      if (tags !== undefined) nextProperties.tags = tags;
+      const payload = { title: decryptedPayload?.title ?? "", content, propertiesJson: JSON.stringify(nextProperties) };
       session.encrypt(payload).then((ciphertext) => onSaveContent(ciphertext)).catch(console.error);
     } else {
-      onSaveContent(codeLanguage ? { code: content, codeLanguage } : content);
+      onSaveContent(codeLanguage ? { code: content, codeLanguage, tags } : { content, tags });
     }
   };
+
+  const handleSaveTags = (tags: string[]) => {
+    setTagDraft(tags);
+    if (note.isProtected && session?.isUnlocked) {
+      const currentProperties = safeParseProperties(decryptedPayload?.propertiesJson);
+      const nextProperties = { ...currentProperties, tags };
+      const payload = { title: decryptedPayload?.title ?? "", content: decryptedPayload?.content, propertiesJson: JSON.stringify(nextProperties) };
+      session.encrypt(payload).then((ciphertext) => onSaveContent(ciphertext)).catch(console.error);
+    } else {
+      onSaveContent({ tags });
+    }
+  };
+
+  const displayTags = tagDraft ?? persistedTags;
 
   const uploadImage = async (file: File) => {
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
@@ -149,6 +179,24 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
               markdownView={markdownView}
               onUploadError={onUploadError}
             />}
+        {(editing && !isTrashed) || (!editing && displayTags.length > 0) ? (
+          <footer className="note-content-footer">
+            {editing && !isTrashed ? (
+              <TagEditor tags={displayTags} locale={locale} onChange={handleSaveTags} />
+            ) : (
+              <div className="tag-editor tag-editor-readonly">
+                <div className="tag-editor-tags">
+                  {displayTags.slice(0, 2).map((tag) => (
+                    <span key={tag} className="tag-badge">{tag}</span>
+                  ))}
+                  {displayTags.length > 2 && (
+                    <span className="tag-badge tag-more">+{displayTags.length - 2}</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </footer>
+        ) : null}
       </>
     )}
     <ChildNoteList children={childNotes} childrenByParent={childrenByParent} client={client} locale={locale} onOpen={onOpenChild} onMore={onChildMore} />
@@ -171,11 +219,29 @@ function attachmentIdFromSource(source: string) {
   }
 }
 
-function readCodeLanguage(propertiesJson?: string) {
+/**
+ * Safely parse a properties JSON string into a typed record.
+ * Never throws — invalid JSON degrades to an empty object.
+ * Only returns known keys to avoid unintentional prototype pollution.
+ */
+function safeParseProperties(propertiesJson: string | undefined): Record<string, unknown> {
   try {
-    const value = JSON.parse(propertiesJson ?? "{}") as { codeLanguage?: unknown };
-    return typeof value.codeLanguage === "string" && value.codeLanguage ? value.codeLanguage : "plaintext";
-  } catch { return "plaintext"; }
+    const parsed = JSON.parse(propertiesJson ?? "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as Record<string, unknown>;
+  } catch { return {}; }
+}
+
+function readCodeLanguage(propertiesJson?: string): string {
+  const props = safeParseProperties(propertiesJson);
+  return typeof props.codeLanguage === "string" && props.codeLanguage
+    ? props.codeLanguage
+    : "plaintext";
+}
+
+function readTagsFromProperties(propertiesJson?: string): string[] {
+  const props = safeParseProperties(propertiesJson);
+  return Array.isArray(props.tags) ? props.tags as string[] : [];
 }
 
 /** Render a code note through the same read-only document pipeline as text notes. */
