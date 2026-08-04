@@ -10,6 +10,7 @@ let localApi: ReturnType<typeof buildApp> | undefined;
 let localApiToken = "";
 let isQuitting = false;
 let closeLocalApiPromise: Promise<void> | undefined;
+const REMOTE_REQUEST_TIMEOUT_MS = 120_000;
 const legacyUserDataPath = app.getPath("userData");
 const appDataPath = app.getPath("appData");
 
@@ -346,12 +347,31 @@ app
       }
       const headers: Record<string, string> = { ...(init.headers ?? {}) };
       if (remoteToken && targetServerUrl === remoteServerUrl) headers["Authorization"] = `Bearer ${remoteToken}`;
-      const response = await fetch(fullUrl, {
-        method: init.method,
-        headers,
-        body: init.body as BodyInit | undefined,
-        redirect: "error", // no redirects — prevents origin hopping
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REMOTE_REQUEST_TIMEOUT_MS);
+      let response: Response;
+      try {
+        response = await fetch(fullUrl, {
+          method: init.method,
+          headers,
+          body: init.body as BodyInit | undefined,
+          redirect: "error", // no redirects — prevents origin hopping
+          signal: controller.signal,
+        });
+      } catch (error) {
+        const cause = error instanceof Error ? error.cause : undefined;
+        const code =
+          cause && typeof cause === "object" && "code" in cause
+            ? String((cause as { code?: unknown }).code ?? "")
+            : "";
+        const message = controller.signal.aborted
+          ? `Remote request timed out after ${REMOTE_REQUEST_TIMEOUT_MS / 1000}s`
+          : `Remote request failed${code ? ` (${code})` : ""}`;
+        console.warn(message, { method: init.method, path: parsedFull.pathname });
+        throw new Error(message);
+      } finally {
+        clearTimeout(timeout);
+      }
       const responseHeaders: Record<string, string> = {};
       response.headers.forEach((value, key) => { responseHeaders[key] = value; });
       const cleanPath = init.path.split("?")[0];

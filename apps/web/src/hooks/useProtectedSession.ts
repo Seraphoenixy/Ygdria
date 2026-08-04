@@ -64,6 +64,7 @@ type UseProtectedSessionOptions = {
   requiresDeviceAuth: boolean;
   deviceAccess: "checking" | "ready" | "initialize" | "login";
   refreshTree: () => void;
+  publishExternalNoteUpdate: (note: unknown) => Promise<void>;
   setDeviceAccess: (access: "checking" | "ready" | "initialize" | "login") => void;
   treeData: TreePlacement[] | undefined;
   locale: Locale;
@@ -75,6 +76,7 @@ export function useProtectedSession({
   requiresDeviceAuth,
   deviceAccess,
   refreshTree,
+  publishExternalNoteUpdate,
   setDeviceAccess,
   treeData,
   locale,
@@ -349,7 +351,8 @@ export function useProtectedSession({
             };
             if (note.type === "code") payload.codeLanguage = note.codeLanguage;
             const ciphertext = await session.encrypt(payload);
-            await client.setProtected(id, { protected: true, contentCiphertext: ciphertext });
+            const updated = await client.setProtected(id, { protected: true, contentCiphertext: ciphertext });
+            await publishExternalNoteUpdate(updated);
           } else {
             const payload = await session.decrypt<{ title: string; content: any; codeLanguage?: string }>(note.contentCiphertext);
             const unprotectInput: {
@@ -361,7 +364,8 @@ export function useProtectedSession({
             if (note.type === "code" && payload.codeLanguage) {
               unprotectInput.propertiesJson = JSON.stringify({ codeLanguage: payload.codeLanguage });
             }
-            await client.setProtected(id, unprotectInput);
+            const updated = await client.setProtected(id, unprotectInput);
+            await publishExternalNoteUpdate(updated);
           }
           changed++;
         } catch {
@@ -378,7 +382,7 @@ export function useProtectedSession({
         showToast(t(locale, "protectedSubtreeSkipped", { count: String(skipped.length) }));
       }
     },
-    [client, session, treeData, locale, refreshTree, showToast],
+    [client, session, treeData, locale, refreshTree, showToast, publishExternalNoteUpdate],
   );
 
   const protectSubtree = useCallback(

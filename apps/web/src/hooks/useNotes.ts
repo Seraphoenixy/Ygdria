@@ -78,6 +78,11 @@ export function useNotes({
   // current mode in a ref so conflict handling uses the mode at completion.
   const editingRef = useRef(editing);
   editingRef.current = editing;
+  // An editor being unmounted can deliver its final update after the selected
+  // note has changed. Keep the live selection separate from that callback's
+  // captured selection so the old note is saved immediately.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const [conflict, setConflict] = useState<SaveConflict | null>(null);
   const [deferredConflict, setDeferredConflict] = useState<SaveConflict | null>(null);
 
@@ -258,8 +263,17 @@ export function useNotes({
         }),
       );
     },
-    onSuccess: (updated, request) => {
-      qc.invalidateQueries({ queryKey: ["note", request.noteId] });
+    onSuccess: async (updated, request) => {
+      const noteQuery = { queryKey: ["note", request.noteId] };
+      // A user can return to this note while its pre-save GET is still in
+      // flight. Cancel that stale read before publishing the PATCH response;
+      // otherwise it can overwrite the newly saved content until the next
+      // tab switch triggers another fetch.
+      await qc.cancelQueries(noteQuery);
+      qc.setQueriesData(noteQuery, (current: any) =>
+        current?.id === request.noteId ? updated : current,
+      );
+      qc.invalidateQueries(noteQuery);
       qc.invalidateQueries({ queryKey: ["history"] });
       // Bump the tracked version so the next autosave won't use a stale
       // expectedVersion from the React Query cache.
@@ -409,9 +423,38 @@ export function useNotes({
     qc.invalidateQueries({ queryKey: ["archived"] });
   };
 
+  // Protection conversion is performed outside the regular save mutation but
+  // also increments the server version. Publish its response so the next
+  // editor save never uses the pre-conversion version.
+  const publishExternalNoteUpdate = async (updated: any) => {
+    if (!updated?.id || typeof updated.version !== "number") return;
+    const noteId = updated.id as string;
+    noteVersionRef.current.set(
+      noteId,
+      Math.max(noteVersionRef.current.get(noteId) ?? 0, updated.version),
+    );
+    if (noteId === selectedRef.current)
+      autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, updated.version);
+    const noteQuery = { queryKey: ["note", noteId] };
+    await qc.cancelQueries(noteQuery);
+    qc.setQueriesData(noteQuery, (current: any) =>
+      current?.id === noteId ? updated : current,
+    );
+    qc.invalidateQueries(noteQuery);
+  };
+
   const autoSave = (content: any) => {
     // Bind the draft to the note/version which produced this editor update.
     if (!selected || !note.data || note.data.id !== selected) return;
+
+    // When the selected note changes (e.g. creating a new note while editing),
+    // flush the previous note's pending save before this update overwrites it.
+    const pending = pendingAutoSaveRef.current;
+    if (pending && pending.noteId !== selected) {
+      pendingAutoSaveRef.current = undefined;
+      save.mutate(pending);
+    }
+
     pendingAutoSaveRef.current = {
       noteId: selected,
       expectedVersion: Math.max(
@@ -423,25 +466,30 @@ export function useNotes({
       isProtected: note.data.isProtected,
       content,
     };
-    // An editor update can be delivered while it is unmounting after the mode
-    // switch. Persist that final update immediately; it still occurs only
-    // after editing has ended.
-    if (!editing) {
+    // An editor update can be delivered while it is unmounting after leaving
+    // edit mode or selecting another note. Persist that final old-note update
+    // immediately, because the normal effect has already observed the switch.
+    if (!editingRef.current || selectedRef.current !== selected) {
       const pendingSave = pendingAutoSaveRef.current;
       pendingAutoSaveRef.current = undefined;
       save.mutate(pendingSave);
     }
   };
 
-  // The write queue serializes a title blur and this final body flush, so no
-  // timer (or optimistic guess about network timing) is needed.
+  // Flush the pending draft whenever the user exits editing mode or switches
+  // to a different note. The write queue serializes a title blur and this
+  // final body flush, so no timer (or optimistic guess about network timing)
+  // is needed.
   useEffect(() => {
-    if (editing) return;
     const pendingSave = pendingAutoSaveRef.current;
     if (!pendingSave) return;
-    pendingAutoSaveRef.current = undefined;
-    save.mutate(pendingSave);
-  }, [editing, save]);
+    // Exit from editing mode: always flush.
+    // Switch to a different note while editing: flush the old note's draft.
+    if (!editing || pendingSave.noteId !== selected) {
+      pendingAutoSaveRef.current = undefined;
+      save.mutate(pendingSave);
+    }
+  }, [editing, selected, save]);
 
   // ── Visibility / page-hide save ──
   // When the app moves to the background or the page is about to be discarded,
@@ -483,6 +531,7 @@ export function useNotes({
     clearUnusedAttachments,
     renameNote,
     refreshTree,
+    publishExternalNoteUpdate,
     autoSave,
     conflict,
     resolveConflict,

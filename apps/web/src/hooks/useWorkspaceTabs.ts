@@ -3,7 +3,7 @@ import type { WorkspaceTab } from "../types/workspace";
 
 type UseWorkspaceTabsOptions = {
   /** Synchronizes the workspace view (selected note and edit state) with a tab. */
-  onActivate: (tab: WorkspaceTab | undefined, editing: boolean) => void;
+  onActivate: (tab: WorkspaceTab | undefined, editing?: boolean) => void;
 };
 
 function readWindowTab(): WorkspaceTab | undefined {
@@ -29,7 +29,7 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const settingsOpen = activeTab?.kind === "settings";
 
-  const activateTab = (tab: WorkspaceTab | undefined, editing = false) => {
+  const activateTab = (tab: WorkspaceTab | undefined, editing?: boolean) => {
     setActiveTabId(tab?.id);
     onActivate(tab, editing);
   };
@@ -42,7 +42,7 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
     window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
-  const openNote = (noteId: string, isTrashed = false, editing = false, openInNewTab = false, placementId?: string) => {
+  const openNote = (noteId: string, isTrashed = false, editing?: boolean, openInNewTab = false, placementId?: string) => {
     const id = `note:${noteId}:${isTrashed ? "trash" : "active"}`;
     const tab: WorkspaceTab = { id, kind: "note", noteId, isTrashed, placementId };
     const existing = tabs.find((item) => item.id === id);

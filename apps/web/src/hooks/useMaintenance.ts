@@ -60,7 +60,7 @@ export function useMaintenance({
       const current = Date.now();
       if (trashAge > 0) void client.purgeTrash(current - trashAge).catch(() => {});
       if (attachmentAge > 0)
-        void client.clearUnusedAttachments(current - attachmentAge).catch(() => {});
+        void client.clearUnusedAttachments(current - attachmentAge, false).catch(() => {});
     };
     cleanExpired();
     const timer = window.setInterval(cleanExpired, 60_000);

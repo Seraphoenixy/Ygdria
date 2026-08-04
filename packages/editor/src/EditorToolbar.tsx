@@ -7,6 +7,10 @@ import {
   AlignJustify,
   AlignLeft,
   AlignRight,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   Bold,
   BookOpen,
   ChevronDown,
@@ -31,13 +35,14 @@ import {
   SquareCode,
   Strikethrough,
   Table,
+  Trash2,
   Type,
   Underline,
   Undo,
 } from "lucide-react";
 
 type Locale = "zh-CN" | "en";
-type DropdownKey = "paragraph" | "alignment" | "decoration" | null;
+type DropdownKey = "paragraph" | "alignment" | "decoration" | "tableActions" | null;
 type CopiedFormat = {
   bold: boolean;
   italic: boolean;
@@ -94,6 +99,7 @@ const EMPTY_EDITOR_STATE = {
   isOrderedList: false,
   isTaskList: false,
   isLink: false,
+  isInTable: false,
   align: "left",
   color: "",
   highlight: "",
@@ -232,6 +238,7 @@ function EditorTools({
         isOrderedList: currentEditor.isActive("orderedList"),
         isTaskList: currentEditor.isActive("taskList"),
         isLink: currentEditor.isActive("link"),
+        isInTable: currentEditor.isActive("table"),
         align: paragraphAlign || headingAlign || "left",
         color: textStyle.color || "",
         highlight: highlight.color || "",
@@ -530,6 +537,21 @@ function EditorTools({
           <ToolbarButton active={state.isBlockquote} label={labels.quote} onClick={() => run(() => editor.chain().focus().toggleBlockquote().run())} icon={<Quote size={16} />} />
           <ToolbarButton active={state.isCodeBlock} label={labels.codeBlock} onClick={() => run(toggleCodeBlock)} icon={<SquareCode size={16} />} />
           <ToolbarButton active={false} label={labels.table} onClick={() => run(() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run())} icon={<Table size={16} />} />
+          {state.isInTable && (
+            <ToolbarDropdown active={openDropdown === "tableActions"} compact label={labels.tableActions} icon={<Table size={16} />} onToggle={() => toggleDropdown("tableActions")}>
+              <ToolbarGroup>
+                <ToolbarButton active={false} label={labels.addRowBefore} icon={<ArrowUp size={16} />} onClick={() => run(() => editor.chain().focus().addRowBefore().run())} />
+                <ToolbarButton active={false} label={labels.addRowAfter} icon={<ArrowDown size={16} />} onClick={() => run(() => editor.chain().focus().addRowAfter().run())} />
+                <ToolbarButton active={false} label={labels.deleteRow} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteRow().run())} />
+              </ToolbarGroup>
+              <ToolbarSeparator />
+              <ToolbarGroup>
+                <ToolbarButton active={false} label={labels.addColumnBefore} icon={<ArrowLeft size={16} />} onClick={() => run(() => editor.chain().focus().addColumnBefore().run())} />
+                <ToolbarButton active={false} label={labels.addColumnAfter} icon={<ArrowRight size={16} />} onClick={() => run(() => editor.chain().focus().addColumnAfter().run())} />
+                <ToolbarButton active={false} label={labels.deleteColumn} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteColumn().run())} />
+              </ToolbarGroup>
+            </ToolbarDropdown>
+          )}
           <ToolbarButton active={state.isCode} label={labels.inlineCode} onClick={() => run(() => editor.chain().focus().toggleCode().run())} icon={<Code size={16} />} />
           <ToolbarDropdown active={openDropdown === "alignment"} compact label={labels.alignment} icon={<AlignJustify size={16} />} onToggle={() => toggleDropdown("alignment")}><ToolbarGroup>
             <ToolbarButton active={state.align === "left"} label={labels.alignLeft} icon={<AlignLeft size={16} />} onClick={() => run(() => editor.chain().focus().setTextAlign("left").run())} />
@@ -580,6 +602,21 @@ function EditorTools({
           </ToolbarGroup>}
           {overflowLevel > 0 && <ToolbarGroup>
             <ToolbarButton active={false} label={labels.table} onClick={() => run(() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run())} icon={<Table size={16} />} />
+            {state.isInTable && (
+              <ToolbarDropdown active={openDropdown === "tableActions"} compact label={labels.tableActions} icon={<Table size={16} />} onToggle={() => toggleDropdown("tableActions")}>
+                <ToolbarGroup>
+                  <ToolbarButton active={false} label={labels.addRowBefore} icon={<ArrowUp size={16} />} onClick={() => run(() => editor.chain().focus().addRowBefore().run())} />
+                  <ToolbarButton active={false} label={labels.addRowAfter} icon={<ArrowDown size={16} />} onClick={() => run(() => editor.chain().focus().addRowAfter().run())} />
+                  <ToolbarButton active={false} label={labels.deleteRow} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteRow().run())} />
+                </ToolbarGroup>
+                <ToolbarSeparator />
+                <ToolbarGroup>
+                  <ToolbarButton active={false} label={labels.addColumnBefore} icon={<ArrowLeft size={16} />} onClick={() => run(() => editor.chain().focus().addColumnBefore().run())} />
+                  <ToolbarButton active={false} label={labels.addColumnAfter} icon={<ArrowRight size={16} />} onClick={() => run(() => editor.chain().focus().addColumnAfter().run())} />
+                  <ToolbarButton active={false} label={labels.deleteColumn} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteColumn().run())} />
+                </ToolbarGroup>
+              </ToolbarDropdown>
+            )}
             <ToolbarButton active={state.isCode} label={labels.inlineCode} onClick={() => run(() => editor.chain().focus().toggleCode().run())} icon={<Code size={16} />} />
           </ToolbarGroup>}
           {overflowLevel > 0 && <ToolbarGroup>
@@ -891,6 +928,13 @@ const TOOLBAR_LABELS = {
     importMarkdown: "从剪贴板导入 Markdown",
     markdownView: "Markdown 源码",
     richTextView: "富文本",
+    tableActions: "表格操作",
+    addRowBefore: "在上方插入行",
+    addRowAfter: "在下方插入行",
+    deleteRow: "删除当前行",
+    addColumnBefore: "在左侧插入列",
+    addColumnAfter: "在右侧插入列",
+    deleteColumn: "删除当前列",
   },
   en: {
     toolbar: "Editor toolbar",
@@ -930,5 +974,12 @@ const TOOLBAR_LABELS = {
     importMarkdown: "Import Markdown from clipboard",
     markdownView: "Markdown source",
     richTextView: "Rich text",
+    tableActions: "Table actions",
+    addRowBefore: "Insert row above",
+    addRowAfter: "Insert row below",
+    deleteRow: "Delete row",
+    addColumnBefore: "Insert column left",
+    addColumnAfter: "Insert column right",
+    deleteColumn: "Delete column",
   },
 };

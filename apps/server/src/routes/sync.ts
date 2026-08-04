@@ -65,26 +65,56 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     const resolved = await resolveChangeEntities(sqlite, attachmentRoot, pending, query.metadataOnly !== "1");
     const maxChangeId = getMaxChangeId(sqlite);
     const coalescedChanges = Math.max(0, getChangesSince(sqlite, cursorId, 5000).filter((change) => change.id <= (pending.at(-1)?.id ?? cursorId)).length - pending.length);
-    const makeResponse = (changes: typeof resolved) => {
+    const serializedChanges = resolved.map((change) => Buffer.byteLength(JSON.stringify(change)));
+    const serializedResponseBytes = (
+      changesBytes: number,
+      changeCount: number,
+      cursor: number,
+      hasMore: boolean,
+    ) => {
+      // This mirrors JSON.stringify(response)'s property order below. The
+      // byte count includes its own numeric field, so converge on that value
+      // without serializing every candidate response in the batching loop.
+      const fixedBytes =
+        Buffer.byteLength(`{"cursor":${cursor},"hasMore":${hasMore},"changes":[`) +
+        changesBytes +
+        Buffer.byteLength(
+          `],"maxChangeId":${maxChangeId},"stats":{"serializedBytes":,"returnedEntities":${changeCount},"coalescedChanges":${coalescedChanges}}}`,
+        );
+      let serializedBytes = 0;
+      for (let index = 0; index < 3; index += 1)
+        serializedBytes = fixedBytes + Buffer.byteLength(String(serializedBytes));
+      return serializedBytes;
+    };
+    const makeResponse = (changes: typeof resolved, serializedBytes: number, hasMore: boolean) => {
       const cursor = changes.length > 0 ? changes[changes.length - 1].changeId : cursorId;
       const response = {
         cursor,
-        hasMore: hasChangesAfter(sqlite, cursor),
+        hasMore,
         changes,
         maxChangeId,
-        stats: { serializedBytes: 0, returnedEntities: changes.length, coalescedChanges },
+        stats: { serializedBytes, returnedEntities: changes.length, coalescedChanges },
       };
-      for (let index = 0; index < 3; index += 1)
-        response.stats.serializedBytes = Buffer.byteLength(JSON.stringify(response));
       return response;
     };
     const entityChanges: typeof resolved = [];
-    for (const change of resolved) {
-      const candidate = [...entityChanges, change];
-      if (entityChanges.length > 0 && makeResponse(candidate).stats.serializedBytes > maxBytes) break;
+    let changesBytes = 0;
+    let hasMore = hasChangesAfter(sqlite, cursorId);
+    for (let index = 0; index < resolved.length; index += 1) {
+      const change = resolved[index];
+      const candidateBytes = changesBytes + (entityChanges.length > 0 ? 1 : 0) + serializedChanges[index];
+      const candidateHasMore = index < resolved.length - 1 || hasChangesAfter(sqlite, change.changeId);
+      const candidateSize = serializedResponseBytes(candidateBytes, index + 1, change.changeId, candidateHasMore);
+      if (entityChanges.length > 0 && candidateSize > maxBytes) break;
       entityChanges.push(change);
+      changesBytes = candidateBytes;
+      hasMore = candidateHasMore;
     }
-    const response = makeResponse(entityChanges);
+    const response = makeResponse(
+      entityChanges,
+      serializedResponseBytes(changesBytes, entityChanges.length, entityChanges.at(-1)?.changeId ?? cursorId, hasMore),
+      hasMore,
+    );
     req.log.info({ syncBatch: "pull", entities: entityChanges.length, serializedBytes: response.stats.serializedBytes, coalescedChanges, cursor: response.cursor }, "prepared sync batch");
     return response;
   });

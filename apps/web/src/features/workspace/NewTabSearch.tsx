@@ -1,5 +1,8 @@
 import { ChevronRight, Code2, FileText, Folder, Plus, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { TagStats } from "@ygdria/shared";
+import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement } from "../../types/workspace";
 
@@ -10,6 +13,9 @@ type NewTabSearchProps = {
   openNote: (noteId: string, isTrashed?: boolean, editing?: boolean, openInNewTab?: boolean, placementId?: string) => void;
   createNewNote: () => Promise<void>;
   creatingNote: boolean;
+  /** Enables the frequent-tags section and routes tag taps to the search page. */
+  client?: YgdriaClient;
+  onOpenTagSearch?: (tag: string) => void;
 };
 
 type Row = { placement: TreePlacement; depth: number; path: string[] };
@@ -22,7 +28,7 @@ type Row = { placement: TreePlacement; depth: number; path: string[] };
  * the ancestor branches visible so a match is always shown in its tree context,
  * exactly like the in-tree search box — but on a dedicated full-page surface.
  */
-export function NewTabSearch({ treeData, locale, decryptedTitles, openNote, createNewNote, creatingNote }: NewTabSearchProps) {
+export function NewTabSearch({ treeData, locale, decryptedTitles, openNote, createNewNote, creatingNote, client, onOpenTagSearch }: NewTabSearchProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
   const didInit = useRef(false);
@@ -32,6 +38,13 @@ export function NewTabSearch({ treeData, locale, decryptedTitles, openNote, crea
   const [userExpanded, setUserExpanded] = useState<Set<string>>(() => new Set());
 
   const placements = useMemo(() => treeData ?? [], [treeData]);
+
+  const tagStats = useQuery({
+    queryKey: ["tag-stats"],
+    queryFn: () => client!.tagStats() as Promise<TagStats[]>,
+    enabled: Boolean(client) && Boolean(onOpenTagSearch),
+    staleTime: 30_000,
+  });
 
   const byId = useMemo(() => new Map(placements.map((item) => [item.placementId, item])), [placements]);
 
@@ -217,6 +230,19 @@ export function NewTabSearch({ treeData, locale, decryptedTitles, openNote, crea
         </div>
         <p className="nts-hint">{t(locale, "newTabSearchHint")}</p>
       </div>
+
+      {!query && tagStats.data && tagStats.data.length > 0 && onOpenTagSearch && (
+        <section className="nts-tags" aria-labelledby="nts-frequent-tags">
+          <h2 id="nts-frequent-tags" className="nts-tag-heading">{t(locale, "frequentTags")}</h2>
+          <div className="nts-tag-suggestions">
+            {tagStats.data.slice(0, 10).map((ts) => (
+              <button key={ts.tag} type="button" className="nts-tag-suggestion" onClick={() => onOpenTagSearch(ts.tag)}>
+                {ts.tag} <span className="nts-tag-count">{ts.count}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {showEmpty ? (
         <div className="nts-empty">{emptyMessage}</div>

@@ -7,6 +7,7 @@ import {
   Archive,
   FileText,
   Paperclip,
+  PinOff,
   X,
   ChevronDown,
   ChevronUp,
@@ -26,6 +27,7 @@ type TabBarProps = {
   onNewTab: () => void;
   onContextMenu: (tabId: string, x: number, y: number) => void;
   onReorder: (dragId: string, dropId: string) => void;
+  onTogglePin?: (tabId: string) => void;
   /** Phone-only: render the strip in its collapsed (active-tab-only) form. */
   collapsible?: boolean;
   /** Phone-only: when true the strip is collapsed to a single active-tab row. */
@@ -44,6 +46,7 @@ export function TabBar({
   onNewTab,
   onContextMenu,
   onReorder,
+  onTogglePin,
   collapsible,
   collapsed,
   onToggleCollapsed,
@@ -89,7 +92,7 @@ export function TabBar({
         style={
           {
             "--tab-count": tabs.length,
-            "--tab-list-width": `${tabs.length * 260}px`,
+            "--tab-list-width": `${tabs.length * 180}px`,
           } as React.CSSProperties
         }
       >
@@ -145,7 +148,18 @@ export function TabBar({
             >
               {tab.kind === "settings" ? <Settings size={16} /> : tab.kind === "search" ? <Search size={16} /> : tab.kind === "history" ? <History size={16} /> : tab.kind === "archive" ? <Archive size={16} /> : tab.kind === "attachments" ? <Paperclip size={16} /> : <FileText size={16} />}
               <span>{tabTitle}</span>
-              {!pinnedTabIds.has(tab.id) && (
+              {pinnedTabIds.has(tab.id) ? (
+                <button
+                  className="note-tab-close"
+                  aria-label={t(locale, "unpinTab")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onTogglePin?.(tab.id);
+                  }}
+                >
+                  <PinOff size={14} />
+                </button>
+              ) : (
                 <button
                   className="note-tab-close"
                   aria-label={t(locale, "closeTab")}

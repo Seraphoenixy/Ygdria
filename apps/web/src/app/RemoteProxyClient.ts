@@ -8,6 +8,17 @@ type RemoteResponse = {
   isBinary: boolean;
 };
 
+const REMOTE_GET_RETRY_DELAYS_MS = [250, 750];
+
+function isRetryableTransportError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /fetch failed|network error|econnreset|econnrefused|eai_again|enotfound|etimedout|connect timeout|socket hang up/i.test(message);
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
+
 /**
  * Desktop Electron proxy client: routes all remote requests through the main
  * process IPC. The deviceToken is held by the main process and NEVER enters
@@ -40,7 +51,21 @@ export class RemoteProxyClient {
     const method = init?.method ?? "GET";
     let response: RemoteResponse;
     try {
-      response = await window.ygdria!.remote!.request({ method, path, body: init?.body, headers: init?.headers });
+      response = await (async () => {
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            return await window.ygdria!.remote!.request({ method, path, body: init?.body, headers: init?.headers });
+          } catch (error) {
+            if (
+              method !== "GET" ||
+              attempt >= REMOTE_GET_RETRY_DELAYS_MS.length ||
+              !isRetryableTransportError(error)
+            )
+              throw error;
+            await delay(REMOTE_GET_RETRY_DELAYS_MS[attempt]);
+          }
+        }
+      })();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(t(this.locale, "remoteProxyRequestFailed", { method, path, reason }));

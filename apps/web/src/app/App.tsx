@@ -36,9 +36,9 @@ import {
   srpRegister,
   srpVerifyServer,
 } from "../lib/client-crypto";
-// `appendTiptapDocument` / `markdownToTiptap` live in the editor package. They
-// are only used by the clipboard Markdown-import action, so import them lazily
-// to keep the editor out of the first-paint bundle.
+// `markdownToTiptap` lives in the editor package and is only used by the
+// clipboard Markdown-import action, so import it lazily to keep the editor out
+// of the first-paint bundle.
 import { ChildNoteMenu } from "../components/note/ChildNoteMenu";
 // The heavy Tiptap/ProseMirror editor is only needed once the workspace is
 // interactive (after the auth gate). Load it lazily so the monolithic editor
@@ -319,13 +319,17 @@ export function App({
         showToast(t(locale, "clipboardEmpty"));
         return;
       }
-      const { markdownToTiptap, appendTiptapDocument } = await import("@ygdria/editor");
+      const { markdownToTiptap } = await import("@ygdria/editor");
       const { document, warnings } = markdownToTiptap(text);
       if (activeEditor && !activeEditor.isDestroyed) {
-        // Append imported Markdown after the current note content. The editor's
-        // update callback will persist the combined document.
-        const combinedDocument = appendTiptapDocument(activeEditor.getJSON(), document);
-        activeEditor.commands.setContent(combinedDocument);
+        // Insert after the cursor (or after a non-collapsed selection) rather
+        // than appending to the end of the document. The editor update
+        // callback persists the inserted content.
+        activeEditor
+          .chain()
+          .focus()
+          .insertContentAt(activeEditor.state.selection.to, document.content ?? [])
+          .run();
       } else {
         showToast(t(locale, "markdownImportFailed", { reason: t(locale, "editorUnavailable") }));
         return;
@@ -409,11 +413,20 @@ export function App({
   const childNoteMenuRef = useRef<HTMLDivElement>(null);
   const creatingNoteRef = useRef(false);
   const hasWindowControls = Boolean(window.ygdria?.windowControl);
+  const tabEditingRef = useRef<Map<string, boolean>>(new Map());
+  const activeTabIdRef = useRef<string | undefined>(undefined);
 
   const workspaceTabs = useWorkspaceTabs({
     onActivate: (tab, nextEditing) => {
+      // Save the current tab's editing state before switching away.
+      if (activeTabIdRef.current) {
+        tabEditingRef.current.set(activeTabIdRef.current, editing);
+      }
+      activeTabIdRef.current = tab?.id;
+
       if (tab?.kind === "note") {
-        set({ selected: tab.noteId, selectedTrashed: tab.isTrashed, editing: nextEditing });
+        const saved = tabEditingRef.current.get(tab.id);
+        set({ selected: tab.noteId, selectedTrashed: tab.isTrashed, editing: nextEditing ?? saved ?? false });
       } else {
         setSelectedPlacementId(undefined);
         set({ selected: undefined, selectedTrashed: false, editing: false });
@@ -504,6 +517,7 @@ export function App({
     purgeTrash,
     clearUnusedAttachments,
     refreshTree,
+    publishExternalNoteUpdate,
     autoSave,
     conflict,
     resolveConflict,
@@ -558,6 +572,7 @@ export function App({
     requiresDeviceAuth,
     deviceAccess,
     refreshTree,
+    publishExternalNoteUpdate,
     setDeviceAccess,
     treeData: tree.data,
     locale,
@@ -597,6 +612,7 @@ export function App({
     setProtectedSession,
     showToast,
     isDesktopApp,
+    editing,
   });
 
   const [showSyncConflicts, setShowSyncConflicts] = useState(false);
@@ -1360,7 +1376,9 @@ export function App({
             activateTab={activateTab}
             closeTab={closeTab}
             openNewTab={openNewTab}
+            openSearch={openSearch}
             onReorder={moveTab}
+            onTogglePin={togglePin}
             onTabContextMenu={(tabId, x, y) => {
               setContextMenu(null);
               setTabMenu({ tabId, x, y });
@@ -1417,7 +1435,7 @@ export function App({
             onOpenFrontendConsole={() => {
               void window.ygdria?.openDevTools?.();
             }}
-            syncRunsAutomatically={!isDesktopApp}
+            syncRunsAutomatically={isDesktopApp}
             canEditMobileEndpoint={Capacitor.isNativePlatform()}
             etapiTokenManagementAvailable={isDesktopApp}
             onProtectedSessionTimeoutChange={handleProtectedSessionTimeoutChange}

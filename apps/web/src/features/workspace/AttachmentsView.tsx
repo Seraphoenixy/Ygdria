@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Image, FileText, File, Music, Video, Paperclip, Trash2 } from "lucide-react";
+import { Image, FileText, File, Music, Video, Paperclip, Trash2, X } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 
 export interface AttachmentItem {
@@ -41,6 +41,7 @@ export function AttachmentsView({
   onOpenNote,
   onClearUnusedAttachments,
   clearingUnusedAttachments,
+  onDownloadAttachment,
 }: {
   data?: { attachments: AttachmentItem[]; unusedCount: number };
   isLoading: boolean;
@@ -48,8 +49,13 @@ export function AttachmentsView({
   onOpenNote: (noteId: string) => void;
   onClearUnusedAttachments: () => void;
   clearingUnusedAttachments: boolean;
+  /** Downloads an attachment by its content hash. Returns a blob and its MIME type. */
+  onDownloadAttachment?: (contentHash: string) => Promise<{ blob: Blob; mimeType: string }>;
 }) {
   const [filter, setFilter] = useState<AttachmentFilter>("all");
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightboxLabel, setLightboxLabel] = useState("");
+  const [lightboxLoading, setLightboxLoading] = useState(false);
 
   const attachments = data?.attachments ?? [];
   const unusedCount = data?.unusedCount ?? 0;
@@ -69,6 +75,27 @@ export function AttachmentsView({
     if (filter === "unused") return attachments.filter((a) => a.referencingNotes.length === 0);
     return attachments;
   }, [attachments, filter]);
+
+  const openLightbox = async (attachment: AttachmentItem) => {
+    if (!onDownloadAttachment) return;
+    setLightboxLabel(attachment.filename);
+    setLightboxLoading(true);
+    try {
+      const { blob, mimeType } = await onDownloadAttachment(attachment.contentHash);
+      const url = URL.createObjectURL(blob);
+      setLightboxSrc(url);
+    } catch {
+      setLightboxSrc(null);
+    } finally {
+      setLightboxLoading(false);
+    }
+  };
+
+  const closeLightbox = () => {
+    if (lightboxSrc) URL.revokeObjectURL(lightboxSrc);
+    setLightboxSrc(null);
+    setLightboxLabel("");
+  };
 
   if (isLoading) return <article className="attachments-view"><p className="attachments-empty">{t(locale, "loading")}</p></article>;
 
@@ -118,8 +145,23 @@ export function AttachmentsView({
           <ul className="attachments-list">
             {visible.map((attachment) => {
               const isOrphan = attachment.referencingNotes.length === 0;
+              const isImage = attachment.mimeType.startsWith("image/");
               return (
-                <li className="attachment-item" key={attachment.id}>
+                <li
+                  className={`attachment-item${isImage ? " attachment-item-image" : ""}`}
+                  key={attachment.id}
+                  {...(isImage
+                    ? {
+                        role: "button",
+                        tabIndex: 0,
+                        title: t(locale, "attachmentViewImage"),
+                        onClick: () => { void openLightbox(attachment); },
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); void openLightbox(attachment); }
+                        },
+                      }
+                    : {})}
+                >
                   <div className="attachment-icon">{fileIcon(attachment.mimeType)}</div>
                   <div className="attachment-body">
                     <div className="attachment-main">
@@ -140,7 +182,7 @@ export function AttachmentsView({
                               key={note.id}
                               className="attachment-owner"
                               title={note.title}
-                              onClick={() => onOpenNote(note.id)}
+                              onClick={(e) => { e.stopPropagation(); onOpenNote(note.id); }}
                             >
                               {note.title}
                             </button>
@@ -154,6 +196,29 @@ export function AttachmentsView({
             })}
           </ul>
         </>
+      )}
+      {lightboxSrc && (
+        <div className="attachment-lightbox" role="dialog" aria-label={lightboxLabel} onClick={closeLightbox}>
+          <div className="attachment-lightbox-header">
+            <span className="attachment-lightbox-title">{lightboxLabel}</span>
+            <button type="button" className="attachment-lightbox-close" onClick={closeLightbox} aria-label={t(locale, "close")}>
+              <X size={22} />
+            </button>
+          </div>
+          <div className="attachment-lightbox-image-wrap" onClick={(e) => e.stopPropagation()}>
+            <img
+              className="attachment-lightbox-image"
+              src={lightboxSrc}
+              alt={lightboxLabel}
+            />
+          </div>
+        </div>
+      )}
+      {lightboxLoading && (
+        <div className="attachment-lightbox attachment-lightbox-loading" role="dialog" aria-label={lightboxLabel}>
+          <span className="attachment-lightbox-spinner" />
+          <span className="attachment-lightbox-loading-text">{t(locale, "loading")}</span>
+        </div>
       )}
     </article>
   );

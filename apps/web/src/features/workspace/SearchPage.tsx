@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, Search, X } from "lucide-react";
-import type { SearchResult, TagStats } from "@ygdria/shared";
+import type { SearchResult } from "@ygdria/shared";
 import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 
-export function SearchPage({ client, locale, isActive, onOpenNote }: { client: YgdriaClient; locale: Locale; isActive: boolean; onOpenNote: (noteId: string, openInNewTab?: boolean) => void }) {
+export function SearchPage({ client, locale, isActive, onOpenNote, initialTag }: { client: YgdriaClient; locale: Locale; isActive: boolean; onOpenNote: (noteId: string, openInNewTab?: boolean) => void; initialTag?: string }) {
   const [query, setQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [contextMenu, setContextMenu] = useState<{ noteId: string; x: number; y: number } | null>(null);
@@ -20,11 +20,14 @@ export function SearchPage({ client, locale, isActive, onOpenNote }: { client: Y
     retry: false,
   });
 
-  const tagStats = useQuery({
-    queryKey: ["tag-stats"],
-    queryFn: () => client.tagStats() as Promise<TagStats[]>,
-    staleTime: 30_000,
-  });
+  // Handle initial tag from external navigation (e.g. clicking a tag on the new-tab page).
+  useEffect(() => {
+    if (initialTag) {
+      const next = `tag:${initialTag}`;
+      setQuery(next);
+      setSubmittedQuery(next);
+    }
+  }, [initialTag]);
 
   useEffect(() => { if (isActive) inputRef.current?.focus(); }, [isActive]);
   useEffect(() => {
@@ -38,12 +41,6 @@ export function SearchPage({ client, locale, isActive, onOpenNote }: { client: Y
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [contextMenu]);
-
-  const selectTag = (tag: string) => {
-    const next = `tag:${tag}`;
-    setQuery(next);
-    setSubmittedQuery(next);
-  };
 
   const clearTagFilter = () => {
     setQuery("");
@@ -67,15 +64,6 @@ export function SearchPage({ client, locale, isActive, onOpenNote }: { client: Y
       </label>
       <button type="submit" disabled={!canSearch}>{t(locale, "searchAction")}</button>
     </form>
-    {!isTagSearch && tagStats.data && tagStats.data.length > 0 && (
-      <div className="search-page-tag-suggestions">
-        {tagStats.data.slice(0, 10).map((ts) => (
-          <button key={ts.tag} type="button" className="search-page-tag-suggestion" onClick={() => selectTag(ts.tag)}>
-            {ts.tag} <span className="search-page-tag-count">{ts.count}</span>
-          </button>
-        ))}
-      </div>
-    )}
     {!showingSubmittedResults ? (query.trim().length > 0 && !canSearch ? <p className="search-page-message">{t(locale, "minSearchLength")}</p> : isTagSearch ? null : <p className="search-page-message">{t(locale, "searchHint")}</p>) : results.isPending ? <p className="search-page-message">{t(locale, "loading")}</p> : results.isError ? <p className="search-page-message search-page-error">{t(locale, "searchFailed")} {results.error.message}</p> : results.data?.length ? <div className="search-results">{results.data.map((result) => <button type="button" key={result.noteId} className="search-result" onClick={() => onOpenNote(result.noteId)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ noteId: result.noteId, x: event.clientX, y: event.clientY }); }}>
       <strong>{result.title}</strong><span><Snippet value={result.snippet} /></span><time>{new Date(result.updatedAt).toLocaleString()}</time>
       {result.tags && result.tags.length > 0 && (

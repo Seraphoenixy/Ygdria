@@ -75,6 +75,61 @@
   font-size: 12.5px;
 }
 
+.nts-tags {
+  margin-top: 10px;
+  margin-bottom: 6px;
+}
+.nts-tag-heading {
+  margin: 0 0 6px 2px;
+  color: #6f7780;
+  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+}
+.nts-tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0;
+}
+.nts-tag-suggestion {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid #d9dce1;
+  border-radius: 16px;
+  background: transparent;
+  color: #686870;
+  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  cursor: pointer;
+}
+.nts-tag-suggestion:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.nts-tag-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+.phone .nts-tag-suggestion {
+  min-height: 40px;
+  padding-inline: 14px;
+}
+:root[data-theme="dark"] .nts-tag-heading { color: #a5adb7; }
+:root[data-theme="dark"] .nts-tag-suggestion { border-color: #46505a; color: #c3cad2; }
+
 .nts-tree {
   display: flex;
   flex-direction: column;

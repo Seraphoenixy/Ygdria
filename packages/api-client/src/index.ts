@@ -489,8 +489,11 @@ export class YgdriaClient {
       unusedCount: number;
     }>("/api/v1/attachments");
   }
-  clearUnusedAttachments(before?: number) {
-    const query = before === undefined ? "" : `?before=${encodeURIComponent(String(before))}`;
+  clearUnusedAttachments(before?: number, scanOrphans = true) {
+    const params = new URLSearchParams();
+    if (before !== undefined) params.set("before", String(before));
+    if (!scanOrphans) params.set("scanOrphans", "0");
+    const query = params.size ? `?${params}` : "";
     return this.request<{ count: number; attachmentStorageKeys: string[] }>(
       `/api/v1/attachments/unused${query}`,
       {

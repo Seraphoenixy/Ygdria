@@ -144,6 +144,7 @@ describe("incremental sync", () => {
     expect(body.hasMore).toBe(true);
     expect(body.changes.length).toBeLessThan(361);
     expect(body.stats.serializedBytes).toBeLessThanOrEqual(65536);
+    expect(body.stats.serializedBytes).toBe(Buffer.byteLength(JSON.stringify(body)));
     expect(body.cursor).toBeGreaterThan(0);
   });
 

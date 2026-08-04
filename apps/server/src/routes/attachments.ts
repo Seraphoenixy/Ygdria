@@ -35,11 +35,16 @@ export function registerAttachmentRoutes(app: FastifyInstance, deps: AttachmentR
   }));
 
   app.delete("/api/v1/attachments/unused", async (req) => {
-    const before = Number((req.query as { before?: string }).before);
+    const query = req.query as { before?: string; scanOrphans?: string };
+    const before = Number(query.before);
     const result = attachments.clearUnusedAttachments(
       Number.isSafeInteger(before) && before >= 0 ? before : undefined,
     );
-    await attachments.cleanOrphanFiles();
+    // Scheduled retention cleanup only drains durable jobs. A full filesystem
+    // walk is reserved for an explicit cleanup request, so a large attachment
+    // library is not recursively scanned every minute when nothing changed.
+    if (query.scanOrphans === "0") await attachments.runStorageCleanup();
+    else await attachments.cleanOrphanFiles();
     return result;
   });
 

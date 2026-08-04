@@ -43,6 +43,30 @@ export type SyncConflict = {
 };
 
 const DESKTOP_ONBOARDING_COMPLETE_KEY = "ygdria.desktop-onboarding-complete";
+const SYNC_CONTENT_FETCH_CONCURRENCY = 6;
+
+/** Map in input order while keeping remote sync hydration within a small,
+ * bounded connection pool. A snapshot may contain 500 note metadata records;
+ * fetching all bodies at once can reset sockets in Electron or a reverse proxy. */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    }),
+  );
+  return results;
+}
 
 function isInvalidDeviceToken(error: unknown) {
   // Desktop requests are wrapped by RemoteProxyClient with the request method
@@ -84,7 +108,37 @@ type UseSyncOptions = {
   ) => void;
   showToast: (message: string) => void;
   isDesktopApp: boolean;
+  /** Whether the user is currently editing a note. Auto-sync is suppressed while true. */
+  editing: boolean;
 };
+
+export type AutoSyncOptions = {
+  state: "unconfigured" | "synced" | "pending";
+  editing: boolean;
+  syncing: boolean;
+  syncConflictsLen: number;
+  remoteReauthRequired: boolean;
+  remoteClientAvailable: boolean;
+  isDesktop: boolean;
+  syncLocked: boolean;
+};
+
+/** Returns whether a completed state check may start a desktop auto-sync. */
+export function shouldAutoSync(opts: AutoSyncOptions): boolean {
+  return opts.state === "pending" &&
+    opts.isDesktop &&
+    !opts.editing &&
+    !opts.syncing &&
+    !opts.syncLocked &&
+    opts.syncConflictsLen === 0 &&
+    !opts.remoteReauthRequired &&
+    opts.remoteClientAvailable;
+}
+
+function isRetryableSyncTransportError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /remote request failed|remote proxy request failed|fetch failed|failed to fetch|network error|econnreset|econnrefused|eai_again|enotfound|etimedout|connect timeout|timed out|socket hang up/i.test(message);
+}
 
 export function useSync({
   client,
@@ -96,6 +150,7 @@ export function useSync({
   setProtectedSession,
   showToast,
   isDesktopApp,
+  editing,
 }: UseSyncOptions) {
   // --- Remote client state ---
   const [remoteClient, setRemoteClient] = useState<
@@ -148,6 +203,24 @@ export function useSync({
   }, [syncConflictsByPeer, lastSyncedAtByPeer]);
   const syncEpochRef = useRef(0);
   const [syncAfterBootstrap, setSyncAfterBootstrap] = useState(false);
+  // Keep a ref to `editing` so the 15 s interval callback always reads the
+  // latest value instead of a stale closure captured at effect creation time.
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  // Refs mirror the corresponding state values so the periodic-check effect
+  // can read the latest values without listing them as dependencies (which
+  // would re-run the effect and add extra checks beyond the 15 s tick).
+  const syncingRef = useRef(syncing);
+  syncingRef.current = syncing;
+  const syncConflictsRef = useRef(syncConflicts);
+  syncConflictsRef.current = syncConflicts;
+  const remoteReauthRequiredRef = useRef(remoteReauthRequired);
+  remoteReauthRequiredRef.current = remoteReauthRequired;
+  const remoteClientRef = useRef(remoteClient);
+  remoteClientRef.current = remoteClient;
+  // Synchronous lock shared by every sync entry point, including the manual,
+  // bootstrap and auto-sync paths.
+  const syncLockRef = useRef(false);
 
   // --- Remote client init ---
   useEffect(() => {
@@ -223,14 +296,15 @@ export function useSync({
     [client, remoteClient],
   );
 
-  const checkSyncState = useCallback(async () => {
+  const checkSyncState = useCallback(async (): Promise<"unconfigured" | "synced" | "pending"> => {
     if (deviceAccess !== "ready" || !remoteClient) {
       setSyncState("unconfigured");
-      return;
+      return "unconfigured";
     }
     const epoch = syncEpochRef.current;
     const state = await computeSyncState(remoteClient.peerId());
     if (epoch === syncEpochRef.current) setSyncState(state);
+    return state;
   }, [computeSyncState, deviceAccess, remoteClient]);
 
   const syncNow = useCallback(() => {
@@ -238,6 +312,8 @@ export function useSync({
       openSettings();
       return;
     }
+    if (syncLockRef.current) return;
+    syncLockRef.current = true;
     const authEpoch = remoteAuthEpochRef.current;
     const syncEpoch = ++syncEpochRef.current;
     setSyncing(true);
@@ -249,8 +325,7 @@ export function useSync({
         changes: T[],
         source: AttachmentTransferClient,
       ): Promise<T[]> =>
-        Promise.all(
-          changes.map(async (change): Promise<T> => {
+        mapWithConcurrency(changes, SYNC_CONTENT_FETCH_CONCURRENCY, async (change): Promise<T> => {
             if (
               change.entityType !== "note" ||
               change.changeKind === "deleted" ||
@@ -264,8 +339,7 @@ export function useSync({
               change.data.contentHash,
             );
             return { ...change, data: { ...change.data, ...content } } as T;
-          }),
-        );
+          });
       const copyAttachments = async (
         changes: Array<{
           entityType: string;
@@ -495,10 +569,16 @@ export function useSync({
           !remoteReauthInProgressRef.current
         )
           setRemoteReauthRequired(true);
-        else openSettings();
+        // A transient transport failure is already retried for idempotent GETs
+        // and the 15 s scheduler will retry the sync pass. Opening settings
+        // here makes a momentary network drop look like a configuration error.
+        else if (!isRetryableSyncTransportError(error)) openSettings();
       })
       .finally(() => {
-        if (syncEpoch === syncEpochRef.current) setSyncing(false);
+        if (syncEpoch === syncEpochRef.current) {
+          setSyncing(false);
+          syncLockRef.current = false;
+        }
       });
   }, [
     client,
@@ -512,24 +592,63 @@ export function useSync({
     showToast,
   ]);
 
-  // --- Sync state refresh ---
+  // --- Periodic sync state check + auto-sync (desktop only) ---
+  //
+  // Runs checkSyncState() every 15 s and on window focus. After the check
+  // completes, if all auto-sync preconditions are met, syncNow() is called.
+  //
+  // Auto-sync preconditions (all must be true):
+  //   1. checkSyncState returned "pending"
+  //   2. isDesktopApp === true (auto-sync is desktop-only)
+  //   3. User is NOT currently editing (editingRef)
+  //   4. No sync is already in progress (syncingRef)
+  //   5. syncLockRef is not held (prevents concurrent auto-sync calls)
+  //   6. No pending sync conflicts (syncConflictsRef)
+  //   7. Remote does not require re-authentication (remoteReauthRequiredRef)
+  //   8. Remote client is configured and available (remoteClientRef)
+  //
+  // Effect dependencies are deliberately limited to [checkSyncState, isDesktopApp]
+  // so the interval is not restarted or re-triggered by syncing / conflict /
+  // reauth state changes. All of those are read via refs at call time.
+  //
+  // Failure handling: a failed sync sets syncState back to "pending" and the
+  // next 15 s tick will retry. Conflicts or auth failures suppress auto-sync
+  // until the user resolves them manually.
   useEffect(() => {
     let cancelled = false;
     const refreshSyncState = () => {
       const authEpoch = remoteAuthEpochRef.current;
-      void checkSyncState().catch((error) => {
-        if (!cancelled) {
-          console.error("Unable to check sync status", error);
-          setSyncState("pending");
+      void checkSyncState()
+        .then((state) => {
+          if (cancelled) return;
           if (
-            isDesktopApp &&
-            isInvalidDeviceToken(error) &&
-            authEpoch === remoteAuthEpochRef.current &&
-            !remoteReauthInProgressRef.current
+            !shouldAutoSync({
+              state,
+              editing: editingRef.current,
+              syncing: syncingRef.current,
+              syncConflictsLen: syncConflictsRef.current.length,
+              remoteReauthRequired: remoteReauthRequiredRef.current,
+              remoteClientAvailable: Boolean(remoteClientRef.current),
+              isDesktop: isDesktopApp,
+              syncLocked: syncLockRef.current,
+            })
           )
-            setRemoteReauthRequired(true);
-        }
-      });
+            return;
+          syncNow();
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            console.error("Unable to check sync status", error);
+            setSyncState("pending");
+            if (
+              isDesktopApp &&
+              isInvalidDeviceToken(error) &&
+              authEpoch === remoteAuthEpochRef.current &&
+              !remoteReauthInProgressRef.current
+            )
+              setRemoteReauthRequired(true);
+          }
+        });
     };
     refreshSyncState();
     const interval = window.setInterval(refreshSyncState, 15_000);
@@ -540,6 +659,50 @@ export function useSync({
       window.removeEventListener("focus", refreshSyncState);
     };
   }, [checkSyncState, isDesktopApp]);
+
+  // --- Auto-sync on editing exit (desktop only) ---
+  //
+  // When the user finishes editing (editing transitions from true to false),
+  // immediately run a sync state check. If the check returns "pending" and all
+  // auto-sync preconditions are met (same rules as the periodic check above),
+  // trigger syncNow() without waiting for the next 15 s tick.
+  const prevEditingRef = useRef(editing);
+  useEffect(() => {
+    const wasEditing = prevEditingRef.current;
+    prevEditingRef.current = editing;
+    // Only act on the true → false transition, and only on desktop.
+    if (!wasEditing || editing || !isDesktopApp) return;
+    const authEpoch = remoteAuthEpochRef.current;
+    // Immediately check sync state and auto-sync if pending.
+    void checkSyncState()
+      .then((state) => {
+        if (
+          !shouldAutoSync({
+            state,
+            editing: editingRef.current,
+            syncing: syncingRef.current,
+            syncConflictsLen: syncConflictsRef.current.length,
+            remoteReauthRequired: remoteReauthRequiredRef.current,
+            remoteClientAvailable: Boolean(remoteClientRef.current),
+            isDesktop: isDesktopApp,
+            syncLocked: syncLockRef.current,
+          })
+        )
+          return;
+        syncNow();
+      })
+      .catch((error) => {
+        console.error("Unable to check sync status on editing exit", error);
+        setSyncState("pending");
+        if (
+          isDesktopApp &&
+          isInvalidDeviceToken(error) &&
+          authEpoch === remoteAuthEpochRef.current &&
+          !remoteReauthInProgressRef.current
+        )
+          setRemoteReauthRequired(true);
+      });
+  }, [editing, isDesktopApp, checkSyncState, syncNow]);
 
   // --- Sync after bootstrap ---
   useEffect(() => {

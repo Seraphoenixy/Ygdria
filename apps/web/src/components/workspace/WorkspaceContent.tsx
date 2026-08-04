@@ -27,8 +27,10 @@ export interface WorkspaceContentProps {
   activateTab: (tab: WorkspaceTab) => void;
   closeTab: (tabId: string) => void;
   openNewTab: () => void;
+  openSearch: () => void;
   onTabContextMenu: (tabId: string, x: number, y: number) => void;
   onReorder: (dragId: string, dropId: string) => void;
+  onTogglePin?: (tabId: string) => void;
 
   // Toolbar
   noteBreadCrumb: BreadcrumbSegment[];
@@ -130,8 +132,10 @@ export function WorkspaceContent({
   activateTab,
   closeTab,
   openNewTab,
+  openSearch,
   onTabContextMenu,
   onReorder,
+  onTogglePin,
   noteBreadCrumb,
   selectedTrashed,
   noteData,
@@ -207,6 +211,7 @@ export function WorkspaceContent({
   // the vertical space taken by the stacked fixed bars (tab strip + toolbar +
   // editor toolbar). The user can expand it on demand via the chevron.
   const [tabsCollapsed, setTabsCollapsed] = React.useState(() => isPhoneLayout());
+  const [searchInitialTag, setSearchInitialTag] = React.useState<string | undefined>();
   const phone = isPhoneLayout();
   return (
     <section className={`content${tabsCollapsed ? " tabs-collapsed" : ""}`}>
@@ -221,6 +226,7 @@ export function WorkspaceContent({
         onNewTab={openNewTab}
         onContextMenu={onTabContextMenu}
         onReorder={onReorder}
+        onTogglePin={onTogglePin}
         collapsible={phone}
         collapsed={tabsCollapsed}
         onToggleCollapsed={() => setTabsCollapsed((value) => !value)}
@@ -269,7 +275,7 @@ export function WorkspaceContent({
       )}
       {tabs.some((tab) => tab.id === "search") && (
         <div className="document-scroll" hidden={activeTabId !== "search"}>
-          <SearchPage client={client} locale={locale} isActive={activeTabId === "search"} onOpenNote={(noteId, openInNewTab) => openNote(noteId, false, false, openInNewTab)} />
+          <SearchPage client={client} locale={locale} isActive={activeTabId === "search"} onOpenNote={(noteId, openInNewTab) => openNote(noteId, false, false, openInNewTab)} initialTag={searchInitialTag} />
         </div>
       )}
       {activeTabId === "search" ? null : activeTabId === "archive" ? (
@@ -305,6 +311,7 @@ export function WorkspaceContent({
             onOpenNote={(noteId) => openNote(noteId)}
             onClearUnusedAttachments={() => setClearUnusedAttachmentsConfirmation(true)}
             clearingUnusedAttachments={clearUnusedAttachments.isPending}
+            onDownloadAttachment={(hash) => client.downloadAttachmentByHash(hash)}
           />
         </div>
       ) : settingsOpen ? (
@@ -349,6 +356,8 @@ export function WorkspaceContent({
             openNote={openNote}
             createNewNote={createNewNote}
             creatingNote={createNote.isPending}
+            client={client}
+            onOpenTagSearch={(tag) => { setSearchInitialTag(tag); openSearch(); }}
           />
         </div>
       ) : noteIsLoading ? (
@@ -386,6 +395,8 @@ export function WorkspaceContent({
             openNote={openNote}
             createNewNote={createNewNote}
             creatingNote={createNote.isPending}
+            client={client}
+            onOpenTagSearch={(tag) => { setSearchInitialTag(tag); openSearch(); }}
           />
         </div>
       )}

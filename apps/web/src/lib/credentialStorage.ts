@@ -1,4 +1,5 @@
 import { Capacitor } from "@capacitor/core";
+import { Preferences } from "@capacitor/preferences";
 
 const REMOTE_CREDENTIAL_KEY = "ygdria.remote-device-credential";
 export const STARTUP_AUTH_CACHE_MAX_AGE_MS = 10 * 60 * 1_000;
@@ -42,7 +43,6 @@ export async function loadRemoteCredential(): Promise<RemoteCredential | null> {
       } catch {
         // Key absent from the secure store — attempt a one-time migration from
         // the legacy plaintext @capacitor/preferences entry, if any.
-        const { Preferences } = await import("@capacitor/preferences");
         const legacy = await Preferences.get({ key: REMOTE_CREDENTIAL_KEY });
         if (!legacy.value) return null;
         await SecureStoragePlugin.set({ key: REMOTE_CREDENTIAL_KEY, value: legacy.value });

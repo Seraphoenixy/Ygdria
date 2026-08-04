@@ -1,3 +1,37 @@
+/* ==========================================================================
+   Editor styles — note title, document content, code blocks, toolbar,
+   search bar, tag editor, and mobile adaptations.
+   All themeable values are consumed from tokens.css.
+   ========================================================================== */
+
+/* ── Reusable editor button base ── */
+.editor-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--toolbar-fg);
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.editor-btn:hover:not(:disabled) {
+  background: var(--toolbar-hover-bg);
+}
+.editor-btn.is-active {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.editor-btn:disabled {
+  color: var(--toolbar-disabled-fg);
+  cursor: default;
+}
+
+/* ── Note title input ── */
 .note-title-input {
   display: block;
   width: 100%;
@@ -10,32 +44,16 @@
   color: inherit;
   background: transparent;
   font: inherit;
-  font-family: "Times New Roman", SimHei, "黑体", serif;
+  font-family: var(--font-serif-heading);
   font-size: 1.5rem;
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.25;
 }
+
+/* ── Document root ── */
 .ygdria-document {
-  --doc-text: #333;
-  --doc-muted: #686870;
-  --doc-border: #d9dce1;
-  --doc-surface-subtle: #f1f2f4;
   --doc-link: var(--color-accent);
-  --doc-reference-bg: #efedff;
-  --doc-code-bg: #f6f8fa;
-  --doc-code-text: #24292f;
-  --doc-code-border: #d8dee4;
-  --doc-code-toolbar: rgba(246, 248, 250, 0.96);
-  --code-comment: #6e7781;
-  --code-keyword: #cf222e;
-  --code-entity: #8250df;
-  --code-string: #0a3069;
-  --code-literal: #0550ae;
-  --code-property: #0550ae;
-  --code-punctuation: #57606a;
-  --code-variable: #953800;
-  --code-tag: #116329;
   --space-xs: 0.3rem;
   --space-sm: 0.45rem;
   --space-md: 0.65rem;
@@ -44,11 +62,13 @@
   width: 100%;
   color: var(--doc-text);
   font-size: 16px;
-  font-family: "Times New Roman", SimSun, "宋体", serif;
+  font-family: var(--font-serif);
   font-weight: 500;
   line-height: 1.65;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
+
+/* ── Editor base ── */
 .ygdria-editor {
   border-radius: 0;
   outline: 0;
@@ -57,12 +77,13 @@
   display: block;
   width: 100%;
 }
-/* Code notes, like text notes, start directly after the title's bottom
-   margin.  Be explicit here because the editable code block is a Tiptap
-   node-view wrapper while the read-only one is a plain React element. */
+
+/* Code notes start directly after the title's bottom margin. */
 .note-content-code .code-note-document > .ygdria-code-block {
   margin-block: 0;
 }
+
+/* ── Empty editor placeholder ── */
 .ygdria-editor > p:only-child:has(> br:only-child)::before {
   float: left;
   height: 0;
@@ -70,10 +91,11 @@
   content: "在这里输入你的笔记内容...";
   pointer-events: none;
 }
-/* Localized empty-editor placeholder (see <html lang> set from the app locale). */
 :lang(en) .ygdria-editor > p:only-child:has(> br:only-child)::before {
   content: "Start writing your note...";
 }
+
+/* ── Focus / format painter / selection ── */
 .ygdria-editor:focus-within {
   box-shadow: none;
   background: transparent;
@@ -92,22 +114,22 @@
 .ygdria-editor .selectedCell::after {
   background: rgba(15, 108, 189, 0.08);
 }
-.ygdria-document > :first-child {
-  margin-top: 0;
-}
-.ygdria-document > :last-child {
-  margin-bottom: 0;
-}
+
+/* ── Document typography ── */
+.ygdria-document > :first-child { margin-top: 0; }
+.ygdria-document > :last-child { margin-bottom: 0; }
+
 .ygdria-document p {
   margin: 0 0 var(--space-md);
 }
+
 .ygdria-document h1,
 .ygdria-document h2,
 .ygdria-document h3,
 .ygdria-document h4,
 .ygdria-document h5,
 .ygdria-document h6 {
-  font-family: "Times New Roman", SimHei, "黑体", serif;
+  font-family: var(--font-serif-heading);
   font-weight: 700;
   line-height: 1.25;
   letter-spacing: -0.015em;
@@ -134,6 +156,8 @@
 .ygdria-document h3 + h4 {
   margin-top: var(--space-md);
 }
+
+/* ── Lists ── */
 .ygdria-document ul,
 .ygdria-document ol {
   margin: 0 0 var(--space-md);
@@ -145,7 +169,7 @@
   padding-left: 1.8em;
 }
 .ygdria-document li::marker {
-  color: #000;
+  color: var(--doc-text);
 }
 .ygdria-document li > p {
   margin: 0;
@@ -158,31 +182,39 @@
   margin-top: 0.35em;
   margin-bottom: 0.35em;
 }
+
+/* ── Blockquote ── */
 .ygdria-document blockquote {
   margin: 0.8em 0;
   padding: 0.2em 0 0.2em 1em;
-  border-left: 3px solid #d9d9df;
-  background: #fafafa;
-  color: #606068;
+  border-left: 3px solid var(--blockquote-border);
+  background: var(--blockquote-bg);
+  color: var(--blockquote-fg);
 }
 .ygdria-document blockquote > :last-child {
   margin-bottom: 0;
 }
+
+/* ── Horizontal rule ── */
 .ygdria-document hr {
   border: 0;
   border-top: 1px solid var(--doc-border);
   margin: var(--space-xl) 0;
 }
+
+/* ── Inline code ── */
 .ygdria-document code {
   padding: 0.15em 0.35em;
   border-radius: 4px;
   background: var(--doc-surface-subtle);
   color: #383842;
-  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.88em;
   line-height: inherit;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
+
+/* ── Links ── */
 .ygdria-document a {
   color: var(--doc-link);
   text-decoration-color: rgba(15, 108, 189, 0.35);
@@ -196,6 +228,8 @@
 .ygdria-document a code {
   color: inherit;
 }
+
+/* ── Preformatted text (plain pre) ── */
 .ygdria-document pre {
   margin: 0.8em 0;
   padding: 16px 18px;
@@ -203,7 +237,7 @@
   border: 1px solid rgba(255, 255, 255, 0.06);
   overflow-x: hidden;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   word-break: break-word;
   background: var(--doc-code-bg);
   color: var(--doc-code-text);
@@ -215,11 +249,16 @@
   padding: 0;
   background: transparent;
   color: inherit;
-  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   white-space: inherit;
   overflow-wrap: inherit;
   word-break: inherit;
 }
+
+/* ==========================================================================
+   Code block (with toolbar, gutter, syntax highlighting)
+   ========================================================================== */
+
 .ygdria-code-block {
   position: relative;
   margin: 0.8em 0;
@@ -228,6 +267,8 @@
   overflow: hidden;
   background: var(--doc-code-bg);
 }
+
+/* ── Code block toolbar ── */
 .ygdria-code-block .ygdria-code-block-toolbar {
   position: absolute;
   z-index: 2;
@@ -242,7 +283,7 @@
   border-bottom: 1px solid var(--doc-code-border);
   background: var(--doc-code-toolbar);
   color: var(--doc-muted);
-  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -305,10 +346,14 @@
   background: rgba(127, 127, 127, 0.14);
   color: var(--doc-code-text);
 }
+
+/* ── Code block body ── */
 .ygdria-code-block-body {
   display: flex;
   padding-top: 46px;
 }
+
+/* ── Code block gutter (line numbers) ── */
 .ygdria-code-block-gutter {
   position: relative;
   flex-shrink: 0;
@@ -319,7 +364,7 @@
   color: #8b8e96;
   font-size: 14px;
   line-height: 1.65;
-  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   border-right: 1px solid var(--doc-code-border);
 }
 .ygdria-code-block-gutter span {
@@ -331,6 +376,7 @@
   left: 13px;
   padding: 0;
 }
+
 .ygdria-code-block-body > pre {
   margin: 0;
   padding: 0 18px 12px 12px;
@@ -338,24 +384,27 @@
   border-radius: 0;
   overflow-x: hidden;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   word-break: break-word;
   flex: 1;
   min-width: 0;
   font-size: 14px;
   line-height: 1.65;
-  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
 }
 .ygdria-code-block-body > pre > * {
   display: block;
   white-space: pre-wrap !important;
-  overflow-wrap: anywhere !important;
+  overflow-wrap: break-word !important;
   word-break: break-word !important;
 }
+
 .ygdria-code-block.is-large-plain .ygdria-code-block-toolbar span::after {
   content: " · >100 KiB";
   opacity: 0.72;
 }
+
+/* ── Code block syntax highlighting (highlight.js) ── */
 .ygdria-code-block .hljs-comment,
 .ygdria-code-block .hljs-comment *,
 .ygdria-code-block .hljs-quote,
@@ -404,8 +453,6 @@
 .ygdria-code-block .hljs-code { color: var(--doc-code-text); }
 .ygdria-code-block .hljs-link { color: var(--doc-link); text-decoration: underline; }
 .ygdria-code-block .hljs-subst { color: var(--doc-code-text); }
-/* Highlight.js nests JSON true/false/null in `keyword`; preserve the JSON
-   literal color instead of the generic language-keyword color. */
 .ygdria-code-block[data-language="json"] .hljs-literal,
 .ygdria-code-block[data-language="json"] .hljs-literal .hljs-keyword { color: var(--code-literal); }
 .ygdria-code-block .hljs-emphasis { font-style: italic; }
@@ -413,39 +460,10 @@
 .ygdria-code-block .hljs-addition { color: var(--code-tag); background: rgba(46, 160, 67, 0.12); }
 .ygdria-code-block .hljs-deletion { color: var(--code-keyword); background: rgba(248, 81, 73, 0.12); }
 
+/* ==========================================================================
+   Tables
+   ========================================================================== */
 
-@media (prefers-color-scheme: dark) {
-  .ygdria-document {
-    --doc-code-bg: #161b22;
-    --doc-code-text: #e6edf3;
-    --doc-code-border: #30363d;
-    --doc-code-toolbar: rgba(22, 27, 34, 0.96);
-    --code-comment: #8b949e;
-    --code-keyword: #ff7b72;
-    --code-entity: #d2a8ff;
-    --code-string: #a5d6ff;
-    --code-literal: #79c0ff;
-    --code-property: #79c0ff;
-    --code-punctuation: #8b949e;
-    --code-variable: #ffa657;
-    --code-tag: #7ee787;
-  }
-}
-:root[data-theme="dark"] .ygdria-document {
-  --doc-code-bg: #161b22;
-  --doc-code-text: #e6edf3;
-  --doc-code-border: #30363d;
-  --doc-code-toolbar: rgba(22, 27, 34, 0.96);
-  --code-comment: #8b949e;
-  --code-keyword: #ff7b72;
-  --code-entity: #d2a8ff;
-  --code-string: #a5d6ff;
-  --code-literal: #79c0ff;
-  --code-property: #79c0ff;
-  --code-punctuation: #8b949e;
-  --code-variable: #ffa657;
-  --code-tag: #7ee787;
-}
 .ygdria-document table {
   border-collapse: separate;
   border-spacing: 0;
@@ -455,12 +473,11 @@
 .ygdria-document td,
 .ygdria-document th {
   padding: 9px 11px;
-  border-right: 1px solid #000;
-  border-bottom: 1px solid #000;
+  border-right: 1px solid var(--doc-border);
+  border-bottom: 1px solid var(--doc-border);
   vertical-align: middle;
+  position: relative;
 }
-/* Paragraph spacing belongs between blocks, not above or below the content
-   being vertically aligned inside a table cell. */
 .ygdria-document td > :first-child,
 .ygdria-document th > :first-child {
   margin-top: 0;
@@ -469,30 +486,24 @@
 .ygdria-document th > :last-child {
   margin-bottom: 0;
 }
-/* When column resizing is active, ProseMirror appends its handle after the
-   paragraph. The handle then becomes :last-child, so reset the actual final
-   paragraph as well; otherwise its bottom margin makes every row taller. */
 .ygdria-document td > p:last-of-type,
 .ygdria-document th > p:last-of-type {
   margin-bottom: 0;
 }
-/* Tiptap appends the resize widget inside each cell. */
-.ygdria-document td,
 .ygdria-document th {
-  position: relative;
-}
-.ygdria-document th {
-  background: #f7f7f8;
-  font-family: Inter, sans-serif;
+  background: var(--table-header-bg);
+  font-family: var(--font-sans);
   font-weight: 600;
   text-align: left;
 }
 .ygdria-document tr > :first-child {
-  border-left: 1px solid #000;
+  border-left: 1px solid var(--doc-border);
 }
 .ygdria-document tr:first-child > * {
-  border-top: 1px solid #000;
+  border-top: 1px solid var(--doc-border);
 }
+
+/* ── Images ── */
 .ygdria-document img {
   display: block;
   max-width: 100%;
@@ -500,6 +511,8 @@
   margin: var(--space-lg) 0;
   border-radius: 8px;
 }
+
+/* ── Table wrapper & resize handles ── */
 .ygdria-document .tableWrapper {
   position: relative;
   width: 100%;
@@ -515,7 +528,6 @@
   cursor: col-resize;
   z-index: 1;
 }
-/* ProseMirror/Tiptap v3 列宽拖拽手柄（columnResizing 插件生成的类名） */
 .ygdria-document .column-resize-handle {
   position: absolute;
   right: -2px;
@@ -525,7 +537,6 @@
   z-index: 20;
   background-color: var(--doc-link);
   opacity: 0.35;
-  /* Pointer events stay on the cell, where ProseMirror detects the edge. */
   pointer-events: none;
 }
 .ygdria-document .column-resize-handle:hover,
@@ -537,6 +548,8 @@
 .ygdria-document .column-resize-handle {
   cursor: col-resize;
 }
+
+/* ── Task list ── */
 .ygdria-document ul.task-list,
 .ygdria-document ul[data-type="taskList"] {
   padding-left: 0;
@@ -558,17 +571,46 @@
   margin: 0.46em 0 0;
 }
 .ygdria-document li[data-checked="true"] > div {
-  color: #7a7a84;
+  color: var(--task-done-fg);
   text-decoration: line-through;
 }
+
+/* ── Note reference ── */
 .note-reference {
   color: var(--doc-link);
-  background: var(--doc-reference-bg);
+  background: var(--note-reference-bg);
   padding: 0.08em 0.32em;
   border-radius: 4px;
   font-weight: 500;
   text-decoration: none;
 }
+
+/* ── Mark / redacted text ── */
+.ygdria-document mark {
+  border-radius: 2px;
+  padding: 0.05em 0.15em;
+}
+.ygdria-document .ygdria-redacted,
+.ygdria-document [data-ygdria-redacted] {
+  display: inline;
+  padding: 0.05em 0.14em;
+  border-radius: 2px;
+  background: #111;
+  color: #111 !important;
+  cursor: pointer;
+  user-select: none;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.ygdria-document .ygdria-redacted.is-revealed,
+.ygdria-document [data-ygdria-redacted].is-revealed {
+  background: transparent;
+  color: inherit !important;
+  user-select: text;
+}
+
+/* ==========================================================================
+   Editor toolbar
+   ========================================================================== */
 
 .editor-toolbar {
   flex: 0 0 auto;
@@ -579,14 +621,15 @@
   gap: 3px;
   padding: 6px 16px 8px;
   border-bottom: 1px solid var(--doc-border);
-  background: rgba(248, 249, 250, 0.96);
+  background: var(--toolbar-bg);
   backdrop-filter: blur(10px);
-  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
   font-size: 13px;
   min-width: 0;
   overflow: hidden;
 }
 
+/* ── Mode toggle (read / edit) ── */
 .editor-toolbar .mode-toggle {
   display: flex;
   flex: 0 0 auto;
@@ -594,7 +637,7 @@
   margin-left: auto;
   border-radius: 6px;
   overflow: hidden;
-  border: 1px solid #e2e2e6;
+  border: 1px solid var(--toolbar-separator);
 }
 .editor-toolbar .mode-btn {
   display: inline-flex;
@@ -607,17 +650,14 @@
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  background: #f5f5f7;
-  color: #5c5c66;
+  background: var(--toolbar-mode-bg);
+  color: var(--toolbar-mode-fg);
   transition: background-color 120ms ease, color 120ms ease;
 }
 .editor-toolbar .mode-btn:not(:disabled):hover {
-  background: #ebebee;
+  background: var(--toolbar-mode-hover-bg);
 }
-.editor-toolbar .mode-btn.mode-read.is-active {
-  background: var(--color-accent);
-  color: #fff;
-}
+.editor-toolbar .mode-btn.mode-read.is-active,
 .editor-toolbar .mode-btn.mode-edit.is-active {
   background: var(--color-accent);
   color: #fff;
@@ -626,6 +666,7 @@
   cursor: default;
 }
 
+/* ── Toolbar button groups ── */
 .editor-toolbar-group {
   display: flex;
   align-items: center;
@@ -645,36 +686,33 @@
   padding: 0;
   border: 1px solid transparent;
   border-radius: 5px;
-  color: #45454d;
+  color: var(--toolbar-fg);
   background: transparent;
   cursor: pointer;
   flex-shrink: 0;
 }
-
 .editor-toolbar > button:hover:not(:disabled),
 .editor-toolbar-group > button:hover:not(:disabled),
 .editor-toolbar-dropdown > button:hover:not(:disabled) {
-  background: #edf3f8;
+  background: var(--toolbar-hover-bg);
 }
-
 .editor-toolbar > button.is-active,
 .editor-toolbar-group > button.is-active,
 .editor-toolbar-dropdown > button.is-active {
   color: var(--color-accent);
   background: var(--color-accent-soft);
 }
-
 .editor-toolbar > button:disabled,
 .editor-toolbar-group > button:disabled,
 .editor-toolbar-dropdown > button:disabled {
-  color: #b5b5bb;
+  color: var(--toolbar-disabled-fg);
   cursor: default;
 }
 
+/* ── Toolbar dropdown ── */
 .editor-toolbar-dropdown {
   position: relative;
 }
-
 .editor-toolbar-dropdown > button {
   display: inline-flex;
   width: auto;
@@ -691,26 +729,16 @@
   padding: 0 5px;
   gap: 2px;
 }
-.editor-toolbar-secondary {
-  display: contents;
-}
-.editor-toolbar-secondary-primary,
-.editor-toolbar-secondary-overflow {
-  display: contents;
-}
-.editor-toolbar-more-trigger {
-  display: none;
-}
 .editor-toolbar-dropdown.is-narrow .editor-toolbar-dropdown-label {
   width: 36px;
 }
-
 .editor-toolbar-dropdown-label {
   display: inline-block;
   width: 52px;
   white-space: nowrap;
 }
 
+/* ── Toolbar dropdown panel ── */
 .editor-toolbar-dropdown-panel {
   z-index: 20;
   display: flex;
@@ -718,13 +746,12 @@
   max-height: 320px;
   flex-direction: column;
   padding: 6px 0;
-  border: 1px solid #d9d9de;
+  border: 1px solid var(--popover-border);
   border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 12px 30px rgba(24, 25, 29, 0.16);
+  background: var(--popover-bg);
+  box-shadow: var(--popover-shadow);
   overflow-y: auto;
 }
-
 .editor-toolbar-dropdown-panel button {
   display: flex;
   align-items: center;
@@ -735,17 +762,17 @@
   gap: 8px;
   border-radius: 0;
   font-size: 13px;
-  color: #3f4248;
+  color: var(--popover-fg);
 }
-
 .editor-toolbar-dropdown-panel button:hover:not(:disabled) {
-  background: #f0f0f2;
+  background: var(--dropdown-hover-bg);
 }
-
 .editor-toolbar-dropdown-panel button.is-active {
   color: var(--color-accent);
   background: var(--color-accent-soft);
 }
+
+/* ── Compact options panel ── */
 .editor-toolbar-dropdown-panel.is-compact-options {
   display: flex;
   min-width: 0;
@@ -757,8 +784,6 @@
 .editor-toolbar-dropdown-panel.is-compact-options .editor-toolbar-group {
   flex-wrap: nowrap;
 }
-/* These are the same buttons as the main editing toolbar, placed in a
-   no-wrap group so the compact menu has no text or trailing control slot. */
 .editor-toolbar-dropdown-panel.is-compact-options .editor-toolbar-group > button {
   display: inline-flex;
   align-items: center;
@@ -768,52 +793,29 @@
   padding: 0;
   border: 1px solid transparent;
   border-radius: 5px;
-  color: #45454d;
+  color: var(--toolbar-fg);
   background: transparent;
   cursor: pointer;
   flex-shrink: 0;
 }
 .editor-toolbar-dropdown-panel.is-compact-options .editor-toolbar-group > button:hover:not(:disabled) {
-  background: #edf3f8;
+  background: var(--toolbar-hover-bg);
 }
 .editor-toolbar-dropdown-panel.is-compact-options .editor-toolbar-group > button.is-active {
   color: var(--color-accent);
   background: var(--color-accent-soft);
 }
-.editor-toolbar-overflow-panel {
-  z-index: 20;
-  display: grid;
-  gap: 8px;
-  width: 226px;
-  padding: 10px;
-  border: 1px solid #d9d9de;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 12px 30px rgba(24, 25, 29, 0.16);
+
+/* ── Toolbar overflow ── */
+.editor-toolbar-secondary {
+  display: contents;
 }
-.editor-toolbar-overflow-panel .editor-toolbar-group {
-  flex-wrap: nowrap;
-  gap: 4px;
+.editor-toolbar-secondary-primary,
+.editor-toolbar-secondary-overflow {
+  display: contents;
 }
-.editor-toolbar-overflow-panel .editor-toolbar-group > button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  color: #45454d;
-  background: transparent;
-  cursor: pointer;
-}
-.editor-toolbar-overflow-panel .editor-toolbar-group > button:hover:not(:disabled) {
-  background: #edf3f8;
-}
-.editor-toolbar-overflow-panel .editor-toolbar-group > button.is-active {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+.editor-toolbar-more-trigger {
+  display: none;
 }
 .editor-toolbar.overflow-level-1 .editor-toolbar-secondary-overflow,
 .editor-toolbar.overflow-level-2 .editor-toolbar-secondary {
@@ -832,25 +834,63 @@
   padding: 0;
   border: 1px solid transparent;
   border-radius: 5px;
-  color: #45454d;
+  color: var(--toolbar-fg);
   background: transparent;
   cursor: pointer;
 }
 .editor-toolbar-more-trigger > button:hover:not(:disabled) {
-  background: #edf3f8;
+  background: var(--toolbar-hover-bg);
 }
 .editor-toolbar-more-trigger > button.is-active {
   color: var(--color-accent);
   background: var(--color-accent-soft);
 }
 
+.editor-toolbar-overflow-panel {
+  z-index: 20;
+  display: grid;
+  gap: 8px;
+  width: 226px;
+  padding: 10px;
+  border: 1px solid var(--popover-border);
+  border-radius: 10px;
+  background: var(--popover-bg);
+  box-shadow: var(--popover-shadow);
+}
+.editor-toolbar-overflow-panel .editor-toolbar-group {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.editor-toolbar-overflow-panel .editor-toolbar-group > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--toolbar-fg);
+  background: transparent;
+  cursor: pointer;
+}
+.editor-toolbar-overflow-panel .editor-toolbar-group > button:hover:not(:disabled) {
+  background: var(--toolbar-hover-bg);
+}
+.editor-toolbar-overflow-panel .editor-toolbar-group > button.is-active {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+/* ── Toolbar separator ── */
 .editor-toolbar-separator {
   width: 1px;
   height: 18px;
   margin: 0 6px;
-  background: #e2e2e6;
+  background: var(--toolbar-separator);
 }
 
+/* ── Toolbar color picker ── */
 .editor-toolbar-color {
   position: relative;
   display: inline-flex;
@@ -860,11 +900,9 @@
   border-radius: 5px;
   flex-shrink: 0;
 }
-
 .editor-toolbar-color:hover {
-  background: #f0f0f2;
+  background: var(--dropdown-hover-bg);
 }
-
 .editor-toolbar .editor-toolbar-color-icon,
 .editor-toolbar-overflow-panel .editor-toolbar-color-icon {
   display: inline-flex;
@@ -876,10 +914,9 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: #45454d;
+  color: var(--toolbar-fg);
   cursor: pointer;
 }
-
 .editor-toolbar .editor-toolbar-color-strip,
 .editor-toolbar-overflow-panel .editor-toolbar-color-strip {
   position: absolute;
@@ -889,7 +926,6 @@
   height: 3px;
   border-radius: 2px;
 }
-
 .editor-toolbar .editor-toolbar-color-dropdown,
 .editor-toolbar-overflow-panel .editor-toolbar-color-dropdown {
   display: grid;
@@ -902,7 +938,6 @@
   background: transparent;
   cursor: pointer;
 }
-
 .editor-toolbar-color-dropdown:hover,
 .editor-toolbar-color-dropdown[aria-expanded="true"] {
   background: #e5e5e9;
@@ -914,63 +949,55 @@
   gap: 10px;
   min-width: 250px;
   padding: 10px;
-  border: 1px solid #d9d9de;
+  border: 1px solid var(--popover-border);
   border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 12px 30px rgba(24, 25, 29, 0.16);
-  color: #3f4248;
-  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  background: var(--popover-bg);
+  box-shadow: var(--popover-shadow);
+  color: var(--popover-fg);
+  font-family: var(--font-sans);
   font-size: 13px;
 }
-
 .editor-toolbar-color-panel label {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
 }
-
 .editor-toolbar-color-palette {
   display: grid;
   gap: 7px;
 }
-
 .editor-toolbar-color-palette > span,
 .editor-toolbar-color-panel label > span {
-  color: #686b73;
+  color: var(--dropdown-label-fg);
   font-size: 12px;
 }
-
 .editor-toolbar-color-swatches {
   display: grid;
   grid-template-columns: repeat(10, 18px);
   gap: 5px;
 }
-
 .editor-toolbar-color-panel input[type="color"] {
   width: 34px;
   height: 26px;
   padding: 2px;
-  border: 1px solid #d9d9de;
+  border: 1px solid var(--popover-border);
   border-radius: 5px;
-  background: #fff;
+  background: var(--popover-bg);
   cursor: pointer;
 }
-
 .editor-toolbar-color-panel button {
   height: 28px;
   padding: 0 8px;
-  border: 1px solid #d9d9de;
+  border: 1px solid var(--popover-border);
   border-radius: 5px;
   color: var(--color-accent);
-  background: #fff;
+  background: var(--popover-bg);
   cursor: pointer;
 }
-
 .editor-toolbar-color-panel button:hover {
-  background: #f0f0f2;
+  background: var(--dropdown-hover-bg);
 }
-
 .editor-toolbar-color-panel .editor-toolbar-color-swatches button {
   width: 18px;
   height: 18px;
@@ -978,44 +1005,40 @@
   border: 1px solid rgba(36, 42, 48, 0.18);
   border-radius: 3px;
 }
-
 .editor-toolbar-color-panel .editor-toolbar-color-swatches button:hover,
 .editor-toolbar-color-panel .editor-toolbar-color-swatches button.is-active {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
 
+/* ── Link popover ── */
 .editor-toolbar-link-popover {
   z-index: 20;
   padding: 8px;
-  border: 1px solid #d9d9de;
+  border: 1px solid var(--popover-border);
   border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 12px 30px rgba(24, 25, 29, 0.16);
+  background: var(--popover-bg);
+  box-shadow: var(--popover-shadow);
 }
-
 .editor-toolbar-link-popover form {
   display: flex;
   gap: 6px;
   align-items: center;
 }
-
 .editor-toolbar-link-popover input {
   width: 240px;
   height: 30px;
   padding: 0 10px;
-  border: 1px solid #d9d9de;
+  border: 1px solid var(--popover-border);
   border-radius: 6px;
   font-size: 13px;
-  color: #3f4248;
+  color: var(--popover-fg);
   outline: none;
-  background: #fff;
+  background: var(--popover-bg);
 }
-
 .editor-toolbar-link-popover input:focus {
   border-color: var(--color-accent);
 }
-
 .editor-toolbar-link-popover button {
   display: inline-flex;
   align-items: center;
@@ -1023,80 +1046,19 @@
   width: 30px;
   height: 30px;
   padding: 0;
-  border: 1px solid #d9d9de;
+  border: 1px solid var(--popover-border);
   border-radius: 6px;
   font-size: 15px;
   color: #fff;
   background: var(--color-accent);
   cursor: pointer;
 }
-
 .editor-toolbar-link-popover button:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
-.ygdria-document mark {
-  border-radius: 2px;
-  padding: 0.05em 0.15em;
-}
-
-/* Sensitive-text curtain. The mark stays in the document, while the
-   revealed class is a local, temporary display state added by a click. */
-.ygdria-document .ygdria-redacted,
-.ygdria-document [data-ygdria-redacted] {
-  display: inline;
-  padding: 0.05em 0.14em;
-  border-radius: 2px;
-  background: #111;
-  color: #111 !important;
-  cursor: pointer;
-  user-select: none;
-  transition: color 120ms ease, background-color 120ms ease;
-}
-
-.ygdria-document .ygdria-redacted.is-revealed,
-.ygdria-document [data-ygdria-redacted].is-revealed {
-  background: transparent;
-  color: inherit !important;
-  user-select: text;
-}
-
-/* ── Markdown view ── */
-.ygdria-markdown-view {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  border: 1px solid var(--doc-border);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.ygdria-markdown-textarea {
-  flex: 1;
-  width: 100%;
-  padding: 16px 18px;
-  border: 0;
-  border-radius: 0;
-  outline: none;
-  resize: vertical;
-  background: #fafbfc;
-  color: #24292f;
-  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 14px;
-  line-height: 1.65;
-  tab-size: 4;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.ygdria-markdown-textarea:focus {
-  background: #fff;
-}
-
-/* ── Editor toolbar markdown buttons ── */
+/* ── Markdown editor buttons ── */
 .editor-toolbar-md-btn {
   display: inline-flex;
   align-items: center;
@@ -1106,41 +1068,59 @@
   padding: 0;
   border: 1px solid transparent;
   border-radius: 5px;
-  color: #45454d;
+  color: var(--toolbar-fg);
   background: transparent;
   cursor: pointer;
   flex-shrink: 0;
   margin-left: 4px;
 }
-
 .editor-toolbar-md-btn:hover:not(:disabled) {
-  background: #edf3f8;
+  background: var(--toolbar-hover-bg);
 }
-
 .editor-toolbar-md-btn.is-active {
   color: var(--color-accent);
   background: var(--color-accent-soft);
 }
 
-@media (prefers-color-scheme: dark) {
-  .ygdria-markdown-textarea {
-    background: #161b22;
-    color: #e6edf3;
-  }
-  .ygdria-markdown-textarea:focus {
-    background: #1c2128;
-  }
+/* ==========================================================================
+   Markdown view
+   ========================================================================== */
+
+.ygdria-markdown-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--doc-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ygdria-markdown-textarea {
+  flex: 1;
+  width: 100%;
+  padding: 16px 18px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  resize: vertical;
+  background: var(--md-textarea-bg);
+  color: var(--md-textarea-color);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.65;
+  tab-size: 4;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ygdria-markdown-textarea:focus {
+  background: var(--md-textarea-focus-bg);
 }
 
-:root[data-theme="dark"] .ygdria-markdown-textarea {
-  background: #161b22;
-  color: #e6edf3;
-}
-:root[data-theme="dark"] .ygdria-markdown-textarea:focus {
-  background: #1c2128;
-}
+/* ==========================================================================
+   Find & Replace search bar
+   ========================================================================== */
 
-/* ── Find & Replace bottom bar ── */
 .ygdria-search-bar {
   position: sticky;
   bottom: 0;
@@ -1152,11 +1132,11 @@
   padding: 8px 12px;
   border: 1px solid var(--doc-border);
   border-radius: 10px;
-  background: rgba(248, 249, 250, 0.98);
+  background: var(--search-bar-bg);
   backdrop-filter: blur(10px);
-  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
   font-size: 13px;
-  color: #3f4248;
+  color: var(--popover-fg);
 }
 .ygdria-search-row {
   display: flex;
@@ -1168,15 +1148,15 @@
   min-width: 120px;
   height: 30px;
   padding: 0 10px;
-  border: 1px solid #d9d9de;
+  border: 1px solid var(--search-input-border);
   border-radius: 6px;
-  background: #fff;
-  color: #24292f;
+  background: var(--search-input-bg);
+  color: var(--md-textarea-color);
   font: inherit;
   outline: none;
 }
 .ygdria-search-input:focus {
-  border-color: var(--color-accent);
+  border-color: var(--search-input-focus-border);
 }
 .ygdria-search-option {
   display: inline-flex;
@@ -1197,10 +1177,10 @@
   justify-content: center;
   height: 30px;
   padding: 0 8px;
-  border: 1px solid #d9d9de;
+  border: 1px solid var(--search-input-border);
   border-radius: 6px;
-  background: #fff;
-  color: #45454d;
+  background: var(--search-btn-bg);
+  color: var(--toolbar-fg);
   cursor: pointer;
   font: inherit;
   gap: 4px;
@@ -1213,108 +1193,37 @@
 .ygdria-search-nav:hover:not(:disabled),
 .ygdria-search-close:hover,
 .ygdria-search-action:hover:not(:disabled) {
-  background: #edf3f8;
+  background: var(--search-btn-hover-bg);
 }
 .ygdria-search-nav:disabled,
 .ygdria-search-action:disabled {
-  color: #b5b5bb;
+  color: var(--toolbar-disabled-fg);
   cursor: default;
-  border-color: #e6e6ea;
+  border-color: var(--toolbar-separator);
 }
 .ygdria-search-count {
   min-width: 56px;
   text-align: center;
-  color: #686b73;
+  color: var(--search-count-fg);
   font-variant-numeric: tabular-nums;
 }
 .ygdria-search-replace-row .ygdria-search-action {
   flex: 0 0 auto;
 }
-/* Active / inactive search match highlights rendered by the ProseMirror plugin. */
 .ygdria-document .ygdria-search-match {
-  background: rgba(255, 212, 0, 0.42);
+  background: var(--search-match-bg);
   border-radius: 2px;
 }
 .ygdria-document .ygdria-search-current {
-  background: rgba(255, 145, 0, 0.6);
+  background: var(--search-current-bg);
   border-radius: 2px;
-  color: #1a1a1a;
+  color: var(--search-current-fg);
 }
 
-@media (prefers-color-scheme: dark) {
-  .ygdria-search-bar {
-    background: rgba(22, 27, 34, 0.98);
-    border-color: #30363d;
-    color: #e6edf3;
-  }
-  .ygdria-search-input {
-    background: #0d1117;
-    border-color: #30363d;
-    color: #e6edf3;
-  }
-  .ygdria-search-input:focus {
-    border-color: #388bfd;
-  }
-  .ygdria-search-nav,
-  .ygdria-search-close,
-  .ygdria-search-action {
-    background: #161b22;
-    border-color: #30363d;
-    color: #e6edf3;
-  }
-  .ygdria-search-nav:hover:not(:disabled),
-  .ygdria-search-close:hover,
-  .ygdria-search-action:hover:not(:disabled) {
-    background: #1f2630;
-  }
-  .ygdria-search-count {
-    color: #8b949e;
-  }
-  .ygdria-document .ygdria-search-match {
-    background: rgba(187, 158, 0, 0.5);
-  }
-  .ygdria-document .ygdria-search-current {
-    background: rgba(219, 139, 0, 0.75);
-    color: #fff;
-  }
-}
-:root[data-theme="dark"] .ygdria-search-bar {
-  background: rgba(22, 27, 34, 0.98);
-  border-color: #30363d;
-  color: #e6edf3;
-}
-:root[data-theme="dark"] .ygdria-search-input {
-  background: #0d1117;
-  border-color: #30363d;
-  color: #e6edf3;
-}
-:root[data-theme="dark"] .ygdria-search-input:focus {
-  border-color: #388bfd;
-}
-:root[data-theme="dark"] .ygdria-search-nav,
-:root[data-theme="dark"] .ygdria-search-close,
-:root[data-theme="dark"] .ygdria-search-action {
-  background: #161b22;
-  border-color: #30363d;
-  color: #e6edf3;
-}
-:root[data-theme="dark"] .ygdria-search-nav:hover:not(:disabled),
-:root[data-theme="dark"] .ygdria-search-close:hover,
-:root[data-theme="dark"] .ygdria-search-action:hover:not(:disabled) {
-  background: #1f2630;
-}
-:root[data-theme="dark"] .ygdria-search-count {
-  color: #8b949e;
-}
-:root[data-theme="dark"] .ygdria-document .ygdria-search-match {
-  background: rgba(187, 158, 0, 0.5);
-}
-:root[data-theme="dark"] .ygdria-document .ygdria-search-current {
-  background: rgba(219, 139, 0, 0.75);
-  color: #fff;
-}
+/* ==========================================================================
+   Tag editor
+   ========================================================================== */
 
-/* ── Tag editor ── */
 .tag-editor {
   display: flex;
   flex-wrap: wrap;
@@ -1322,7 +1231,9 @@
   gap: 6px;
   min-height: 26px;
 }
-.tag-editor-readonly { min-height: 26px; }
+.tag-editor-readonly {
+  min-height: 26px;
+}
 .note-content-footer {
   margin-top: 24px;
   padding-top: 12px;
@@ -1341,7 +1252,7 @@
   border-radius: 4px;
   background: var(--color-accent-soft);
   color: var(--color-accent);
-  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 500;
   line-height: 1.5;
@@ -1381,7 +1292,7 @@
   border-radius: 4px;
   background: transparent;
   color: inherit;
-  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
   font-size: 12px;
   outline: none;
 }
@@ -1395,7 +1306,7 @@
 .tag-editor-error {
   width: 100%;
   margin: 0;
-  color: #cf222e;
+  color: var(--color-danger);
   font-size: 12px;
 }
 .tag-display {
@@ -1404,42 +1315,17 @@
   gap: 4px;
   margin-bottom: 12px;
 }
-
-/* ── Search page tags ── */
 .search-result-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
   margin-top: 4px;
 }
-.search-page-tag-suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 12px;
-  padding: 0;
-}
-.search-page-tag-suggestion {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  border: 1px solid var(--doc-border);
-  border-radius: 16px;
-  background: transparent;
-  color: var(--doc-muted);
-  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  font-size: 12px;
-  cursor: pointer;
-}
-.search-page-tag-suggestion:hover {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-}
 
-/* The tag footer stays at the document's end (it is intentionally not sticky),
-   but its controls need phone-sized hit areas and keyboard/safe-area clearance. */
+/* ==========================================================================
+   Mobile adaptations (.phone)
+   ========================================================================== */
+
 .phone .note-content-footer {
   padding-bottom: max(12px, var(--sab));
   scroll-margin-bottom: calc(var(--mt-tabbar-h) + var(--sab));
@@ -1457,8 +1343,4 @@
   width: 32px;
   height: 32px;
   margin: -5px -6px -5px 0;
-}
-.phone .search-page-tag-suggestion {
-  min-height: 40px;
-  padding-inline: 14px;
 }

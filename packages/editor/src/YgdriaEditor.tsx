@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor, type NodeViewProps } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Table } from "@tiptap/extension-table";
@@ -24,7 +24,7 @@ import katex from "katex";
 // @ts-ignore
 import "katex/dist/katex.min.css";
 
-type EditorContextMenu = { x: number; y: number; hasSelection: boolean } | null;
+type EditorContextMenu = { x: number; y: number; hasSelection: boolean; isInTable: boolean } | null;
 
 const ClipboardShortcuts = Extension.create({
   name: "clipboardShortcuts",
@@ -201,9 +201,14 @@ export function YgdriaEditor({
   const [searchOpen, setSearchOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const onSaveRef = useRef(onSave);
+  // Leaving edit mode removes `onSave` before this component's Markdown
+  // cleanup runs. Keep the most recent editable callback so that cleanup can
+  // still commit the Markdown draft for the note that owned this editor.
+  const lastEditableOnSaveRef = useRef(onSave);
   const onUploadErrorRef = useRef(onUploadError);
   const documentIdRef = useRef(documentId);
   onSaveRef.current = onSave;
+  if (onSave) lastEditableOnSaveRef.current = onSave;
   onUploadErrorRef.current = onUploadError;
   const normalizedContent = useMemo(() => normalizeMathContent(content), [content]);
   const editor = useEditor({
@@ -235,7 +240,10 @@ export function YgdriaEditor({
       SearchReplace,
     ],
     content: normalizedContent as any,
-    editable: !readOnly,
+    // The table extension decides whether to register column resizing while
+    // the editor is being constructed. Start editable so the plugin always
+    // exists, then apply the requested mode before the browser paints below.
+    editable: true,
     onUpdate: ({ editor }: { editor: Editor }) => {
       // View-mode transactions (including plugin and selection updates) must
       // never persist content. Otherwise a stale editor can overwrite the
@@ -300,19 +308,21 @@ export function YgdriaEditor({
           window.dispatchEvent(new Event("ygdria:editor-context-menu-open"));
           const mouseEvent = event as MouseEvent;
           const hasSelection = !view.state.selection.empty;
+          const isInTable = editor?.isActive("table") ?? false;
           setContextMenu({
             x: Math.max(8, Math.min(mouseEvent.clientX, window.innerWidth - 316)),
-            y: Math.max(8, Math.min(mouseEvent.clientY, window.innerHeight - 230)),
+            y: Math.max(8, Math.min(mouseEvent.clientY, window.innerHeight - (isInTable ? 420 : 230))),
             hasSelection,
+            isInTable,
           });
           return true;
         },
       },
     },
   });
-  // `useEditor` consumes `editable` only at creation time. Switching modes
-  // must keep this instance and its node views intact.
-  useEffect(() => {
+  // Keep one editor instance across mode changes so the just-edited document
+  // remains visible while its asynchronous save updates the query cache.
+  useLayoutEffect(() => {
     editor?.setEditable(!readOnly);
     if (readOnly) setContextMenu(null);
   }, [editor, readOnly]);
@@ -405,7 +415,7 @@ export function YgdriaEditor({
     if (!markdownInitializedRef.current) return;
     if (markdownTextRef.current === originalMarkdownRef.current) return;
     const { document } = markdownToTiptap(markdownTextRef.current);
-    onSaveRef.current?.(document);
+    (onSaveRef.current ?? lastEditableOnSaveRef.current)?.(document);
     originalMarkdownRef.current = markdownTextRef.current;
     if (editor && !editor.isDestroyed) {
       // The explicit save above uses the normal auto-save path. Do not emit a
@@ -451,6 +461,12 @@ export function YgdriaEditor({
           markdown: "复制为 Markdown",
           paste: "粘贴",
           plain: "以纯文本粘贴",
+          addRowBefore: "在上方插入行",
+          addRowAfter: "在下方插入行",
+          deleteRow: "删除当前行",
+          addColumnBefore: "在左侧插入列",
+          addColumnAfter: "在右侧插入列",
+          deleteColumn: "删除当前列",
         }
       : {
           cut: "Cut",
@@ -458,6 +474,12 @@ export function YgdriaEditor({
           markdown: "Copy as Markdown",
           paste: "Paste",
           plain: "Paste as plain text",
+          addRowBefore: "Insert row above",
+          addRowAfter: "Insert row below",
+          deleteRow: "Delete row",
+          addColumnBefore: "Insert column left",
+          addColumnAfter: "Insert column right",
+          deleteColumn: "Delete column",
         };
   const closeMenu = () => setContextMenu(null);
   const selectedMarkdown = () => {
@@ -566,6 +588,42 @@ export function YgdriaEditor({
             shortcut="Ctrl+Shift+V"
             onClick={() => void paste(true)}
           />
+          {contextMenu.isInTable && (
+            <>
+              <div className="editor-context-separator" />
+              <EditorMenuButton
+                icon="↑"
+                label={labels.addRowBefore}
+                onClick={() => { editor?.chain().focus().addRowBefore().run(); closeMenu(); }}
+              />
+              <EditorMenuButton
+                icon="↓"
+                label={labels.addRowAfter}
+                onClick={() => { editor?.chain().focus().addRowAfter().run(); closeMenu(); }}
+              />
+              <EditorMenuButton
+                icon="🗑"
+                label={labels.deleteRow}
+                onClick={() => { editor?.chain().focus().deleteRow().run(); closeMenu(); }}
+              />
+              <div className="editor-context-separator" />
+              <EditorMenuButton
+                icon="←"
+                label={labels.addColumnBefore}
+                onClick={() => { editor?.chain().focus().addColumnBefore().run(); closeMenu(); }}
+              />
+              <EditorMenuButton
+                icon="→"
+                label={labels.addColumnAfter}
+                onClick={() => { editor?.chain().focus().addColumnAfter().run(); closeMenu(); }}
+              />
+              <EditorMenuButton
+                icon="🗑"
+                label={labels.deleteColumn}
+                onClick={() => { editor?.chain().focus().deleteColumn().run(); closeMenu(); }}
+              />
+            </>
+          )}
         </div>
       )}
     </>

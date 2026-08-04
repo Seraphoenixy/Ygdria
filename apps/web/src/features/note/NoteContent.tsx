@@ -40,65 +40,121 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
   onUploadError?: (message: string) => void;
 }) {
   const [decryptedPayload, setDecryptedPayload] = useState<ProtectedPayload | null>(null);
+  // A note switch renders before its decryption effect runs. Associate the
+  // plaintext with its source note so the previous protected note is never
+  // shown (or saved) under the newly selected note during that render.
+  const [decryptedPayloadNoteId, setDecryptedPayloadNoteId] = useState<string | null>(null);
   const [title, setTitle] = useState(note.title);
   const [tagDraft, setTagDraft] = useState<string[] | null>(null);
   const decryptingRef = useRef(false);
+  // Encryption completes asynchronously. Keep the latest complete payload
+  // locally and discard older crypto completions so they cannot become stale
+  // writes after a newer edit.
+  const protectedPayloadRef = useRef<ProtectedPayload | null>(null);
+  const protectedSaveGenerationRef = useRef(0);
+  const protectedNoteIdRef = useRef(note.id);
+  if (protectedNoteIdRef.current !== note.id) {
+    protectedNoteIdRef.current = note.id;
+    protectedSaveGenerationRef.current++;
+    protectedPayloadRef.current = null;
+  }
+  const titleRef = useRef(title);
+  const savedTitleRef = useRef(note.title);
+  titleRef.current = title;
 
   // Decrypt protected note content when note or session state changes
   useEffect(() => {
     if (note.isProtected && note.contentCiphertext && session?.isUnlocked) {
+      let cancelled = false;
       decryptingRef.current = true;
       session.decrypt<ProtectedPayload>(note.contentCiphertext)
         .then((payload) => {
+          if (cancelled) return;
           setDecryptedPayload(payload);
+          setDecryptedPayloadNoteId(note.id);
+          protectedPayloadRef.current = payload;
           setTitle(payload.title);
+          savedTitleRef.current = payload.title;
         })
-        .catch(() => { setDecryptedPayload(null); })
-        .finally(() => { decryptingRef.current = false; });
+        .catch(() => {
+          if (!cancelled) {
+            setDecryptedPayload(null);
+            setDecryptedPayloadNoteId(note.id);
+          }
+        })
+        .finally(() => { if (!cancelled) decryptingRef.current = false; });
+      return () => { cancelled = true; };
     } else {
       setDecryptedPayload(null);
+      setDecryptedPayloadNoteId(null);
+      protectedPayloadRef.current = null;
       setTitle(note.title);
+      savedTitleRef.current = note.title;
     }
   }, [note.id, note.isProtected, note.contentCiphertext, session?.isUnlocked]);
 
   useEffect(() => {
-    if (!note.isProtected) setTitle(note.title);
+    if (!note.isProtected) {
+      setTitle(note.title);
+      savedTitleRef.current = note.title;
+    }
   }, [note.id, note.title, note.isProtected]);
 
-  const displayTitle = note.isProtected ? (decryptedPayload?.title ?? "") : note.title;
-  const displayContent = note.isProtected ? (decryptedPayload?.content ?? null) : note.content;
+  const activeDecryptedPayload = decryptedPayloadNoteId === note.id ? decryptedPayload : null;
+  const displayTitle = note.isProtected ? (activeDecryptedPayload?.title ?? "") : note.title;
+  const displayContent = note.isProtected ? (activeDecryptedPayload?.content ?? null) : note.content;
   const displayCodeLanguage = note.isProtected
-    ? readCodeLanguage(decryptedPayload?.propertiesJson)
+    ? readCodeLanguage(activeDecryptedPayload?.propertiesJson)
     : note.codeLanguage ?? "plaintext";
   const isLockedProtected = note.isProtected && !session?.isUnlocked;
+  const isLoadingProtected = note.isProtected && session?.isUnlocked && !activeDecryptedPayload;
   const persistedTags = note.isProtected
-    ? readTagsFromProperties(decryptedPayload?.propertiesJson)
+    ? readTagsFromProperties(activeDecryptedPayload?.propertiesJson)
     : (note.tags ?? []);
 
   // Tag writes are asynchronous. Keep an optimistic footer value so adding or
   // removing a tag redraws immediately instead of waiting for the note query.
   useEffect(() => {
     setTagDraft(null);
-  }, [note.id, note.tags, decryptedPayload?.propertiesJson]);
+  }, [note.id, note.tags, activeDecryptedPayload?.propertiesJson]);
 
   const handleSaveTitle = (nextTitle: string) => {
     if (note.isProtected && session?.isUnlocked) {
-      // For protected notes, re-encrypt with updated title
-      const payload = { title: nextTitle, content: decryptedPayload?.content, propertiesJson: decryptedPayload?.propertiesJson ?? "{}" };
-      session.encrypt(payload).then((ciphertext) => onSaveContent(ciphertext)).catch(console.error);
+      persistProtectedPayload({
+        title: nextTitle,
+        content: protectedPayloadRef.current?.content,
+        propertiesJson: protectedPayloadRef.current?.propertiesJson ?? "{}",
+      });
     } else {
       onSaveTitle(nextTitle);
     }
   };
 
+  // A tab switch or closing the current tab unmounts this input without
+  // guaranteeing a blur event. Route blur and unmount through one de-duplicated
+  // save function so a title change is not lost on those exit paths.
+  const saveTitleIfChanged = () => {
+    const nextTitle = titleRef.current;
+    if (nextTitle === savedTitleRef.current) return;
+    savedTitleRef.current = nextTitle;
+    handleSaveTitle(nextTitle);
+  };
+
+  useEffect(() => () => {
+    if (editing && !isTrashed) saveTitleIfChanged();
+  }, [note.id, editing, isTrashed]);
+
   const handleSaveContent = (content: any, codeLanguage?: string, tags?: string[]) => {
     if (note.isProtected && session?.isUnlocked) {
-      const currentProperties = safeParseProperties(decryptedPayload?.propertiesJson);
+      const currentProperties = safeParseProperties(protectedPayloadRef.current?.propertiesJson);
       const nextProperties = { ...currentProperties };
       if (codeLanguage !== undefined) nextProperties.codeLanguage = codeLanguage;
       if (tags !== undefined) nextProperties.tags = tags;
-      const payload = { title: decryptedPayload?.title ?? "", content, propertiesJson: JSON.stringify(nextProperties) };
-      session.encrypt(payload).then((ciphertext) => onSaveContent(ciphertext)).catch(console.error);
+      persistProtectedPayload({
+        title: protectedPayloadRef.current?.title ?? "",
+        content,
+        propertiesJson: JSON.stringify(nextProperties),
+      });
     } else {
       onSaveContent(codeLanguage ? { code: content, codeLanguage, tags } : { content, tags });
     }
@@ -107,16 +163,31 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
   const handleSaveTags = (tags: string[]) => {
     setTagDraft(tags);
     if (note.isProtected && session?.isUnlocked) {
-      const currentProperties = safeParseProperties(decryptedPayload?.propertiesJson);
+      const currentProperties = safeParseProperties(protectedPayloadRef.current?.propertiesJson);
       const nextProperties = { ...currentProperties, tags };
-      const payload = { title: decryptedPayload?.title ?? "", content: decryptedPayload?.content, propertiesJson: JSON.stringify(nextProperties) };
-      session.encrypt(payload).then((ciphertext) => onSaveContent(ciphertext)).catch(console.error);
+      persistProtectedPayload({
+        title: protectedPayloadRef.current?.title ?? "",
+        content: protectedPayloadRef.current?.content,
+        propertiesJson: JSON.stringify(nextProperties),
+      });
     } else {
       onSaveContent({ tags });
     }
   };
 
   const displayTags = tagDraft ?? persistedTags;
+
+  const persistProtectedPayload = (payload: ProtectedPayload) => {
+    protectedPayloadRef.current = payload;
+    const generation = ++protectedSaveGenerationRef.current;
+    const noteId = note.id;
+    void session?.encrypt(payload)
+      .then((ciphertext) => {
+        if (protectedNoteIdRef.current === noteId && protectedSaveGenerationRef.current === generation)
+          onSaveContent(ciphertext);
+      })
+      .catch(console.error);
+  };
 
   const uploadImage = async (file: File) => {
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
@@ -141,14 +212,17 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
         <p>{t(locale, "protectedNoteLocked")}</p>
         {onUnlock && <button type="button" className="protected-note-unlock" onClick={onUnlock}>{t(locale, "unlockProtectedSession")}</button>}
       </div>
+    ) : isLoadingProtected ? (
+      <div className="protected-note-locked"><p>{t(locale, "loading")}</p></div>
     ) : (
       <>
-        {editing && !isTrashed ? <input className="note-title-input" value={title} onChange={(event) => setTitle(event.target.value)} onBlur={() => title !== displayTitle && handleSaveTitle(title)} onKeyDown={(event) => {
+        {editing && !isTrashed ? <input className="note-title-input" value={title} onChange={(event) => setTitle(event.target.value)} onBlur={saveTitleIfChanged} onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
             event.currentTarget.blur();
           } else if (event.key === "Escape") {
             event.preventDefault();
+            titleRef.current = displayTitle;
             setTitle(displayTitle);
             event.currentTarget.blur();
           }

@@ -119,6 +119,76 @@
   /* ---- Fonts ---- */
   --font-sans: Inter, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", -apple-system,
     BlinkMacSystemFont, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Times New Roman", SimSun, "宋体", serif;
+  --font-serif-heading: "Times New Roman", SimHei, "黑体", serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+
+  /* ---- Document content tokens ---- */
+  --doc-text: #333;
+  --doc-muted: #686870;
+  --doc-border: #d9dce1;
+  --doc-surface-subtle: #f1f2f4;
+  --doc-reference-bg: #efedff;
+  --doc-code-bg: #f6f8fa;
+  --doc-code-text: #24292f;
+  --doc-code-border: #d8dee4;
+  --doc-code-toolbar: rgba(246, 248, 250, 0.96);
+  --code-comment: #6e7781;
+  --code-keyword: #cf222e;
+  --code-entity: #8250df;
+  --code-string: #0a3069;
+  --code-literal: #0550ae;
+  --code-property: #0550ae;
+  --code-punctuation: #57606a;
+  --code-variable: #953800;
+  --code-tag: #116329;
+
+  /* ---- Editor toolbar tokens ---- */
+  --toolbar-bg: rgba(248, 249, 250, 0.96);
+  --toolbar-fg: #45454d;
+  --toolbar-hover-bg: #edf3f8;
+  --toolbar-disabled-fg: #b5b5bb;
+  --toolbar-separator: #e2e2e6;
+  --toolbar-border: #d9d9de;
+  --toolbar-mode-bg: #f5f5f7;
+  --toolbar-mode-fg: #5c5c66;
+  --toolbar-mode-hover-bg: #ebebee;
+
+  /* ---- Popover / dropdown tokens ---- */
+  --popover-bg: #ffffff;
+  --popover-border: #d9d9de;
+  --popover-fg: #3f4248;
+  --popover-shadow: 0 12px 30px rgba(24, 25, 29, 0.16);
+  --dropdown-hover-bg: #f0f0f2;
+  --dropdown-label-fg: #686b73;
+
+  /* ---- Search bar tokens ---- */
+  --search-bar-bg: rgba(248, 249, 250, 0.98);
+  --search-input-bg: #ffffff;
+  --search-input-border: #d9d9de;
+  --search-input-focus-border: var(--color-accent);
+  --search-btn-bg: #ffffff;
+  --search-btn-hover-bg: #edf3f8;
+  --search-count-fg: #686b73;
+  --search-match-bg: rgba(255, 212, 0, 0.42);
+  --search-current-bg: rgba(255, 145, 0, 0.6);
+  --search-current-fg: #1a1a1a;
+
+  /* ---- Markdown editor tokens ---- */
+  --md-textarea-bg: #fafbfc;
+  --md-textarea-focus-bg: #ffffff;
+  --md-textarea-color: #24292f;
+
+  /* ---- Table / blockquote tokens ---- */
+  --table-header-bg: #f7f7f8;
+  --table-border: #d9dce1;
+  --blockquote-bg: #fafafa;
+  --blockquote-border: #d9d9df;
+  --blockquote-fg: #606068;
+
+  /* ---- Task list / note reference tokens ---- */
+  --task-done-fg: #7a7a84;
+  --note-reference-bg: #efedff;
 
   /* ---- Type scale (rem-free, px-based for predictable UI sizing) ---- */
   --text-xs: 12px;
@@ -132,7 +202,6 @@
   --line-normal: 1.5;
   --line-tight: 1.3;
 }
-
 :root[data-theme="dark"] {
   /* Color overrides for dark. Surfaces/fg/border follow the GitHub-dark
    * palette already used by the authored :root[data-theme="dark"] rules;
@@ -154,4 +223,71 @@
   --color-success-soft: #033a16;
   --color-warning: #d29922;
   --color-warning-soft: #4d3800;
+
+  /* ---- Document content tokens ---- */
+  --doc-text: #e6edf3;
+  --doc-muted: #8b949e;
+  --doc-border: #30363d;
+  --doc-surface-subtle: #21262d;
+  --doc-reference-bg: #1a1745;
+  --doc-code-bg: #161b22;
+  --doc-code-text: #e6edf3;
+  --doc-code-border: #30363d;
+  --doc-code-toolbar: rgba(22, 27, 34, 0.96);
+  --code-comment: #8b949e;
+  --code-keyword: #ff7b72;
+  --code-entity: #d2a8ff;
+  --code-string: #a5d6ff;
+  --code-literal: #79c0ff;
+  --code-property: #79c0ff;
+  --code-punctuation: #8b949e;
+  --code-variable: #ffa657;
+  --code-tag: #7ee787;
+
+  /* ---- Editor toolbar tokens ---- */
+  --toolbar-bg: rgba(22, 27, 34, 0.96);
+  --toolbar-fg: #e6edf3;
+  --toolbar-hover-bg: #1f2630;
+  --toolbar-disabled-fg: #484f58;
+  --toolbar-separator: #30363d;
+  --toolbar-border: #30363d;
+  --toolbar-mode-bg: #21262d;
+  --toolbar-mode-fg: #8b949e;
+  --toolbar-mode-hover-bg: #30363d;
+
+  /* ---- Popover / dropdown tokens ---- */
+  --popover-bg: #161b22;
+  --popover-border: #30363d;
+  --popover-fg: #e6edf3;
+  --popover-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+  --dropdown-hover-bg: #1f2630;
+  --dropdown-label-fg: #8b949e;
+
+  /* ---- Search bar tokens ---- */
+  --search-bar-bg: rgba(22, 27, 34, 0.98);
+  --search-input-bg: #0d1117;
+  --search-input-border: #30363d;
+  --search-input-focus-border: #388bfd;
+  --search-btn-bg: #161b22;
+  --search-btn-hover-bg: #1f2630;
+  --search-count-fg: #8b949e;
+  --search-match-bg: rgba(187, 158, 0, 0.5);
+  --search-current-bg: rgba(219, 139, 0, 0.75);
+  --search-current-fg: #ffffff;
+
+  /* ---- Markdown editor tokens ---- */
+  --md-textarea-bg: #161b22;
+  --md-textarea-focus-bg: #1c2128;
+  --md-textarea-color: #e6edf3;
+
+  /* ---- Table / blockquote tokens ---- */
+  --table-header-bg: #21262d;
+  --table-border: #30363d;
+  --blockquote-bg: #161b22;
+  --blockquote-border: #30363d;
+  --blockquote-fg: #8b949e;
+
+  /* ---- Task list / note reference tokens ---- */
+  --task-done-fg: #8b949e;
+  --note-reference-bg: #1a1745;
 }
