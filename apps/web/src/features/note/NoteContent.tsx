@@ -40,6 +40,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
   onUploadError?: (message: string) => void;
 }) {
   const [decryptedPayload, setDecryptedPayload] = useState<ProtectedPayload | null>(null);
+  const [protectedDecryptFailed, setProtectedDecryptFailed] = useState(false);
   // A note switch renders before its decryption effect runs. Associate the
   // plaintext with its source note so the previous protected note is never
   // shown (or saved) under the newly selected note during that render.
@@ -70,6 +71,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
       session.decrypt<ProtectedPayload>(note.contentCiphertext)
         .then((payload) => {
           if (cancelled) return;
+          setProtectedDecryptFailed(false);
           setDecryptedPayload(payload);
           setDecryptedPayloadNoteId(note.id);
           protectedPayloadRef.current = payload;
@@ -78,6 +80,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
         })
         .catch(() => {
           if (!cancelled) {
+            setProtectedDecryptFailed(true);
             setDecryptedPayload(null);
             setDecryptedPayloadNoteId(note.id);
           }
@@ -85,6 +88,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
         .finally(() => { if (!cancelled) decryptingRef.current = false; });
       return () => { cancelled = true; };
     } else {
+      setProtectedDecryptFailed(false);
       setDecryptedPayload(null);
       setDecryptedPayloadNoteId(null);
       protectedPayloadRef.current = null;
@@ -107,7 +111,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
     ? readCodeLanguage(activeDecryptedPayload?.propertiesJson)
     : note.codeLanguage ?? "plaintext";
   const isLockedProtected = note.isProtected && !session?.isUnlocked;
-  const isLoadingProtected = note.isProtected && session?.isUnlocked && !activeDecryptedPayload;
+  const isLoadingProtected = note.isProtected && session?.isUnlocked && !activeDecryptedPayload && !protectedDecryptFailed;
   const persistedTags = note.isProtected
     ? readTagsFromProperties(activeDecryptedPayload?.propertiesJson)
     : (note.tags ?? []);
@@ -210,6 +214,12 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
       <div className="protected-note-locked">
         <Lock size={24} />
         <p>{t(locale, "protectedNoteLocked")}</p>
+        {onUnlock && <button type="button" className="protected-note-unlock" onClick={onUnlock}>{t(locale, "unlockProtectedSession")}</button>}
+      </div>
+    ) : protectedDecryptFailed ? (
+      <div className="protected-note-locked">
+        <Lock size={24} />
+        <p>{t(locale, "protectedNoteDecryptFailed")}</p>
         {onUnlock && <button type="button" className="protected-note-unlock" onClick={onUnlock}>{t(locale, "unlockProtectedSession")}</button>}
       </div>
     ) : isLoadingProtected ? (

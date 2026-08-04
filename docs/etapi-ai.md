@@ -16,7 +16,7 @@ http://127.0.0.1:4318
 Authorization: Bearer <ETAPI_TOKEN>
 ```
 
-令牌仅对本机桌面应用有效，具有有限有效期；过期、撤销或桌面应用重启后会失效。令牌只可调用本页列出的 `/etapi/*` 接口。
+令牌仅对本机桌面应用有效，具有有限有效期；过期、撤销、签发设备被撤销或主密码变更后会失效。桌面应用重启不会使未到期令牌失效。令牌只可调用本页列出的 `/etapi/*` 接口。
 
 ## 必须遵守的操作规则
 
@@ -42,10 +42,10 @@ Authorization: Bearer <ETAPI_TOKEN>
 ### 获取层级
 
 ```http
-GET /etapi/tree?includeArchived=false
+GET /etapi/tree/roots?limit=50
 ```
 
-返回扁平 `items` 数组。用 `placementId` 和 `parentPlacementId` 重建层级；同一笔记可有多个 placement，因此不要把 `noteId` 当作树节点 ID。
+先用 `roots` 获取顶层节点，再用唯一的 `placementId` 逐层导航；不能获取整棵根树。`roots` 和 `GET /etapi/tree/nodes/:placementId/children` 均分页返回 `{ items, nextCursor }`。名称仅用于 `GET /etapi/tree/resolve?query=...` 定位候选节点；再用候选的 `placementId` 读取节点、子节点或子树。受限子树接口为 `GET /etapi/tree/nodes/:placementId/subtree?maxDepth=2&maxNodes=100`。同一笔记可有多个 placement，因此不要把 `noteId` 当作树节点 ID。
 
 每项主要字段：
 
@@ -56,14 +56,12 @@ GET /etapi/tree?includeArchived=false
   "parentPlacementId": "parent-placement-id-or-null",
   "position": 0,
   "title": "笔记标题",
-  "type": "text",
-  "properties": { "tags": ["项目"] },
-  "version": 3,
-  "updatedAt": "2026-08-04T10:30:00.000Z"
+  "isProtected": false,
+  "hasChildren": true
 }
 ```
 
-默认不返回归档笔记或回收站笔记。`includeArchived=true` 可包含归档笔记。
+树响应只含导航所需字段。默认不返回归档笔记、回收站笔记或系统根节点。`includeArchived=true` 可包含归档笔记。
 
 ### 读取一篇笔记
 
@@ -87,11 +85,11 @@ GET /etapi/notes/:noteId/content?format=markdown
 
 ```http
 GET /etapi/search?q=会议纪要&includeArchived=false
-GET /etapi/search?tag=项目&includeArchived=false
+GET /etapi/search?tag=项目&placementId=parent-placement-id
 GET /etapi/tags
 ```
 
-搜索响应为 `{ "items": [...] }`；每项含笔记 ID、标题、匹配片段、更新时间和 tag。受保护笔记不会出现在搜索结果中。
+传入 `placementId` 时，搜索仅覆盖该树节点及全部子节点；结果中的 `matchedPlacementIds` 可用于定位 clone 的树内位置。受保护笔记不会出现在搜索结果中。
 
 ## 写入接口
 
@@ -146,6 +144,26 @@ If-Match: 3
 
 也可将 `Content-Type` 设为 `application/json`，正文传经过校验的 Tiptap JSON。`If-Match` 必须是当前版本号。
 
+### 精确编辑正文
+
+优先用以下接口做最小修改，而非整篇替换：
+
+```http
+PATCH /etapi/notes/:noteId/content
+Content-Type: application/json
+```
+
+```json
+{
+  "expectedVersion": 3,
+  "edits": [
+    { "oldText": "旧句子", "newText": "新句子" }
+  ]
+}
+```
+
+`oldText` 是大小写和换行均敏感的字面文本，默认必须恰好命中一次。对重复片段，传入 `expectedMatches` 并让它等于预期命中数。多个编辑原子执行；找不到目标、命中数不符或目标重叠会返回 `422 PatchTargetError`，此时重新读取内容后再判断。带 `dryRun: true` 可预览结果，但需要同时具备 `notes:read`。
+
 ### 移动 placement
 
 ```http
@@ -172,6 +190,7 @@ Content-Type: application/json
 | `404` | 目标不存在；重新读取层级或请用户确认。 |
 | `409` | 重新读取最新状态后再决定是否修改，不能盲目重试。 |
 | `415` | 正文接口的 `Content-Type` 不受支持。 |
+| `422` | 精确编辑未能唯一、完整地定位目标；重新读取后再生成补丁。 |
 
 错误格式为：
 

@@ -22,7 +22,7 @@ import {
 /** Subset of YgdriaClient needed for attachment transfer in sync. */
 type AttachmentTransferClient = Pick<
   YgdriaClient,
-  "hasAttachmentByHash" | "downloadAttachmentByHash" | "uploadAttachmentByHash" | "syncNoteContent"
+  "hasAttachmentByHash" | "downloadAttachmentByHash" | "uploadAttachmentByHash" | "syncNoteContent" | "syncNoteContentBatch"
 >;
 
 /** A note whose local edit was rejected by last-write-wins during sync, so the
@@ -43,7 +43,6 @@ export type SyncConflict = {
 };
 
 const DESKTOP_ONBOARDING_COMPLETE_KEY = "ygdria.desktop-onboarding-complete";
-const SYNC_CONTENT_FETCH_CONCURRENCY = 6;
 
 /** Map in input order while keeping remote sync hydration within a small,
  * bounded connection pool. A snapshot may contain 500 note metadata records;
@@ -122,6 +121,28 @@ export type AutoSyncOptions = {
   isDesktop: boolean;
   syncLocked: boolean;
 };
+
+export type ProtectedSessionConfig = {
+  configured: boolean;
+  salt: string | null;
+  verifier: string | null;
+  timeoutMs: number;
+};
+
+/** Decide how a desktop reconciles its local file-key record with its sync
+ * server. The first configured device seeds an empty server; afterwards the
+ * server is canonical so every later device uses the same key material. */
+export function protectedSessionSyncAction(
+  local: ProtectedSessionConfig,
+  remote: ProtectedSessionConfig,
+): "publish-local" | "adopt-remote" | "aligned" | "unconfigured" {
+  const hasLocal = Boolean(local.salt && local.verifier);
+  const hasRemote = Boolean(remote.salt && remote.verifier);
+  if (!hasRemote) return hasLocal ? "publish-local" : "unconfigured";
+  return local.salt === remote.salt && local.verifier === remote.verifier
+    ? "aligned"
+    : "adopt-remote";
+}
 
 /** Returns whether a completed state check may start a desktop auto-sync. */
 export function shouldAutoSync(opts: AutoSyncOptions): boolean {
@@ -319,27 +340,92 @@ export function useSync({
     setSyncing(true);
     setSyncProgress(t(locale, "syncPreparing"));
     void (async () => {
+      // A desktop mirror is a separate SQLite library. Sync deliberately does
+      // not replicate protected_session_* settings. The first configured
+      // device seeds an empty server; once present, the server record is
+      // canonical and is adopted by every device before ciphertext sync.
+      if (isDesktopApp) {
+        const remoteProtected = await remoteClient.protectedSession();
+        const localProtected = await client.protectedSession();
+        const action = protectedSessionSyncAction(localProtected, remoteProtected);
+        if (action === "publish-local") {
+          await remoteClient.setupProtectedSession(
+            localProtected.salt!,
+            localProtected.verifier!,
+            localProtected.timeoutMs,
+          );
+        } else if (action === "adopt-remote") {
+          const differsFromActiveSession =
+            session.salt !== remoteProtected.salt || session.verifier !== remoteProtected.verifier;
+          if (session.salt !== null && differsFromActiveSession) session.lock();
+          await client.setupProtectedSession(
+            remoteProtected.salt!,
+            remoteProtected.verifier!,
+            remoteProtected.timeoutMs,
+          );
+          setProtectedSession((current) => ({
+            configured: true,
+            unlocked: differsFromActiveSession ? false : current.unlocked,
+            timeoutMs: remoteProtected.timeoutMs,
+          }));
+        } else if (action === "aligned") {
+          // Keep the timeout in sync without changing the active key.
+          await client.setupProtectedSession(
+            remoteProtected.salt!,
+            remoteProtected.verifier!,
+            remoteProtected.timeoutMs,
+          );
+          setProtectedSession((current) => ({
+            ...current,
+            configured: true,
+            timeoutMs: remoteProtected.timeoutMs,
+          }));
+        }
+      }
+      const BATCH_CONTENT_CHUNK_SIZE = 80;
       const hydrateNoteContents = async <
         T extends { entityType: string; changeKind: string; data: Record<string, unknown> | null },
       >(
         changes: T[],
         source: AttachmentTransferClient,
-      ): Promise<T[]> =>
-        mapWithConcurrency(changes, SYNC_CONTENT_FETCH_CONCURRENCY, async (change): Promise<T> => {
-            if (
-              change.entityType !== "note" ||
-              change.changeKind === "deleted" ||
-              !change.data ||
-              typeof change.data.contentHash !== "string" ||
-              typeof change.data.contentData === "string"
-            )
-              return change;
-            const content = await source.syncNoteContent(
-              String(change.data.id),
-              change.data.contentHash,
-            );
-            return { ...change, data: { ...change.data, ...content } } as T;
-          });
+        snapshotSession?: string,
+      ): Promise<T[]> => {
+        // Collect indices of notes that need content hydration
+        const pending: Array<{ index: number; id: string; hash: string }> = [];
+        for (let i = 0; i < changes.length; i++) {
+          const c = changes[i];
+          if (
+            c.entityType === "note" &&
+            c.changeKind !== "deleted" &&
+            c.data &&
+            typeof c.data.contentHash === "string" &&
+            typeof c.data.contentData !== "string"
+          )
+            pending.push({ index: i, id: String(c.data.id), hash: c.data.contentHash });
+        }
+        if (pending.length === 0) return changes;
+
+        const result = [...changes] as T[];
+        // Process in chunks to stay within server limits and response size bounds
+        for (let offset = 0; offset < pending.length; offset += BATCH_CONTENT_CHUNK_SIZE) {
+          const chunk = pending.slice(offset, offset + BATCH_CONTENT_CHUNK_SIZE);
+          const ids = chunk.map((p) => p.id);
+          const hashes = chunk.map((p) => p.hash);
+          const batch = await source.syncNoteContentBatch(ids, hashes, snapshotSession);
+          for (const entry of chunk) {
+            const content = batch.contents[entry.id];
+            if (content) {
+              result[entry.index] = { ...result[entry.index], data: { ...result[entry.index].data!, ...content } } as T;
+            } else if (batch.truncated) {
+              // Fall back to individual fetch for truncated entries
+              const fallback = await source.syncNoteContent(entry.id, entry.hash);
+              result[entry.index] = { ...result[entry.index], data: { ...result[entry.index].data!, ...fallback } } as T;
+            }
+          }
+        }
+        return result;
+      };
+      const ATTACHMENT_TRANSFER_CONCURRENCY = 6;
       const copyAttachments = async (
         changes: Array<{
           entityType: string;
@@ -350,58 +436,62 @@ export function useSync({
         destination: AttachmentTransferClient,
         destinationOrigin?: "remote",
       ) => {
-        const transferredHashes = new Set<string>();
-        const total = new Set(
-          changes.flatMap((change) =>
-            Array.isArray(change.data?.attachmentRefs)
-              ? (change.data.attachmentRefs as Array<{ contentHash?: string }>)
-                  .map((ref) => ref.contentHash)
-                  .filter((hash): hash is string => Boolean(hash))
-              : [],
-          ),
-        ).size;
-        let completed = 0;
+        // Collect unique attachment references, deduplicating by contentHash
+        const refsByHash = new Map<string, { id: string; contentHash: string; filename: string; noteId: string }>();
         for (const change of changes) {
-          if (change.entityType !== "note" || change.changeKind === "deleted" || !change.data)
-            continue;
+          if (change.entityType !== "note" || change.changeKind === "deleted" || !change.data) continue;
           const noteId = typeof change.data.id === "string" ? change.data.id : undefined;
-          const refs = Array.isArray(change.data.attachmentRefs)
-            ? (change.data.attachmentRefs as Array<{
-                id?: string;
-                contentHash?: string;
-                filename?: string;
-              }>)
-            : [];
           if (!noteId) continue;
+          const refs = Array.isArray(change.data.attachmentRefs)
+            ? (change.data.attachmentRefs as Array<{ id?: string; contentHash?: string; filename?: string }>)
+            : [];
           for (const ref of refs) {
-            if (
-              !ref.id ||
-              !ref.contentHash ||
-              !ref.filename ||
-              transferredHashes.has(ref.contentHash)
-            )
-              continue;
-            const existing = await destination.hasAttachmentByHash(ref.contentHash);
-            if (existing.exists && existing.id === ref.id) {
-              transferredHashes.add(ref.contentHash);
-              completed += 1;
-              setSyncProgress(`${t(locale, "syncAttachments")} ${completed}/${total}`);
-              continue;
+            if (!ref.id || !ref.contentHash || !ref.filename) continue;
+            // First occurrence wins (preserves reference order)
+            if (!refsByHash.has(ref.contentHash)) {
+              refsByHash.set(ref.contentHash, { id: ref.id, contentHash: ref.contentHash, filename: ref.filename, noteId });
             }
-            const file = await source.downloadAttachmentByHash(ref.contentHash);
-            await destination.uploadAttachmentByHash(
-              ref.contentHash,
-              noteId,
-              ref.filename,
-              file.blob,
-              destinationOrigin,
-              ref.id,
-            );
-            transferredHashes.add(ref.contentHash);
-            completed += 1;
-            setSyncProgress(`${t(locale, "syncAttachments")} ${completed}/${total}`);
           }
         }
+        const entries = [...refsByHash.values()];
+        const total = entries.length;
+        if (total === 0) return;
+
+        let completed = 0;
+        function updateProgress() {
+          completed += 1;
+          setSyncProgress(`${t(locale, "syncAttachments")} ${completed}/${total}`);
+        }
+
+        // Bounded concurrent pipeline: check existence → download missing → upload
+        let nextIndex = 0;
+        const workers = Math.min(ATTACHMENT_TRANSFER_CONCURRENCY, total);
+        await Promise.all(
+          Array.from({ length: workers }, async () => {
+            while (nextIndex < total) {
+              const index = nextIndex;
+              nextIndex += 1;
+              const ref = entries[index];
+
+              const existing = await destination.hasAttachmentByHash(ref.contentHash);
+              if (existing.exists && existing.id === ref.id) {
+                updateProgress();
+                continue;
+              }
+
+              const file = await source.downloadAttachmentByHash(ref.contentHash);
+              await destination.uploadAttachmentByHash(
+                ref.contentHash,
+                ref.noteId,
+                ref.filename,
+                file.blob,
+                destinationOrigin,
+                ref.id,
+              );
+              updateProgress();
+            }
+          }),
+        );
       };
       const peer = remoteClient.peerId();
       // Notes whose local edit the remote rejected via last-write-wins during
@@ -464,14 +554,15 @@ export function useSync({
        * device, so it must run even when the snapshot came back empty.
        */
       const rebaselineFromSnapshot = async () => {
-        let snapshot = await remoteClient.syncSnapshot(0, 500, true, selfPeer);
+        const sessionId = crypto.randomUUID();
+        let snapshot = await remoteClient.syncSnapshot(0, 500, true, selfPeer, sessionId);
         while (snapshot.changes.length) {
           setSyncProgress(`${t(locale, "syncDownloadBaseline")} · ${snapshot.changes.length}`);
-          const hydrated = await hydrateNoteContents(snapshot.changes, remoteClient);
+          const hydrated = await hydrateNoteContents(snapshot.changes, remoteClient, sessionId);
           await client.pushSyncChanges(hydrated, "remote");
           await copyAttachments(snapshot.changes, remoteClient, client, "remote");
           if (!snapshot.hasMore) break;
-          snapshot = await remoteClient.syncSnapshot(snapshot.cursor, 500, true, selfPeer);
+          snapshot = await remoteClient.syncSnapshot(snapshot.cursor, 500, true, selfPeer, sessionId);
         }
         await client.advanceSyncCursor(`in:${peer}`, snapshot.maxChangeId);
         await remoteClient.advanceSyncCursor(selfPeer, snapshot.maxChangeId);

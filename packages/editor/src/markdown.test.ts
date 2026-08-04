@@ -16,6 +16,13 @@ describe("Markdown conversion", () => {
     expect(JSON.stringify(markdownToTiptap("| A | B |\n| - | - |\n| 1 | 2 |").document)).toContain(
       "table",
     ));
+  it("round-trips tables through Markdown source", () => {
+    const document = markdownToTiptap("| A | B |\n| --- | --- |\n| 1 | 2 |").document;
+    const markdown = tiptapToMarkdown(document).markdown;
+
+    expect(markdown).toContain("| --- | --- |");
+    expect((markdownToTiptap(markdown).document.content?.[0] as any)?.type).toBe("table");
+  });
   it("converts standard inline formatting and Trilium image HTML", () => {
     const document = markdownToTiptap("**bold** and *italic* with [link](https://example.com)\n\n<figure><img src=\"/image.png\"></figure>").document;
     const json = JSON.stringify(document);

@@ -239,12 +239,13 @@ export class YgdriaClient {
       `/api/v1/sync/cursor?peerId=${encodeURIComponent(peerId)}`,
     );
   }
-  syncSnapshot(cursor = 0, limit = 200, metadataOnly = false, peerId?: string) {
+  syncSnapshot(cursor = 0, limit = 200, metadataOnly = false, peerId?: string, session?: string) {
     const peer = peerId ? `&peerId=${encodeURIComponent(peerId)}` : "";
+    const sessionParam = session ? `&session=${encodeURIComponent(session)}` : "";
     return this.request<{
       cursor: number; hasMore: boolean; maxChangeId: number;
       changes: Array<{ changeId: number; entityType: string; entityId: string; changeKind: string; createdAt: number; data: Record<string, unknown> | null }>;
-    }>(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}${peer}`);
+    }>(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}${peer}${sessionParam}`);
   }
   /** Record every current entity as a fresh baseline for a newly initialized peer. */
   rebuildSyncBaseline() {
@@ -277,6 +278,16 @@ export class YgdriaClient {
     return this.request<{ contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string }>(
       `/api/v1/sync/notes/${encodeURIComponent(noteId)}/content?hash=${encodeURIComponent(contentHash)}`,
     );
+  }
+  syncNoteContentBatch(ids: string[], hashes: string[], session?: string) {
+    return this.request<{
+      contents: Record<string, { contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string } | null>;
+      truncated: boolean;
+    }>("/api/v1/sync/notes/content/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, hashes, session }),
+    });
   }
   /** Download an attachment addressed by its stable document URL. */
   async downloadAttachment(id: string): Promise<Blob> {
@@ -411,18 +422,34 @@ export class YgdriaClient {
       ? this.request<any>(`/etapi/notes/${id}/content?format=json`)
       : this.requestText(`/etapi/notes/${id}/content?format=markdown`);
   }
-  etapiTree(includeArchived = false) {
-    return this.request<{ items: any[] }>(
-      `/etapi/tree?includeArchived=${includeArchived ? "true" : "false"}`,
-    );
+  etapiTreeRoots(input: { includeArchived?: boolean; limit?: number; cursor?: string } = {}) {
+    return this.request<{ items: any[]; nextCursor: string | null }>(`/etapi/tree/roots?${this.etapiTreeParams(input)}`);
+  }
+  etapiTreeNode(placementId: string, input: { includeArchived?: boolean } = {}) {
+    return this.request<any>(`/etapi/tree/nodes/${encodeURIComponent(placementId)}?${this.etapiTreeParams(input)}`);
+  }
+  etapiTreeChildren(placementId: string, input: { includeArchived?: boolean; limit?: number; cursor?: string } = {}) {
+    return this.request<{ items: any[]; nextCursor: string | null }>(`/etapi/tree/nodes/${encodeURIComponent(placementId)}/children?${this.etapiTreeParams(input)}`);
+  }
+  etapiTreeSubtree(placementId: string, input: { includeArchived?: boolean; maxDepth?: number; maxNodes?: number } = {}) {
+    return this.request<{ items: any[] }>(`/etapi/tree/nodes/${encodeURIComponent(placementId)}/subtree?${this.etapiTreeParams(input)}`);
+  }
+  etapiTreeResolve(input: { query: string; parentPlacementId?: string; includeArchived?: boolean; limit?: number }) {
+    return this.request<{ items: any[] }>(`/etapi/tree/resolve?${this.etapiTreeParams(input)}`);
+  }
+  private etapiTreeParams(input: Record<string, string | number | boolean | undefined>) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(input)) if (value !== undefined) params.set(key, String(value));
+    return params;
   }
   etapiNote(id: string, format: "markdown" | "json" = "markdown") {
     return this.request<any>(`/etapi/notes/${id}?format=${format}`);
   }
-  etapiSearch(input: { q?: string; tag?: string; includeArchived?: boolean }) {
+  etapiSearch(input: { q?: string; tag?: string; placementId?: string; includeArchived?: boolean }) {
     const params = new URLSearchParams();
     if (input.q) params.set("q", input.q);
     if (input.tag) params.set("tag", input.tag);
+    if (input.placementId) params.set("placementId", input.placementId);
     params.set("includeArchived", input.includeArchived ? "true" : "false");
     return this.request<{ items: any[] }>(`/etapi/search?${params}`);
   }
@@ -470,6 +497,20 @@ export class YgdriaClient {
       method: "PUT",
       headers: { "Content-Type": "text/markdown", "If-Match": String(expectedVersion), ...(importMode ? { "X-Ygdria-Import": "1" } : {}) },
       body: markdown,
+    });
+  }
+  patchEtapiContent(
+    id: string,
+    input: {
+      expectedVersion: number;
+      edits: Array<{ oldText: string; newText: string; expectedMatches?: number }>;
+      dryRun?: boolean;
+    },
+  ) {
+    return this.request<any>(`/etapi/notes/${id}/content`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
     });
   }
   unusedAttachmentsCount() {

@@ -60,7 +60,12 @@ export function registerProtectedSessionRoutes(app: FastifyInstance, deps: Prote
       auth?: { accessSalt: string; srpSalt: string; verifier: string };
     };
     if (!body.salt || !body.verifier) throw httpError(400, "salt and verifier are required");
-    if (enableDeviceAuth && !body.auth)
+    const existingSalt = readSetting(store.sqlite, "protected_session_salt");
+    const existingVerifier = readSetting(store.sqlite, "protected_session_verifier");
+    // A paired device may seed an empty server with the library's existing
+    // protected-session record. Once either record exists, changing it still
+    // requires the full password-migration flow with a replacement SRP record.
+    if (enableDeviceAuth && !body.auth && (existingSalt || existingVerifier))
       throw httpError(
         400,
         "auth (new SRP record) is required when device authentication is enabled — use /devices/initialize or include auth to keep the unified master password",

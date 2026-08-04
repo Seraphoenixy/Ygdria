@@ -14,6 +14,12 @@
   color: #4c4e55;
   border-radius: 0;
 }
+/* The controls overlay the upper-right corner of the frameless desktop
+   window. Reserve their 3 × 46px hit area in the tab strip so tabs and the
+   new-tab button never render underneath Minimize / Maximize / Close. */
+main.desktop-window-content .note-tabs {
+  padding-right: 130px;
+}
 .window-controls button:hover {
   background: #e3eaed;
 }

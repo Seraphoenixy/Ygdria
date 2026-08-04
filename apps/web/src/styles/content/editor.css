@@ -136,15 +136,16 @@
 }
 .ygdria-document h1 {
   margin: 1.5rem 0 var(--space-sm);
-  font-size: 1.8rem;
+  /* A document heading must remain subordinate to the note title (1.5rem). */
+  font-size: 1.35rem;
 }
 .ygdria-document h2 {
   margin: 1.25rem 0 var(--space-sm);
-  font-size: 1.5rem;
+  font-size: 1.2rem;
 }
 .ygdria-document h3 {
   margin: 1rem 0 var(--space-sm);
-  font-size: 1.25rem;
+  font-size: 1.1rem;
 }
 .ygdria-document h4,
 .ygdria-document h5,

@@ -137,6 +137,8 @@ export type SearchResult = {
   matchedField: "title" | "content" | "property";
   updatedAt: string;
   tags: string[];
+  /** Placements inside an ETAPI subtree that contain this note. */
+  matchedPlacementIds?: string[];
 };
 
 export type TagStats = {

@@ -18,6 +18,7 @@
 .note-tabs {
   display: flex;
   flex: 0 0 auto;
+  min-width: 0;
   height: 42px;
   align-items: end;
   padding: 0 12px 0 16px;
@@ -29,8 +30,10 @@
   display: grid;
   grid-template-columns: repeat(var(--tab-count, 1), minmax(0, 1fr));
   min-width: 0;
-  width: min(var(--tab-list-width, 0px), calc(100% - 42px));
-  flex: 0 1 auto;
+  /* Prefer a comfortable 180px per tab. Once the strip would exceed the
+     available width, flex shrinks this grid and its tracks stay equal. */
+  flex: 0 1 var(--tab-list-width, 0px);
+  max-width: calc(100% - 42px);
   height: 100%;
   align-items: end;
 }

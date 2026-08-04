@@ -49,6 +49,8 @@ import { registerStaticRoutes } from "./routes/static.js";
 export function buildApp(
   options: {
     databaseUrl?: string;
+    /** Desktop-private ETAPI session-hash file; never part of the note database. */
+    etapiSessionStorePath?: string;
     origin?: string;
     localToken?: string;
     webDist?: string;
@@ -77,7 +79,7 @@ export function buildApp(
   const loginRequestCounts = new Map<string, { count: number; resetAt: number }>();
   const notes = new NoteService(store);
   const devices = new Devices();
-  const etapiSessions = new EtapiSessions();
+  const etapiSessions = new EtapiSessions(options.etapiSessionStorePath);
   const srpLoginSessions = new Map<string, { serverSecretEphemeral: string; expiresAt: number }>();
   const protectedSessionReauth = new Map<string, number>();
   const accessLoginFailures = new Map<

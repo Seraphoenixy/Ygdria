@@ -45,7 +45,7 @@ describe("AI-oriented ETAPI", () => {
     const session = await issue(["notes:read"]);
     const headers = { authorization: `Bearer ${session.accessToken}` };
 
-    expect((await app.inject({ url: "/etapi/tree", headers })).statusCode).toBe(200);
+    expect((await app.inject({ url: "/etapi/tree/roots", headers })).statusCode).toBe(200);
     expect((await app.inject({ url: "/api/v1/tree", headers })).statusCode).toBe(401);
     expect(
       (
@@ -80,6 +80,33 @@ describe("AI-oriented ETAPI", () => {
         })
       ).statusCode,
     ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          url: `/etapi/notes/${created.json().id}/content`,
+          headers: writerHeaders,
+          payload: {
+            expectedVersion: 1,
+            edits: [{ oldText: "private input", newText: "changed" }],
+            dryRun: true,
+          },
+        })
+      ).statusCode,
+    ).toBe(403);
+  });
+
+  it("accepts an ETAPI token lifetime of up to eight hours", async () => {
+    const before = Date.now();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/etapi/sessions",
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { label: "long-running AI", scopes: ["notes:read"], ttlSeconds: 8 * 60 * 60 },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().expiresAt).toBeGreaterThanOrEqual(before + 8 * 60 * 60 * 1000);
   });
 
   it("reads hierarchy, content and tags and edits with optimistic locking", async () => {
@@ -114,10 +141,17 @@ describe("AI-oriented ETAPI", () => {
     expect(childResponse.statusCode).toBe(201);
     const child = childResponse.json();
 
-    const tree = (await app.inject({ url: "/etapi/tree", headers })).json().items;
+    const parentPlacementId = parent.placements[0].placementId;
+    const tree = (await app.inject({ url: `/etapi/tree/nodes/${parentPlacementId}/subtree?maxDepth=2`, headers })).json().items;
+    expect(tree.map((item: any) => item.noteId)).toEqual([parent.id, child.id]);
     expect(
       tree.find((item: any) => item.noteId === child.id).parentPlacementId,
-    ).toBe(parent.placements[0].placementId);
+    ).toBe(parentPlacementId);
+    const children = (await app.inject({ url: `/etapi/tree/nodes/${parentPlacementId}/children?limit=1`, headers })).json();
+    expect(children.items).toHaveLength(1);
+    expect(children.items[0].noteId).toBe(child.id);
+    const resolved = (await app.inject({ url: "/etapi/tree/resolve?query=AI%20parent", headers })).json().items;
+    expect(resolved).toEqual(expect.arrayContaining([expect.objectContaining({ placementId: parentPlacementId })]));
 
     const updatedResponse = await app.inject({
       method: "PATCH",
@@ -182,19 +216,69 @@ describe("AI-oriented ETAPI", () => {
       payload: { protected: true, contentCiphertext: "v1.test-ciphertext" },
     });
     expect(protectedResponse.statusCode).toBe(200);
+    const protectedPlacementId = (await app.inject({
+      url: "/api/v1/tree",
+      headers: deviceHeaders,
+    })).json().find((item: any) => item.noteId === note.id).placementId;
 
     const session = await issue(["notes:read"]);
     const headers = { authorization: `Bearer ${session.accessToken}` };
-    const tree = (await app.inject({ url: "/etapi/tree", headers })).json().items;
-    const protectedNode = tree.find((item: any) => item.noteId === note.id);
-    expect(protectedNode).toMatchObject({
-      title: "",
-      properties: { tags: [] },
-      isProtected: true,
-    });
+    const protectedNode = (await app.inject({ url: `/etapi/tree/nodes/${protectedPlacementId}`, headers })).json();
+    expect(protectedNode).toMatchObject({ title: "", isProtected: true });
     expect(
       (await app.inject({ url: `/etapi/notes/${note.id}`, headers })).statusCode,
     ).toBe(409);
+  });
+
+  it("searches a placement subtree and applies atomic literal content edits", async () => {
+    const session = await issue(["notes:read", "notes:write"]);
+    const headers = { authorization: `Bearer ${session.accessToken}` };
+    const root = (await app.inject({
+      method: "POST", url: "/etapi/notes", headers,
+      payload: { title: "Scoped root", content: "root body" },
+    })).json();
+    const child = (await app.inject({
+      method: "POST", url: "/etapi/notes", headers,
+      payload: {
+        title: "Scoped child", parentPlacementId: root.placements[0].placementId,
+        content: "unique subtree needle\nreplace this", tags: ["scoped-tag"],
+      },
+    })).json();
+    await app.inject({
+      method: "POST", url: "/etapi/notes", headers,
+      payload: { title: "Outside", content: "unique subtree needle", tags: ["scoped-tag"] },
+    });
+
+    const scoped = (await app.inject({
+      url: `/etapi/search?q=unique%20subtree%20needle&placementId=${root.placements[0].placementId}`,
+      headers,
+    })).json().items;
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0]).toMatchObject({ noteId: child.id, matchedPlacementIds: [child.placements[0].placementId] });
+    const scopedTag = (await app.inject({
+      url: `/etapi/search?tag=scoped-tag&placementId=${root.placements[0].placementId}`,
+      headers,
+    })).json().items;
+    expect(scopedTag).toHaveLength(1);
+
+    const preview = await app.inject({
+      method: "PATCH", url: `/etapi/notes/${child.id}/content`, headers,
+      payload: { expectedVersion: child.version, edits: [{ oldText: "replace this", newText: "replaced" }], dryRun: true },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({ dryRun: true, matches: [1], content: expect.stringContaining("replaced") });
+    expect((await app.inject({ url: `/etapi/notes/${child.id}/content`, headers })).body).toContain("replace this");
+
+    const patched = await app.inject({
+      method: "PATCH", url: `/etapi/notes/${child.id}/content`, headers,
+      payload: { expectedVersion: child.version, edits: [{ oldText: "replace this", newText: "replaced" }] },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().content).toContain("replaced");
+    expect((await app.inject({
+      method: "PATCH", url: `/etapi/notes/${child.id}/content`, headers,
+      payload: { expectedVersion: patched.json().version, edits: [{ oldText: "missing", newText: "anything" }] },
+    })).statusCode).toBe(422);
   });
 
   it("revokes an ETAPI session immediately", async () => {
@@ -208,7 +292,7 @@ describe("AI-oriented ETAPI", () => {
     expect(
       (
         await app.inject({
-          url: "/etapi/tree",
+          url: "/etapi/tree/roots",
           headers: { authorization: `Bearer ${session.accessToken}` },
         })
       ).statusCode,

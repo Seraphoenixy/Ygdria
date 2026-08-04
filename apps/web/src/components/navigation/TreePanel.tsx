@@ -78,7 +78,7 @@ type TreePanelProps = {
   syncConflictCount?: number;
   onShowSyncConflicts?: () => void;
   onSync: () => void;
-  onClearTabs: () => void;
+  onNavigateHome: () => void;
   refreshTree: () => void;
   importInputRef: React.RefObject<HTMLInputElement | null>;
   openImportDialog: (targetPlacementId: string) => void;
@@ -96,7 +96,7 @@ export function TreePanel({
   onOpenHistory, onCloseHistory, onOpenSettings, onOpenSearch, onCloseSearch, onCloseSettings, onOpenArchive,
   onOpenAttachments, onCloseAttachments,
   protectedSession, onProtectedSessionToggle,
-  onOpenTodayNote, syncing, syncState, syncProgress, lastSyncedAt, syncItemCount, lastSyncError, syncConflictCount, onShowSyncConflicts, onSync, onClearTabs, refreshTree, importInputRef, openImportDialog, exportPlacements, importNotes,
+  onOpenTodayNote, syncing, syncState, syncProgress, lastSyncedAt, syncItemCount, lastSyncError, syncConflictCount, onShowSyncConflicts, onSync, onNavigateHome, refreshTree, importInputRef, openImportDialog, exportPlacements, importNotes,
   decryptedTitles,
 }: TreePanelProps) {
   const [search, setSearch] = useState("");
@@ -349,7 +349,7 @@ export function TreePanel({
             className="quickbar-brand"
             aria-label={t(locale, "quickHome")}
             title={t(locale, "quickHome")}
-            onClick={onClearTabs}
+            onClick={onNavigateHome}
           >
             <img src="/ygdria-forest-mark.png" alt="" aria-hidden="true" />
           </button>
@@ -450,7 +450,7 @@ export function TreePanel({
             type="button"
             aria-label={t(locale, "quickHome")}
             title={t(locale, "quickHome")}
-            onClick={onClearTabs}
+            onClick={onNavigateHome}
           >
             <Home size={20} />
           </button>

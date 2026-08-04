@@ -15,6 +15,11 @@ const tagsSchema = z
   .max(TAG_MAX_COUNT);
 const booleanQuerySchema = z.enum(["true", "false"]).default("false");
 const noteFormatSchema = z.enum(["markdown", "json"]).default("markdown");
+const treePageSchema = z.object({
+  includeArchived: booleanQuerySchema,
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().min(1).optional(),
+});
 
 const createExternalNoteSchema = z.object({
   title: z.string().trim().min(1).max(500),
@@ -45,6 +50,15 @@ const movePlacementSchema = z.object({
   parentPlacementId: z.string().min(1),
   position: z.number().int().nonnegative().default(0),
 });
+const externalContentPatchSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  edits: z.array(z.object({
+    oldText: z.string().min(1).max(1_000_000),
+    newText: z.string().max(1_000_000),
+    expectedMatches: z.number().int().positive().max(10_000).optional(),
+  })).min(1).max(100),
+  dryRun: z.boolean().default(false),
+});
 
 function requireScope(req: FastifyRequest, scope: EtapiScope): void {
   // Device credentials and the trusted embedded-server boundary retain full
@@ -65,14 +79,53 @@ function minimalMutationResult(note: { id: string; version: number; updatedAt: s
 export function registerEtapiRoutes(app: FastifyInstance, deps: EtapiRouteDeps) {
   const { notes } = deps;
 
-  app.get("/etapi/tree", async (req) => {
+  app.get("/etapi/tree/roots", async (req) => {
     requireScope(req, "notes:read");
-    const query = parse(
-      z.object({ includeArchived: booleanQuerySchema }),
-      req.query,
-      req.log,
+    const query = parse(treePageSchema, req.query, req.log);
+    return notes.externalRoots(query.includeArchived === "true", query.limit, query.cursor);
+  });
+
+  app.get("/etapi/tree/nodes/:placementId", async (req) => {
+    requireScope(req, "notes:read");
+    const query = parse(z.object({ includeArchived: booleanQuerySchema }), req.query, req.log);
+    return notes.externalNode((req.params as { placementId: string }).placementId, query.includeArchived === "true");
+  });
+
+  app.get("/etapi/tree/nodes/:placementId/children", async (req) => {
+    requireScope(req, "notes:read");
+    const query = parse(treePageSchema, req.query, req.log);
+    return notes.externalChildren(
+      (req.params as { placementId: string }).placementId,
+      query.includeArchived === "true",
+      query.limit,
+      query.cursor,
     );
-    return { items: notes.externalTree(query.includeArchived === "true") };
+  });
+
+  app.get("/etapi/tree/nodes/:placementId/subtree", async (req) => {
+    requireScope(req, "notes:read");
+    const query = parse(z.object({
+      includeArchived: booleanQuerySchema,
+      maxDepth: z.coerce.number().int().min(1).max(10).default(1),
+      maxNodes: z.coerce.number().int().min(1).max(500).default(100),
+    }), req.query, req.log);
+    return { items: notes.externalSubtree(
+      (req.params as { placementId: string }).placementId,
+      query.includeArchived === "true",
+      query.maxDepth,
+      query.maxNodes,
+    ) };
+  });
+
+  app.get("/etapi/tree/resolve", async (req) => {
+    requireScope(req, "notes:read");
+    const query = parse(z.object({
+      query: z.string().trim().min(1).max(500),
+      parentPlacementId: z.string().min(1).optional(),
+      includeArchived: booleanQuerySchema,
+      limit: z.coerce.number().int().min(1).max(100).default(20),
+    }), req.query, req.log);
+    return { items: notes.externalResolve(query.query, query.includeArchived === "true", query.parentPlacementId, query.limit) };
   });
 
   app.get("/etapi/notes/:id", async (req) => {
@@ -108,6 +161,7 @@ export function registerEtapiRoutes(app: FastifyInstance, deps: EtapiRouteDeps) 
         .object({
           q: z.string().trim().min(1).max(500).optional(),
           tag: z.string().trim().min(1).max(TAG_MAX_LENGTH).optional(),
+          placementId: z.string().min(1).optional(),
           includeArchived: booleanQuerySchema,
         })
         .refine((input) => Boolean(input.q) !== Boolean(input.tag), {
@@ -118,8 +172,8 @@ export function registerEtapiRoutes(app: FastifyInstance, deps: EtapiRouteDeps) 
     );
     return {
       items: query.tag
-        ? notes.searchByTag(query.tag, query.includeArchived === "true")
-        : notes.search(query.q!, query.includeArchived === "true"),
+        ? notes.searchByTag(query.tag, query.includeArchived === "true", query.placementId)
+        : notes.search(query.q!, query.includeArchived === "true", query.placementId),
     };
   });
 
@@ -183,5 +237,16 @@ export function registerEtapiRoutes(app: FastifyInstance, deps: EtapiRouteDeps) 
       req.etapiSession ? true : req.headers["x-ygdria-import"] !== "1",
     );
     return canRead(req) ? note : minimalMutationResult(note);
+  });
+
+  app.patch("/etapi/notes/:id/content", async (req) => {
+    requireScope(req, "notes:write");
+    const input = parse(externalContentPatchSchema, req.body, req.log);
+    // A preview includes the resulting body, so do not turn a write-only token
+    // into a read capability.
+    if (input.dryRun) requireScope(req, "notes:read");
+    const note = notes.patchContent((req.params as { id: string }).id, input);
+    if ("dryRun" in note) return note;
+    return canRead(req) ? notes.externalNote((req.params as { id: string }).id, "markdown") : minimalMutationResult(note);
   });
 }

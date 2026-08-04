@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapWithConcurrency, shouldAutoSync, type AutoSyncOptions } from "./useSync.js";
+import { mapWithConcurrency, protectedSessionSyncAction, shouldAutoSync, type AutoSyncOptions } from "./useSync.js";
 
 function base(): AutoSyncOptions {
   return {
@@ -113,5 +113,24 @@ describe("mapWithConcurrency", () => {
 
     expect(peak).toBe(2);
     expect(result).toEqual([2, 4, 6, 8, 10]);
+  });
+});
+
+describe("protectedSessionSyncAction", () => {
+  const none = { configured: false, salt: null, verifier: null, timeoutMs: 600_000 };
+  const first = { configured: true, salt: "salt-1", verifier: "verifier-1", timeoutMs: 600_000 };
+  const second = { configured: true, salt: "salt-2", verifier: "verifier-2", timeoutMs: 600_000 };
+
+  it("seeds an unconfigured server from the first configured device", () => {
+    expect(protectedSessionSyncAction(first, none)).toBe("publish-local");
+  });
+
+  it("adopts the server record on a new or mismatched device", () => {
+    expect(protectedSessionSyncAction(none, first)).toBe("adopt-remote");
+    expect(protectedSessionSyncAction(second, first)).toBe("adopt-remote");
+  });
+
+  it("does not write a key record when neither side is configured", () => {
+    expect(protectedSessionSyncAction(none, none)).toBe("unconfigured");
   });
 });

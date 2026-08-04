@@ -161,9 +161,10 @@ export class RemoteProxyClient {
       stats?: { serializedBytes: number; returnedEntities: number; coalescedChanges: number };
     }>;
   }
-  syncSnapshot(cursor = 0, limit = 200, metadataOnly = false, peerId?: string) {
+  syncSnapshot(cursor = 0, limit = 200, metadataOnly = false, peerId?: string, session?: string) {
     const peer = peerId ? `&peerId=${encodeURIComponent(peerId)}` : "";
-    return this.request(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}${peer}`) as Promise<{
+    const sessionParam = session ? `&session=${encodeURIComponent(session)}` : "";
+    return this.request(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}${peer}${sessionParam}`) as Promise<{
       cursor: number; hasMore: boolean; maxChangeId: number;
       changes: Array<{ changeId: number; entityType: string; entityId: string; changeKind: string; createdAt: number; data: Record<string, unknown> | null }>;
     }>;
@@ -197,8 +198,33 @@ export class RemoteProxyClient {
   getNote(id: string) {
     return this.request(`/api/v1/notes/${encodeURIComponent(id)}`) as Promise<any>;
   }
+  protectedSession() {
+    return this.request("/api/v1/protected-session") as Promise<{
+      configured: boolean;
+      salt: string | null;
+      verifier: string | null;
+      timeoutMs: number;
+    }>;
+  }
+  setupProtectedSession(salt: string, verifier: string, timeoutMs?: number) {
+    return this.request("/api/v1/protected-session/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ salt, verifier, timeoutMs }),
+    }) as Promise<{ configured: boolean }>;
+  }
   syncNoteContent(noteId: string, contentHash: string) {
     return this.request(`/api/v1/sync/notes/${encodeURIComponent(noteId)}/content?hash=${encodeURIComponent(contentHash)}`) as Promise<{ contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string }>;
+  }
+  syncNoteContentBatch(ids: string[], hashes: string[], session?: string) {
+    return this.request("/api/v1/sync/notes/content/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, hashes, session }),
+    }) as Promise<{
+      contents: Record<string, { contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string } | null>;
+      truncated: boolean;
+    }>;
   }
   advanceSyncCursor(peerId: string, cursor: number) {
     return this.request("/api/v1/sync/advance", {

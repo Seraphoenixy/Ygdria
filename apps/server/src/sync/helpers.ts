@@ -21,14 +21,66 @@ export type SyncEntityChange = {
   createdAt?: number;
 };
 
+const NOTE_COLS =
+  "id,title,type,content_data,content_codec,content_size,content_hash,plain_text,is_protected,properties_json,version,deleted_at,archived_at,created_at,updated_at";
+const ATTACHMENT_COLS = "id,filename,content_hash contentHash";
+const PLACEMENT_COLS = "id,note_id noteId,parent_placement_id parentPlacementId,position,created_at createdAt,updated_at updatedAt";
+const ATTACHMENT_FULL_COLS = "id,filename,mime_type mimeType,size,storage_key storageKey,content_hash contentHash,created_at createdAt";
+const REVISION_COLS = "id,note_id noteId,content_data contentData,content_codec contentCodec,content_hash contentHash,created_at createdAt";
+const RELATION_COLS = "id,source_note_id sourceNoteId,target_note_id targetNoteId,relation_type relationType,created_at createdAt";
+
+function sqlInParams(ids: string[]): string {
+  return ids.map(() => "?").join(",");
+}
+
+const SQLITE_IN_CHUNK_SIZE = 500;
+
+function selectInChunks<T>(
+  sqlite: SyncSqlite,
+  ids: readonly string[],
+  table: string,
+  columns: string,
+  key = "id",
+): T[] {
+  const rows: T[] = [];
+  for (let start = 0; start < ids.length; start += SQLITE_IN_CHUNK_SIZE) {
+    const chunk = ids.slice(start, start + SQLITE_IN_CHUNK_SIZE);
+    rows.push(...sqlite.prepare(`SELECT ${columns} FROM ${table} WHERE ${key} IN (${sqlInParams(chunk)})`).all(...chunk) as T[]);
+  }
+  return rows;
+}
+
+type NoteRow = {
+  id: string;
+  title: string;
+  type: string;
+  content_data: Buffer;
+  content_codec: string;
+  content_size: number;
+  content_hash: string;
+  plain_text: string;
+  is_protected: number;
+  properties_json: string;
+  version: number;
+  deleted_at: number | null;
+  archived_at: number | null;
+  created_at: number;
+  updated_at: number;
+};
+
+type AttachmentRow = { id: string; filename: string; contentHash: string };
+
 /**
  * Resolve a list of SyncChange entries into full entity snapshots for the
  * incremental sync response. Returns the current state of each entity.
  * Deleted entities are returned as tombstones.
+ *
+ * Uses batch queries grouped by entity type instead of per-row queries,
+ * and batch-fetches attachment references for all notes in a single query.
  */
 export function resolveChangeEntities(
   sqlite: SyncSqlite,
-  attachmentRoot: string,
+  _attachmentRoot: string,
   changes: Array<{
     id: number;
     entityType: string;
@@ -45,6 +97,11 @@ export function resolveChangeEntities(
   createdAt: number;
   data: Record<string, unknown> | null;
 }> {
+  const filtered = changes.filter(
+    (c) => !(c.entityType === "setting" && isSensitiveSettingKey(c.entityId)),
+  );
+  if (filtered.length === 0) return [];
+
   const result: Array<{
     changeId: number;
     entityType: string;
@@ -52,166 +109,247 @@ export function resolveChangeEntities(
     changeKind: string;
     createdAt: number;
     data: Record<string, unknown> | null;
-  }> = [];
-  for (const change of changes) {
-    if (change.entityType === "setting" && isSensitiveSettingKey(change.entityId)) continue;
-    let data: Record<string, unknown> | null = null;
-    if (change.changeKind === "deleted") {
-      result.push({
-        changeId: change.id,
-        entityType: change.entityType,
-        entityId: change.entityId,
-        changeKind: change.changeKind,
-        createdAt: change.createdAt,
-        data: null,
-      });
-      continue;
+  }> = new Array(filtered.length);
+
+  // Group changes by entity type, preserving index for result ordering
+  const byType = new Map<string, Array<{ index: number; entityId: string; changeKind: string }>>();
+  for (let i = 0; i < filtered.length; i++) {
+    const c = filtered[i];
+    let bucket = byType.get(c.entityType);
+    if (!bucket) {
+      bucket = [];
+      byType.set(c.entityType, bucket);
     }
-    switch (change.entityType) {
-      case "note": {
-        const row = sqlite
-          .prepare(
-            "SELECT id,title,type,content_data,content_codec,content_size,content_hash,plain_text,is_protected,properties_json,version,deleted_at,archived_at,created_at,updated_at FROM notes WHERE id=?",
-          )
-          .get(change.entityId) as
-          | {
-              id: string;
-              title: string;
-              type: string;
-              content_data: Buffer;
-              content_codec: string;
-              content_size: number;
-              content_hash: string;
-              plain_text: string;
-              is_protected: number;
-              properties_json: string;
-              version: number;
-              deleted_at: number | null;
-              archived_at: number | null;
-              created_at: number;
-              updated_at: number;
-            }
-          | undefined;
-        if (row) {
-          const attachmentRefs = row.is_protected ? [] : attachmentIdsFromStoredContent(row.content_data, row.content_codec as ContentCodec)
-            .map((id) => sqlite.prepare("SELECT id,filename,content_hash contentHash FROM attachments WHERE id=?").get(id) as { id: string; filename: string; contentHash: string } | undefined)
-            .filter((value): value is { id: string; filename: string; contentHash: string } => Boolean(value));
-          data = {
-            id: row.id,
-            title: row.title,
-            type: row.type,
-            ...(includeNoteContent ? { contentData: Buffer.from(row.content_data).toString("base64") } : {}),
-            contentCodec: row.content_codec,
-            contentSize: row.content_size,
-            contentHash: row.content_hash,
-            ...(includeNoteContent ? { plainText: row.plain_text } : {}),
-            propertiesJson: row.properties_json,
-            isProtected: Boolean(row.is_protected),
-            version: row.version,
-            deletedAt: row.deleted_at,
-            archivedAt: row.archived_at,
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-            attachmentRefs,
-          };
-        }
-        break;
-      }
-      case "placement": {
-        const row = sqlite
-          .prepare(
-            "SELECT id,note_id noteId,parent_placement_id parentPlacementId,position,created_at createdAt,updated_at updatedAt FROM placements WHERE id=?",
-          )
-          .get(change.entityId) as
-          | {
-              id: string;
-              noteId: string;
-              parentPlacementId: string | null;
-              position: number;
-              createdAt: number;
-              updatedAt: number;
-            }
-          | undefined;
-        if (row) data = row;
-        break;
-      }
-      case "placement-order": {
-        const version = sqlite.prepare("SELECT updated_at updatedAt FROM placement_order_versions WHERE parent_placement_id=?").get(change.entityId) as { updatedAt: number } | undefined;
-        if (version) {
-          const placementIds = (sqlite.prepare(
-            "SELECT id FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id",
-          ).all(change.entityId, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID) as Array<{ id: string }>).map((row) => row.id);
-          data = { parentPlacementId: change.entityId, placementIds, updatedAt: version.updatedAt };
-        }
-        break;
-      }
-      case "attachment": {
-        const row = sqlite
-          .prepare(
-            "SELECT id,filename,mime_type mimeType,size,storage_key storageKey,content_hash contentHash,created_at createdAt FROM attachments WHERE id=?",
-          )
-          .get(change.entityId) as
-          | {
-              id: string;
-              filename: string;
-              mimeType: string;
-              size: number;
-              storageKey: string;
-              contentHash: string;
-              createdAt: number;
-            }
-          | undefined;
-        if (row) data = { ...row, dataBase64: "" };
-        break;
-      }
-      case "revision": {
-        const row = sqlite
-          .prepare(
-            "SELECT id,note_id noteId,content_data contentData,content_codec contentCodec,content_hash contentHash,created_at createdAt FROM revisions WHERE id=?",
-          )
-          .get(change.entityId) as
-          | {
-              id: string;
-              noteId: string;
-              contentData: Buffer;
-              contentCodec: string;
-              contentHash: string;
-              createdAt: number;
-            }
-          | undefined;
-        if (row) data = { ...row, contentData: Buffer.from(row.contentData).toString("base64") };
-        break;
-      }
-      case "setting": {
-        const row = sqlite
-          .prepare("SELECT key,value,updated_at updatedAt FROM settings WHERE key=?")
-          .get(change.entityId) as { key: string; value: string; updatedAt: number } | undefined;
-        if (row) data = row;
-        break;
-      }
-      case "relation": {
-        const row = sqlite
-          .prepare(
-            "SELECT id,source_note_id sourceNoteId,target_note_id targetNoteId,relation_type relationType,created_at createdAt FROM relations WHERE id=?",
-          )
-          .get(change.entityId) as
-          | { id: string; sourceNoteId: string; targetNoteId: string; relationType: string; createdAt: number }
-          | undefined;
-        if (row) data = row;
-        break;
-      }
-      default:
-        break;
-    }
-    result.push({
-      changeId: change.id,
-      entityType: change.entityType,
-      entityId: change.entityId,
-      changeKind: data ? change.changeKind : "deleted",
-      createdAt: change.createdAt,
-      data,
-    });
+    bucket.push({ index: i, entityId: c.entityId, changeKind: c.changeKind });
   }
+
+  // Batch query notes: gather all non-deleted note IDs, fetch rows, then batch-fetch attachments
+  const noteBucket = byType.get("note");
+  if (noteBucket) {
+    const liveIds = noteBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
+    const noteMap = new Map<string, NoteRow>();
+    if (liveIds.length > 0) {
+      const rows = selectInChunks<NoteRow>(sqlite, liveIds, "notes", NOTE_COLS);
+      for (const row of rows) noteMap.set(row.id, row);
+    }
+
+    // Batch fetch all attachment references in one query
+    const allAttachmentIds = new Set<string>();
+    for (const row of noteMap.values()) {
+      if (row.is_protected) continue;
+      for (const id of attachmentIdsFromStoredContent(row.content_data, row.content_codec as ContentCodec))
+        allAttachmentIds.add(id);
+    }
+    const attachmentMap = new Map<string, AttachmentRow>();
+    if (allAttachmentIds.size > 0) {
+      const ids = [...allAttachmentIds];
+      const attRows = selectInChunks<AttachmentRow>(sqlite, ids, "attachments", ATTACHMENT_COLS);
+      for (const row of attRows) attachmentMap.set(row.id, row);
+    }
+
+    for (const entry of noteBucket) {
+      const change = filtered[entry.index];
+      if (entry.changeKind === "deleted") {
+        result[entry.index] = {
+          changeId: change.id, entityType: "note", entityId: entry.entityId,
+          changeKind: "deleted", createdAt: change.createdAt, data: null,
+        };
+        continue;
+      }
+      const row = noteMap.get(entry.entityId);
+      let data: Record<string, unknown> | null = null;
+      if (row) {
+        const attachmentRefs = row.is_protected
+          ? []
+          : attachmentIdsFromStoredContent(row.content_data, row.content_codec as ContentCodec)
+            .map((id) => attachmentMap.get(id))
+            .filter((v): v is AttachmentRow => Boolean(v));
+        data = {
+          id: row.id, title: row.title, type: row.type,
+          ...(includeNoteContent ? { contentData: Buffer.from(row.content_data).toString("base64") } : {}),
+          contentCodec: row.content_codec, contentSize: row.content_size, contentHash: row.content_hash,
+          ...(includeNoteContent ? { plainText: row.plain_text } : {}),
+          propertiesJson: row.properties_json, isProtected: Boolean(row.is_protected),
+          version: row.version, deletedAt: row.deleted_at, archivedAt: row.archived_at,
+          createdAt: row.created_at, updatedAt: row.updated_at, attachmentRefs,
+        };
+      }
+      result[entry.index] = {
+        changeId: change.id, entityType: "note", entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+      };
+    }
+  }
+
+  // Batch query placements
+  const placementBucket = byType.get("placement");
+  if (placementBucket) {
+    const liveIds = placementBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
+    const placementMap = new Map<string, Record<string, unknown>>();
+    if (liveIds.length > 0) {
+      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "placements", PLACEMENT_COLS);
+      for (const row of rows) placementMap.set(row.id as string, row);
+    }
+    for (const entry of placementBucket) {
+      const change = filtered[entry.index];
+      if (entry.changeKind === "deleted") {
+        result[entry.index] = {
+          changeId: change.id, entityType: "placement", entityId: entry.entityId,
+          changeKind: "deleted", createdAt: change.createdAt, data: null,
+        };
+        continue;
+      }
+      const data = placementMap.get(entry.entityId) ?? null;
+      result[entry.index] = {
+        changeId: change.id, entityType: "placement", entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+      };
+    }
+  }
+
+  // Batch query placement-order
+  const orderBucket = byType.get("placement-order");
+  if (orderBucket) {
+    for (const entry of orderBucket) {
+      const change = filtered[entry.index];
+      if (entry.changeKind === "deleted") {
+        result[entry.index] = {
+          changeId: change.id, entityType: "placement-order", entityId: entry.entityId,
+          changeKind: "deleted", createdAt: change.createdAt, data: null,
+        };
+        continue;
+      }
+      const version = sqlite
+        .prepare("SELECT updated_at updatedAt FROM placement_order_versions WHERE parent_placement_id=?")
+        .get(entry.entityId) as { updatedAt: number } | undefined;
+      let data: Record<string, unknown> | null = null;
+      if (version) {
+        const placementIds = (
+          sqlite
+            .prepare(
+              "SELECT id FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id",
+            )
+            .all(entry.entityId, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID) as Array<{ id: string }>
+        ).map((row) => row.id);
+        data = { parentPlacementId: entry.entityId, placementIds, updatedAt: version.updatedAt };
+      }
+      result[entry.index] = {
+        changeId: change.id, entityType: "placement-order", entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+      };
+    }
+  }
+
+  // Batch query attachments
+  const attBucket = byType.get("attachment");
+  if (attBucket) {
+    const liveIds = attBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
+    const attMap = new Map<string, Record<string, unknown>>();
+    if (liveIds.length > 0) {
+      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "attachments", ATTACHMENT_FULL_COLS);
+      for (const row of rows) attMap.set(row.id as string, row);
+    }
+    for (const entry of attBucket) {
+      const change = filtered[entry.index];
+      if (entry.changeKind === "deleted") {
+        result[entry.index] = {
+          changeId: change.id, entityType: "attachment", entityId: entry.entityId,
+          changeKind: "deleted", createdAt: change.createdAt, data: null,
+        };
+        continue;
+      }
+      const row = attMap.get(entry.entityId);
+      result[entry.index] = {
+        changeId: change.id, entityType: "attachment", entityId: entry.entityId,
+        changeKind: row ? change.changeKind : "deleted", createdAt: change.createdAt,
+        data: row ? { ...row, dataBase64: "" } : null,
+      };
+    }
+  }
+
+  // Batch query revisions
+  const revBucket = byType.get("revision");
+  if (revBucket) {
+    const liveIds = revBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
+    const revMap = new Map<string, Record<string, unknown>>();
+    if (liveIds.length > 0) {
+      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "revisions", REVISION_COLS);
+      for (const row of rows) {
+        revMap.set(row.id as string, {
+          ...row,
+          contentData: Buffer.from(row.contentData as Buffer).toString("base64"),
+        });
+      }
+    }
+    for (const entry of revBucket) {
+      const change = filtered[entry.index];
+      if (entry.changeKind === "deleted") {
+        result[entry.index] = {
+          changeId: change.id, entityType: "revision", entityId: entry.entityId,
+          changeKind: "deleted", createdAt: change.createdAt, data: null,
+        };
+        continue;
+      }
+      const data = revMap.get(entry.entityId) ?? null;
+      result[entry.index] = {
+        changeId: change.id, entityType: "revision", entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+      };
+    }
+  }
+
+  // Batch query settings
+  const settingBucket = byType.get("setting");
+  if (settingBucket) {
+    const liveIds = settingBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
+    const settingMap = new Map<string, Record<string, unknown>>();
+    if (liveIds.length > 0) {
+      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "settings", "key,value,updated_at updatedAt", "key");
+      for (const row of rows) settingMap.set(row.key as string, row);
+    }
+    for (const entry of settingBucket) {
+      const change = filtered[entry.index];
+      if (entry.changeKind === "deleted") {
+        result[entry.index] = {
+          changeId: change.id, entityType: "setting", entityId: entry.entityId,
+          changeKind: "deleted", createdAt: change.createdAt, data: null,
+        };
+        continue;
+      }
+      const data = settingMap.get(entry.entityId) ?? null;
+      result[entry.index] = {
+        changeId: change.id, entityType: "setting", entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+      };
+    }
+  }
+
+  // Batch query relations
+  const relBucket = byType.get("relation");
+  if (relBucket) {
+    const liveIds = relBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
+    const relMap = new Map<string, Record<string, unknown>>();
+    if (liveIds.length > 0) {
+      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "relations", RELATION_COLS);
+      for (const row of rows) relMap.set(row.id as string, row);
+    }
+    for (const entry of relBucket) {
+      const change = filtered[entry.index];
+      if (entry.changeKind === "deleted") {
+        result[entry.index] = {
+          changeId: change.id, entityType: "relation", entityId: entry.entityId,
+          changeKind: "deleted", createdAt: change.createdAt, data: null,
+        };
+        continue;
+      }
+      const data = relMap.get(entry.entityId) ?? null;
+      result[entry.index] = {
+        changeId: change.id, entityType: "relation", entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+      };
+    }
+  }
+
   return result;
 }
 
@@ -245,6 +383,82 @@ export function fullSnapshotChanges(sqlite: SyncSqlite) {
     if (!isSensitiveSettingKey(row.key)) changes.push({ id: ++id, entityType: "setting", entityId: row.key, changeKind: "updated", createdAt: row.updatedAt });
   return changes;
 }
+
+type SnapshotEntity = ReturnType<typeof resolveChangeEntities>[number];
+type SnapshotSession = { changes: SnapshotEntity[]; maxChangeId: number; accessedAt: number };
+
+/**
+ * Session-scoped snapshot cache. A snapshot session is anchored to a single
+ * fullSnapshotChanges() result and is valid only for the duration of one
+ * complete cursor traversal (cursor=0 → hasMore=false). If the client
+ * restarts from cursor=0, a fresh session is created so it never sees stale
+ * data from a concurrent write during the previous session.
+ */
+class SnapshotCache {
+  private sessions = new Map<string, SnapshotSession>();
+  private static SESSION_TTL_MS = 5 * 60 * 1000;
+  private static MAX_SESSIONS = 2;
+
+  /** Capture the resolved entities, including note bodies, at session start.
+   * Keeping only entity IDs is not sufficient: a later page could otherwise
+   * observe a newer edit or a deletion made after the first page. */
+  getOrCreate(sessionId: string, sqlite: SyncSqlite, attachmentRoot: string): SnapshotSession {
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      existing.accessedAt = Date.now();
+      return existing;
+    }
+    this.evictStale();
+    if (this.sessions.size >= SnapshotCache.MAX_SESSIONS) {
+      const oldest = [...this.sessions.entries()].sort((a, b) => a[1].accessedAt - b[1].accessedAt)[0]?.[0];
+      if (oldest) this.sessions.delete(oldest);
+    }
+    const changes = resolveChangeEntities(sqlite, attachmentRoot, fullSnapshotChanges(sqlite), true);
+    const maxChangeId = (sqlite.prepare("SELECT COALESCE(MAX(id),0) id FROM sync_change_log").get() as { id: number }).id;
+    const session = { changes, maxChangeId, accessedAt: Date.now() };
+    this.sessions.set(sessionId, session);
+    return session;
+  }
+
+  getNoteContents(sessionId: string, ids: readonly string[], hashes: readonly string[]) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    session.accessedAt = Date.now();
+    const byId = new Map(session.changes.filter((change) => change.entityType === "note" && change.data)
+      .map((change) => [change.entityId, change.data!]));
+    const contents: Record<string, { contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string } | null> = {};
+    for (let index = 0; index < ids.length; index += 1) {
+      const data = byId.get(ids[index]);
+      if (!data || data.contentHash !== hashes[index] || typeof data.contentData !== "string") {
+        contents[ids[index]] = null;
+        continue;
+      }
+      contents[ids[index]] = {
+        contentData: data.contentData as string,
+        contentCodec: data.contentCodec as string,
+        contentSize: data.contentSize as number,
+        contentHash: data.contentHash as string,
+        plainText: data.plainText as string,
+      };
+    }
+    return contents;
+  }
+
+  /** Release a session so its memory can be reclaimed. Called when the
+   * snapshot traversal is complete (hasMore=false). */
+  release(sessionId: string) {
+    this.sessions.delete(sessionId);
+  }
+
+  private evictStale() {
+    const now = Date.now();
+    for (const [id, session] of this.sessions) {
+      if (now - session.accessedAt > SnapshotCache.SESSION_TTL_MS) this.sessions.delete(id);
+    }
+  }
+}
+
+export const snapshotCache = new SnapshotCache();
 
 /** Build a complete, dependency-ordered baseline without exposing note bodies
  * outside the existing sync protocol. Placements must follow their parent so
@@ -308,6 +522,59 @@ export function noteWouldAcceptSyncUpdate(sqlite: SyncSqlite, noteId: string, ti
     .prepare("SELECT updated_at updatedAt FROM notes WHERE id=?")
     .get(noteId) as { updatedAt: number } | undefined;
   return !current || timestamp > current.updatedAt;
+}
+
+/**
+ * A sync sender can legitimately retry an already-delivered entity snapshot
+ * (for example after an interrupted cursor advance). Equal timestamps are
+ * normally rejected by last-write-wins, but an identical snapshot is not a
+ * conflict: it is an idempotent replay and must not reach the conflict UI.
+ */
+function noteMatchesSyncSnapshot(
+  sqlite: SyncSqlite,
+  data: Record<string, unknown>,
+): boolean {
+  if (typeof data.id !== "string" || typeof data.contentData !== "string") return false;
+  const local = sqlite
+    .prepare(
+      "SELECT id,title,type,content_data contentData,content_codec contentCodec,content_size contentSize,content_hash contentHash,plain_text plainText,is_protected isProtected,properties_json propertiesJson,version,deleted_at deletedAt,archived_at archivedAt,created_at createdAt,updated_at updatedAt FROM notes WHERE id=?",
+    )
+    .get(data.id) as
+    | {
+        id: string;
+        title: string;
+        type: string;
+        contentData: Buffer;
+        contentCodec: string;
+        contentSize: number;
+        contentHash: string;
+        plainText: string;
+        isProtected: number;
+        propertiesJson: string;
+        version: number;
+        deletedAt: number | null;
+        archivedAt: number | null;
+        createdAt: number;
+        updatedAt: number;
+      }
+    | undefined;
+  return Boolean(
+    local &&
+      local.title === data.title &&
+      local.type === data.type &&
+      local.contentData.equals(Buffer.from(data.contentData, "base64")) &&
+      local.contentCodec === data.contentCodec &&
+      local.contentSize === data.contentSize &&
+      local.contentHash === data.contentHash &&
+      local.plainText === data.plainText &&
+      Boolean(local.isProtected) === data.isProtected &&
+      local.propertiesJson === data.propertiesJson &&
+      local.version === data.version &&
+      local.deletedAt === data.deletedAt &&
+      local.archivedAt === data.archivedAt &&
+      local.createdAt === data.createdAt &&
+      local.updatedAt === data.updatedAt,
+  );
 }
 
 export function cleanupUnreferencedSyncAttachments(sqlite: SyncSqlite, candidates: Set<string>, recordOutbound: boolean) {
@@ -427,6 +694,11 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
         if (!d || typeof d.contentData !== "string" || typeof d.updatedAt !== "number") continue;
         const acceptsUpdate = noteWouldAcceptSyncUpdate(sqlite, String(d.id), d.updatedAt);
         if (!acceptsUpdate) {
+          // Equal timestamp + identical fields is an idempotent retry, not a
+          // competing edit.  In particular, this prevents a create followed
+          // by an immediate save from surfacing a false sync conflict when a
+          // peer receives the latest snapshot twice.
+          if (noteMatchesSyncSnapshot(sqlite, d)) continue;
           // Local note is newer than the incoming record: last-write-wins keeps
           // ours and discards the peer's edit. Record it so the client can flag
           // the divergence instead of silently dropping the peer's change.

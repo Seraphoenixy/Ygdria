@@ -42,6 +42,28 @@ function sync(peerA: ReturnType<typeof freshDb>, peerB: ReturnType<typeof freshD
 }
 
 describe("cross-device purge propagation", () => {
+  it("treats a repeated latest note snapshot as an idempotent sync retry", () => {
+    const peerA = freshDb();
+    const peerB = freshDb();
+    const notesA = new NoteService(peerA);
+    const note = notesA.create({ title: "Draft" });
+    notesA.update(note.id, { title: "Saved", expectedVersion: note.version });
+
+    // The raw log deliberately contains both the create and update rows. They
+    // resolve to the same latest snapshot, as can happen with a retry from an
+    // older peer or after an interrupted cursor advance.
+    const raw = peerA.sqlite
+      .prepare("SELECT id,entity_type entityType,entity_id entityId,change_kind changeKind,created_at createdAt FROM sync_change_log WHERE entity_type='note' AND entity_id=? ORDER BY id")
+      .all(note.id) as Array<{ id: number; entityType: string; entityId: string; changeKind: string; createdAt: number }>;
+    const resolved = resolveChangeEntities(peerA.sqlite, "", raw, true);
+    const result = applySyncChanges(peerB.sqlite, resolved, false);
+
+    expect(result.rejected).toEqual([]);
+    expect(
+      (peerB.sqlite.prepare("SELECT title FROM notes WHERE id=?").get(note.id) as { title: string }).title,
+    ).toBe("Saved");
+  });
+
   it("hard-deletes a locally-trashed note when the peer purges its trash", () => {
     const peerA = freshDb();
     const peerB = freshDb();

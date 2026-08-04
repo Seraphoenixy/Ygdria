@@ -1,70 +1,158 @@
 import { decodeStoredContent, encodeDocumentContent, recordChange, type ContentCodec } from "@ygdria/database";
 import { markdownToTiptap, tiptapToMarkdown } from "@ygdria/editor/markdown";
-import { CALENDAR_NOTE_ID, CALENDAR_PLACEMENT_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID, type NoteContent, type SearchResult, type TagStats } from "@ygdria/shared";
+import { CALENDAR_NOTE_ID, CALENDAR_PLACEMENT_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID, type NoteContent, type SearchResult, type TagStats } from "@ygdria/shared";
 import { ConflictError, escapeHtml, id, NotFoundError, now, type RevisionRow, type SearchRow } from "./note-service-base.js";
 import { PlacementService } from "./placement-service.js";
-import { readCodeLanguage, readTags } from "./properties-utils.js";
+import { readTags } from "./properties-utils.js";
+
+export class PatchTargetError extends Error {
+  statusCode = 422;
+  code = "PatchTargetError";
+}
+
+export type ExternalTextEdit = {
+  oldText: string;
+  newText: string;
+  expectedMatches?: number;
+};
+
+type ExternalTreeNode = {
+  placementId: string;
+  noteId: string;
+  parentPlacementId: string | null;
+  position: number;
+  title: string;
+  isProtected: boolean;
+  hasChildren: boolean;
+};
+
+function applyLiteralEdits(source: string, edits: ExternalTextEdit[]) {
+  const replacements: Array<{ start: number; end: number; text: string; editIndex: number }> = [];
+  const matches: number[] = [];
+  for (const [editIndex, edit] of edits.entries()) {
+    const positions: number[] = [];
+    let cursor = 0;
+    while (cursor <= source.length) {
+      const position = source.indexOf(edit.oldText, cursor);
+      if (position === -1) break;
+      positions.push(position);
+      cursor = position + edit.oldText.length;
+    }
+    const expected = edit.expectedMatches ?? 1;
+    if (positions.length !== expected) {
+      throw new PatchTargetError(`Edit ${editIndex + 1} expected ${expected} literal match(es), found ${positions.length}`);
+    }
+    matches.push(positions.length);
+    for (const start of positions) replacements.push({ start, end: start + edit.oldText.length, text: edit.newText, editIndex });
+  }
+  const ordered = replacements.sort((left, right) => left.start - right.start || left.end - right.end);
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (ordered[index].start < ordered[index - 1].end) {
+      throw new PatchTargetError(`Edits ${ordered[index - 1].editIndex + 1} and ${ordered[index].editIndex + 1} overlap`);
+    }
+  }
+  let content = source;
+  for (const replacement of [...ordered].sort((left, right) => right.start - left.start)) {
+    content = content.slice(0, replacement.start) + replacement.text + content.slice(replacement.end);
+  }
+  return { content, matches };
+}
 
 export class NoteService extends PlacementService {
-  externalTree(includeArchived = false) {
-    const rows = this.store.sqlite
-      .prepare(
-        `SELECT p.id placementId,p.note_id noteId,p.parent_placement_id parentPlacementId,p.position,
-                n.title,n.type,n.properties_json propertiesJson,n.version,n.created_at createdAt,
-                n.updated_at updatedAt,n.archived_at archivedAt,n.is_protected isProtected,
-                n.id IN (?,?) isSystem,n.id=? isCalendar
-         FROM placements p
-         JOIN notes n ON n.id=p.note_id
-         WHERE n.deleted_at IS NULL
-           AND p.id<>?
-           AND (?=1 OR n.archived_at IS NULL)
-         ORDER BY p.parent_placement_id,p.position,p.id`,
-      )
-      .all(
-        SYSTEM_ROOT_NOTE_ID,
-        SYSTEM_TRASH_NOTE_ID,
-        CALENDAR_NOTE_ID,
-        SYSTEM_TRASH_PLACEMENT_ID,
-        includeArchived ? 1 : 0,
-      ) as Array<{
-        placementId: string;
-        noteId: string;
-        parentPlacementId: string | null;
-        position: number;
-        title: string;
-        type: "text" | "code";
-        propertiesJson: string;
-        version: number;
-        createdAt: number;
-        updatedAt: number;
-        archivedAt: number | null;
-        isProtected: 0 | 1;
-        isSystem: 0 | 1;
-        isCalendar: 0 | 1;
-      }>;
-    return rows.map((row) => ({
-      placementId: row.placementId,
-      noteId: row.noteId,
-      parentPlacementId: row.parentPlacementId,
-      position: row.position,
-      title: row.isProtected ? "" : row.title,
-      type: row.type,
-      properties: row.isProtected
-        ? { tags: [] as string[] }
-        : {
-            tags: readTags(row.propertiesJson),
-            ...(row.type === "code"
-              ? { codeLanguage: readCodeLanguage(row.propertiesJson) }
-              : {}),
-          },
-      version: row.version,
-      createdAt: new Date(row.createdAt).toISOString(),
-      updatedAt: new Date(row.updatedAt).toISOString(),
-      archivedAt: row.archivedAt === null ? null : new Date(row.archivedAt).toISOString(),
-      isProtected: Boolean(row.isProtected),
-      isSystem: Boolean(row.isSystem),
-      isCalendar: Boolean(row.isCalendar),
-    }));
+  private externalNodeFromRow(row: ExternalTreeNode): ExternalTreeNode {
+    return { ...row, title: row.isProtected ? "" : row.title, isProtected: Boolean(row.isProtected), hasChildren: Boolean(row.hasChildren) };
+  }
+
+  private externalVisibility(includeArchived: boolean) {
+    return [SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID, includeArchived ? 1 : 0] as const;
+  }
+
+  private externalNodeQuery(where: string, order = "p.position,p.id", limit?: number) {
+    return `SELECT p.id placementId,p.note_id noteId,p.parent_placement_id parentPlacementId,p.position,
+              n.title,n.is_protected isProtected,
+              EXISTS(SELECT 1 FROM placements c JOIN notes cn ON cn.id=c.note_id
+                WHERE c.parent_placement_id=p.id AND cn.deleted_at IS NULL
+                  AND cn.id NOT IN (?,?) AND c.id<>? AND (?=1 OR cn.archived_at IS NULL)) hasChildren
+            FROM placements p JOIN notes n ON n.id=p.note_id
+            WHERE n.deleted_at IS NULL AND n.id NOT IN (?,?) AND p.id<>?
+              AND (?=1 OR n.archived_at IS NULL) ${where}
+            ORDER BY ${order}${limit === undefined ? "" : " LIMIT ?"}`;
+  }
+
+  private externalOne(placementId: string, includeArchived: boolean): ExternalTreeNode {
+    const visibility = this.externalVisibility(includeArchived);
+    const row = this.store.sqlite.prepare(this.externalNodeQuery("AND p.id=?"))
+      .get(...visibility, ...visibility, placementId) as ExternalTreeNode | undefined;
+    if (!row) throw new NotFoundError("Tree node not found");
+    return this.externalNodeFromRow(row);
+  }
+
+  externalRoots(includeArchived = false, limit = 50, cursor?: string) {
+    const visibility = this.externalVisibility(includeArchived);
+    const cursorRow = cursor ? this.externalOne(cursor, includeArchived) : undefined;
+    const after = cursorRow
+      ? "AND (p.position>? OR (p.position=? AND p.id>?))"
+      : "";
+    const params = cursorRow
+      ? [...visibility, ...visibility, SYSTEM_ROOT_PLACEMENT_ID, cursorRow.position, cursorRow.position, cursorRow.placementId, limit + 1]
+      : [...visibility, ...visibility, SYSTEM_ROOT_PLACEMENT_ID, limit + 1];
+    const rows = this.store.sqlite.prepare(this.externalNodeQuery(`AND p.parent_placement_id=? ${after}`, "p.position,p.id", limit + 1))
+      .all(...params) as ExternalTreeNode[];
+    return this.externalPage(rows, limit);
+  }
+
+  externalNode(placementId: string, includeArchived = false) {
+    return this.externalOne(placementId, includeArchived);
+  }
+
+  externalChildren(placementId: string, includeArchived = false, limit = 50, cursor?: string) {
+    this.externalOne(placementId, includeArchived);
+    const visibility = this.externalVisibility(includeArchived);
+    const cursorRow = cursor ? this.externalOne(cursor, includeArchived) : undefined;
+    const after = cursorRow ? "AND (p.position>? OR (p.position=? AND p.id>?))" : "";
+    const params = cursorRow
+      ? [...visibility, ...visibility, placementId, cursorRow.position, cursorRow.position, cursorRow.placementId, limit + 1]
+      : [...visibility, ...visibility, placementId, limit + 1];
+    const rows = this.store.sqlite.prepare(this.externalNodeQuery(`AND p.parent_placement_id=? ${after}`, "p.position,p.id", limit + 1))
+      .all(...params) as ExternalTreeNode[];
+    return this.externalPage(rows, limit);
+  }
+
+  private externalPage(rows: ExternalTreeNode[], limit: number) {
+    const items = rows.slice(0, limit).map((row) => this.externalNodeFromRow(row));
+    return { items, nextCursor: rows.length > limit ? items.at(-1)?.placementId ?? null : null };
+  }
+
+  externalSubtree(placementId: string, includeArchived = false, maxDepth = 1, maxNodes = 100) {
+    this.externalOne(placementId, includeArchived);
+    const visibility = this.externalVisibility(includeArchived);
+    const rows = this.store.sqlite.prepare(
+      `WITH RECURSIVE subtree(placementId,noteId,parentPlacementId,position,title,isProtected,depth) AS (
+         SELECT p.id,p.note_id,p.parent_placement_id,p.position,n.title,n.is_protected,0
+         FROM placements p JOIN notes n ON n.id=p.note_id
+         WHERE p.id=? AND n.deleted_at IS NULL AND n.id NOT IN (?,?) AND p.id<>? AND (?=1 OR n.archived_at IS NULL)
+         UNION ALL
+         SELECT p.id,p.note_id,p.parent_placement_id,p.position,n.title,n.is_protected,s.depth+1
+         FROM placements p JOIN notes n ON n.id=p.note_id JOIN subtree s ON p.parent_placement_id=s.placementId
+         WHERE s.depth<? AND n.deleted_at IS NULL AND n.id NOT IN (?,?) AND p.id<>? AND (?=1 OR n.archived_at IS NULL)
+       )
+       SELECT s.*, EXISTS(SELECT 1 FROM placements c JOIN notes cn ON cn.id=c.note_id
+         WHERE c.parent_placement_id=s.placementId AND cn.deleted_at IS NULL AND cn.id NOT IN (?,?) AND c.id<>? AND (?=1 OR cn.archived_at IS NULL)) hasChildren
+       FROM subtree s ORDER BY depth,position,placementId LIMIT ?`,
+    ).all(placementId, ...visibility, maxDepth, ...visibility, ...visibility, maxNodes) as ExternalTreeNode[];
+    return rows.map((row) => this.externalNodeFromRow(row));
+  }
+
+  externalResolve(query: string, includeArchived = false, parentPlacementId?: string, limit = 20) {
+    const visibility = this.externalVisibility(includeArchived);
+    const escaped = query.replace(/[\\%_]/g, "\\$&");
+    const parent = parentPlacementId ? "AND p.parent_placement_id=?" : "";
+    const params = parentPlacementId
+      ? [...visibility, ...visibility, `%${escaped}%`, parentPlacementId, limit]
+      : [...visibility, ...visibility, `%${escaped}%`, limit];
+    const rows = this.store.sqlite.prepare(this.externalNodeQuery(`AND n.is_protected=0 AND n.title LIKE ? ESCAPE '\\' ${parent}`, "p.position,p.id", limit))
+      .all(...params) as ExternalTreeNode[];
+    return rows.map((row) => this.externalNodeFromRow(row));
   }
 
   externalNote(noteId: string, format: "markdown" | "json" = "markdown") {
@@ -184,6 +272,21 @@ export class NoteService extends PlacementService {
       format === "markdown" ? markdownToTiptap(body as string).document : (body as NoteContent);
     return this.update(noteId, { content: parsed, expectedVersion, createRevision });
   }
+  patchContent(
+    noteId: string,
+    input: { expectedVersion: number; edits: ExternalTextEdit[]; dryRun?: boolean },
+  ) {
+    const note = this.get(noteId);
+    if (!note) throw new NotFoundError();
+    if (note.isProtected) throw new ConflictError("Cannot modify protected note content via ETAPI");
+    if (note.version !== input.expectedVersion) throw new ConflictError();
+    const source = note.type === "code"
+      ? (typeof note.content === "string" ? note.content : "")
+      : tiptapToMarkdown(note.content as NoteContent).markdown;
+    const result = applyLiteralEdits(source, input.edits);
+    if (input.dryRun) return { dryRun: true as const, version: note.version, matches: result.matches, content: result.content };
+    return this.putContent(noteId, result.content, "markdown", input.expectedVersion);
+  }
   revisions(noteId: string) {
     if (!this.get(noteId)) throw new NotFoundError();
     return (
@@ -295,7 +398,7 @@ export class NoteService extends PlacementService {
       ? { code: restored, expectedVersion }
       : { content: JSON.parse(restored) as NoteContent, expectedVersion });
   }
-  search(query: string, includeArchived = false): SearchResult[] {
+  search(query: string, includeArchived = false, placementId?: string): SearchResult[] {
     if (!query.trim()) return [];
     const normalizedQuery = query.trim();
     const resultLimit = 30;
@@ -316,31 +419,37 @@ export class NoteService extends PlacementService {
     const escapedHanTerms = hanTerms.map((term) => `%${term.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`);
     const hanPredicates = hanTerms.map(() => "(n.title LIKE ? ESCAPE '\\' OR n.plain_text LIKE ? ESCAPE '\\')").join(" AND ");
     const visibility = `n.deleted_at IS NULL AND n.is_protected=0 ${includeArchived ? "" : "AND n.archived_at IS NULL"}`;
+    this.assertSearchPlacement(placementId);
+    const subtreeFilter = placementId
+      ? "AND n.id IN (WITH RECURSIVE subtree AS (SELECT id,note_id FROM placements WHERE id=? UNION ALL SELECT p.id,p.note_id FROM placements p JOIN subtree s ON p.parent_placement_id=s.id) SELECT note_id FROM subtree)"
+      : "";
+    const subtreeParams = placementId ? [placementId] : [];
     const hanParams = escapedHanTerms.flatMap((term) => [term, term]);
     const rows: Array<SearchRow & { relevance: number }> = ftsQuery
       ? this.store.sqlite.prepare(
         `SELECT n.id noteId,n.title title,snippet(notes_fts,1,'<mark>','</mark>','…',10) snippet,n.updated_at updatedAt,n.archived_at IS NOT NULL isArchived,bm25(notes_fts) relevance
          FROM notes_fts JOIN notes n ON n.rowid=notes_fts.rowid
-         WHERE notes_fts MATCH ? AND ${visibility} ${hanPredicates ? `AND ${hanPredicates}` : ""}
+         WHERE notes_fts MATCH ? AND ${visibility} ${hanPredicates ? `AND ${hanPredicates}` : ""} ${subtreeFilter}
          ORDER BY relevance,n.updated_at DESC LIMIT ${resultLimit}`,
-      ).all(ftsQuery, ...hanParams) as Array<SearchRow & { relevance: number }>
+      ).all(ftsQuery, ...hanParams, ...subtreeParams) as Array<SearchRow & { relevance: number }>
       : this.store.sqlite.prepare(
         `SELECT n.id noteId,n.title title,
            CASE WHEN instr(n.plain_text, ?) > 0 THEN replace(substr(n.plain_text,MAX(1,instr(n.plain_text,?)-60),180),?,'<mark>' || ? || '</mark>')
            ELSE replace(n.title,?,'<mark>' || ? || '</mark>') END snippet,
            n.updated_at updatedAt,n.archived_at IS NOT NULL isArchived,0 relevance
-         FROM notes n WHERE ${visibility} AND ${hanPredicates}
+         FROM notes n WHERE ${visibility} AND ${hanPredicates} ${subtreeFilter}
          ORDER BY n.updated_at DESC LIMIT ${resultLimit}`,
-      ).all(hanTerms[0], hanTerms[0], hanTerms[0], hanTerms[0], hanTerms[0], hanTerms[0], ...hanParams) as Array<SearchRow & { relevance: number }>;
+      ).all(hanTerms[0], hanTerms[0], hanTerms[0], hanTerms[0], hanTerms[0], hanTerms[0], ...hanParams, ...subtreeParams) as Array<SearchRow & { relevance: number }>;
 
     // Keep the response stable if a future query path contributes the same
     // note more than once, then rank FTS relevance before recency.
-    return Array.from(new Map(rows.map((row) => [row.noteId, row])).values())
+    const results = Array.from(new Map(rows.map((row) => [row.noteId, row])).values())
       .sort((left, right) => left.relevance - right.relevance || right.updatedAt - left.updatedAt)
       .map((row) => {
         const tags = this.getTagsForNoteId(row.noteId);
         return { noteId: row.noteId, title: row.title, snippet: row.snippet, matchedField: "content" as const, updatedAt: new Date(row.updatedAt).toISOString(), tags };
       });
+    return this.withMatchedPlacements(results, placementId);
   }
   protected ensureCalendarDay() {
     const date = new Date();
@@ -371,21 +480,25 @@ export class NoteService extends PlacementService {
    * Search notes by exact tag match using json_each on properties_json.
    * Only returns non-deleted, non-protected notes.
    */
-  searchByTag(tag: string, includeArchived = false): SearchResult[] {
+  searchByTag(tag: string, includeArchived = false, placementId?: string): SearchResult[] {
     if (!tag || tag.trim().length === 0) return [];
     const resultLimit = 30;
+    this.assertSearchPlacement(placementId);
+    const subtreeFilter = placementId
+      ? "AND n.id IN (WITH RECURSIVE subtree AS (SELECT id,note_id FROM placements WHERE id=? UNION ALL SELECT p.id,p.note_id FROM placements p JOIN subtree s ON p.parent_placement_id=s.id) SELECT note_id FROM subtree)"
+      : "";
     const rows = this.store.sqlite
       .prepare(
         `SELECT n.id noteId, n.title title, n.plain_text plainText, n.updated_at updatedAt
          FROM notes n
          JOIN json_each(n.properties_json, '$.tags') jt
          WHERE n.deleted_at IS NULL AND n.is_protected=0 ${includeArchived ? "" : "AND n.archived_at IS NULL"}
-         AND jt.value = ?
+         AND jt.value = ? ${subtreeFilter}
          ORDER BY n.updated_at DESC
          LIMIT ?`,
       )
-      .all(tag, resultLimit) as Array<{ noteId: string; title: string; plainText: string; updatedAt: number }>;
-    return rows.map((row) => {
+      .all(tag, ...subtreeParams(placementId), resultLimit) as Array<{ noteId: string; title: string; plainText: string; updatedAt: number }>;
+    const results = rows.map((row) => {
       const tags = readTags(
         (this.store.sqlite
           .prepare("SELECT properties_json FROM notes WHERE id=?")
@@ -401,6 +514,7 @@ export class NoteService extends PlacementService {
         tags,
       };
     });
+    return this.withMatchedPlacements(results, placementId);
   }
 
   /**
@@ -429,4 +543,27 @@ export class NoteService extends PlacementService {
     if (!row || row.is_protected) return [];
     return readTags(row.properties_json);
   }
+  private assertSearchPlacement(placementId?: string) {
+    if (!placementId) return;
+    const row = this.store.sqlite
+      .prepare("SELECT p.id FROM placements p JOIN notes n ON n.id=p.note_id WHERE p.id=? AND n.deleted_at IS NULL")
+      .get(placementId);
+    if (!row) throw new NotFoundError("Placement not found");
+  }
+  private withMatchedPlacements(results: SearchResult[], placementId?: string): SearchResult[] {
+    if (!placementId || results.length === 0) return results;
+    const noteIds = results.map((result) => result.noteId);
+    const placeholders = noteIds.map(() => "?").join(",");
+    const rows = this.store.sqlite.prepare(
+      `WITH RECURSIVE subtree AS (SELECT id,note_id FROM placements WHERE id=? UNION ALL SELECT p.id,p.note_id FROM placements p JOIN subtree s ON p.parent_placement_id=s.id)
+       SELECT id placementId,note_id noteId FROM subtree WHERE note_id IN (${placeholders})`,
+    ).all(placementId, ...noteIds) as Array<{ placementId: string; noteId: string }>;
+    const byNoteId = new Map<string, string[]>();
+    for (const row of rows) byNoteId.set(row.noteId, [...(byNoteId.get(row.noteId) ?? []), row.placementId]);
+    return results.map((result) => ({ ...result, matchedPlacementIds: byNoteId.get(result.noteId) ?? [] }));
+  }
+}
+
+function subtreeParams(placementId?: string): string[] {
+  return placementId ? [placementId] : [];
 }

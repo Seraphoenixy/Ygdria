@@ -36,6 +36,7 @@ export function registerDeviceAuthHook(
         // short-lived ETAPI sessions issued by that device.
         if (
           etapiSession.issuedByDeviceId &&
+          devices.isBootstrapped() &&
           !devices.get(etapiSession.issuedByDeviceId)
         ) {
           etapiSessions!.revoke(etapiSession.id);

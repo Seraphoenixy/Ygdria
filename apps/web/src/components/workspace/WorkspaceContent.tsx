@@ -14,7 +14,6 @@ import { NoteContent } from "../../features/note/NoteContent";
 import type { NoteContentData } from "../../features/note/NoteContent";
 import { SettingsPage } from "../../features/settings/SettingsPage";
 import type { ProtectedClientSession } from "../../lib/client-crypto";
-import { isPhoneLayout } from "../../lib/mobileLayout";
 
 export interface WorkspaceContentProps {
   // Tab management
@@ -207,14 +206,9 @@ export function WorkspaceContent({
   createNewNote,
   decryptedTitles,
 }: WorkspaceContentProps) {
-  // On phones the tab strip is collapsed by default so the document reclaims
-  // the vertical space taken by the stacked fixed bars (tab strip + toolbar +
-  // editor toolbar). The user can expand it on demand via the chevron.
-  const [tabsCollapsed, setTabsCollapsed] = React.useState(() => isPhoneLayout());
   const [searchInitialTag, setSearchInitialTag] = React.useState<string | undefined>();
-  const phone = isPhoneLayout();
   return (
-    <section className={`content${tabsCollapsed ? " tabs-collapsed" : ""}`}>
+    <section className="content">
       <TabBar
         tabs={tabs}
         activeTabId={activeTabId}
@@ -227,9 +221,6 @@ export function WorkspaceContent({
         onContextMenu={onTabContextMenu}
         onReorder={onReorder}
         onTogglePin={onTogglePin}
-        collapsible={phone}
-        collapsed={tabsCollapsed}
-        onToggleCollapsed={() => setTabsCollapsed((value) => !value)}
       />
       <Toolbar
         breadcrumb={noteBreadCrumb}
@@ -274,12 +265,12 @@ export function WorkspaceContent({
         />
       )}
       {tabs.some((tab) => tab.id === "search") && (
-        <div className="document-scroll" hidden={activeTabId !== "search"}>
+        <div className="document-scroll" data-tab-id="search" hidden={activeTabId !== "search"}>
           <SearchPage client={client} locale={locale} isActive={activeTabId === "search"} onOpenNote={(noteId, openInNewTab) => openNote(noteId, false, false, openInNewTab)} initialTag={searchInitialTag} />
         </div>
       )}
       {activeTabId === "search" ? null : activeTabId === "archive" ? (
-        <div className="document-scroll">
+        <div className="document-scroll" data-tab-id="archive">
           <ArchivedNotesPage
             items={archivedNotes.data ?? []}
             placements={treeData ?? []}
@@ -290,7 +281,7 @@ export function WorkspaceContent({
           />
         </div>
       ) : activeTabId === "history" ? (
-        <div className="document-scroll">
+        <div className="document-scroll" data-tab-id="history">
           <RecentHistory
             items={history.data ?? []}
             loading={history.isLoading}
@@ -303,7 +294,7 @@ export function WorkspaceContent({
           />
         </div>
       ) : activeTabId === "attachments" ? (
-        <div className="document-scroll">
+        <div className="document-scroll" data-tab-id="attachments">
           <AttachmentsView
             data={attachments.data}
             isLoading={attachments.isLoading}
@@ -315,7 +306,7 @@ export function WorkspaceContent({
           />
         </div>
       ) : settingsOpen ? (
-        <div className="document-scroll">
+        <div className="document-scroll" data-tab-id="settings">
           <SettingsPage
             locale={locale}
             onLocaleChange={onLocaleChange}
@@ -348,7 +339,7 @@ export function WorkspaceContent({
           />
         </div>
       ) : activeTab?.kind === "new" ? (
-        <div className="document-scroll">
+        <div className="document-scroll" data-tab-id={activeTab.id}>
           <NewTabSearch
             treeData={treeData}
             locale={locale}
@@ -361,11 +352,11 @@ export function WorkspaceContent({
           />
         </div>
       ) : noteIsLoading ? (
-        <div className="document-scroll">
+        <div className="document-scroll" data-tab-id={activeTabId}>
           <div className="empty">Loading...</div>
         </div>
       ) : noteData ? (
-        <div ref={documentScrollRef} className="document-scroll">
+        <div ref={documentScrollRef} className="document-scroll" data-tab-id={activeTabId}>
           <NoteContent
             note={noteData}
             editing={editing}
@@ -387,7 +378,7 @@ export function WorkspaceContent({
           />
         </div>
       ) : (
-        <div className="document-scroll">
+        <div className="document-scroll" data-tab-id={activeTabId}>
           <NewTabSearch
             treeData={treeData}
             locale={locale}

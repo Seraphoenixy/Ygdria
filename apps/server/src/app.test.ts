@@ -363,7 +363,7 @@ describe("desktop local-token boundary", () => {
     expect(issued.statusCode).toBe(201);
     const authorization = `Bearer ${issued.json().accessToken}`;
 
-    expect((await app.inject({ url: "/etapi/tree", headers: { authorization } })).statusCode).toBe(200);
+    expect((await app.inject({ url: "/etapi/tree/roots", headers: { authorization } })).statusCode).toBe(200);
     expect(
       (await app.inject({ url: "/api/v1/tree", headers: { authorization } })).statusCode,
     ).toBe(401);

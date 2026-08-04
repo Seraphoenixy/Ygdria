@@ -366,7 +366,7 @@ export function tiptapToMarkdown(document: NoteContent): { markdown: string; war
         return `$${node.attrs?.formula ?? ""}$`;
       case "mathBlock":
         return `$$\n${node.attrs?.formula ?? ""}\n$$\n\n`;
-      case "table":
+      case "table": {
         if (
           node.attrs?.colwidth?.some((x: any) => x) ||
           node.content?.some((r: any) =>
@@ -376,11 +376,14 @@ export function tiptapToMarkdown(document: NoteContent): { markdown: string; war
           warnings.push("Complex table serialized as HTML to preserve merged cells or widths.");
           return "<table>" + kids + "</table>\n\n";
         }
-        return (
-          (node.content || [])
-            .map((r: any) => "| " + r.content.map((c: any) => render(c).trim()).join(" | ") + " |")
-            .join("\n") + "\n\n"
-        );
+        const rows = node.content || [];
+        if (!rows.length) return "";
+        const renderRow = (row: any) => "| " + (row.content || []).map((cell: any) => render(cell).trim()).join(" | ") + " |";
+        // GFM requires a delimiter row after the header. Without it, a table
+        // exported from rich text is parsed as ordinary paragraphs on reimport.
+        const delimiter = "| " + (rows[0].content || []).map(() => "---").join(" | ") + " |";
+        return [renderRow(rows[0]), delimiter, ...rows.slice(1).map(renderRow)].join("\n") + "\n\n";
+      }
       case "tableRow":
       case "tableCell":
       case "tableHeader":

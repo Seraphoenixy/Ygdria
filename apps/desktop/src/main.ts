@@ -117,6 +117,10 @@ function databasePath() {
   return database;
 }
 
+function etapiSessionStorePath() {
+  return path.join(app.getPath("userData"), "etapi-sessions.json");
+}
+
 /**
  * Remote server proxy state. The main process holds the server URL and device
  * token in memory and persists them via safeStorage. The renderer NEVER sees
@@ -180,8 +184,14 @@ const REMOTE_PATH_ALLOWLIST: ReadonlyArray<{ method: string; pathPrefix: string 
   { method: "GET",  pathPrefix: "/api/v1/sync/snapshot" },
   { method: "POST", pathPrefix: "/api/v1/sync/push" },
   { method: "POST", pathPrefix: "/api/v1/sync/advance" },
+  { method: "POST", pathPrefix: "/api/v1/sync/notes/content/batch" },
   { method: "GET",  pathPrefix: "/api/v1/sync/cursor" },
   { method: "GET",  pathPrefix: "/api/v1/sync/notes/" },
+  // Sync conflict resolution fetches the authoritative note, and the client
+  // reads the remote protected-session configuration while establishing sync.
+  { method: "GET",  pathPrefix: "/api/v1/notes/" },
+  { method: "GET",  pathPrefix: "/api/v1/protected-session" },
+  { method: "POST", pathPrefix: "/api/v1/protected-session/setup" },
   // Authenticated attachment transfer (binary)
   { method: "GET",  pathPrefix: "/api/v1/attachments/by-hash/" },
   { method: "POST", pathPrefix: "/api/v1/attachments/by-hash/" },
@@ -251,6 +261,7 @@ app
       origin: "http://localhost:5173",
       localToken: localApiToken,
       enableEtapi: true,
+      etapiSessionStorePath: etapiSessionStorePath(),
     });
     apiUrl = await localApi.listen({
       // Keep the loopback endpoint discoverable for local integrations. The

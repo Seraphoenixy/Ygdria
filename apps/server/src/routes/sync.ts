@@ -25,6 +25,7 @@ import {
   fullSnapshotChanges,
   rebuildSyncBaseline,
   applySyncChanges,
+  snapshotCache,
   type SyncEntityChange,
 } from "../sync/helpers.js";
 
@@ -120,27 +121,42 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
   });
 
   /** A full-state fallback for a new local database. Unlike the incremental
-   * change log, this remains available after old log rows are pruned. */
+   * change log, this remains available after old log rows are pruned.
+   * Uses a session-scoped cache so the full table scan is only performed once
+   * per snapshot session rather than on every page. */
   app.get("/api/v1/sync/snapshot", async (req) => {
-    const query = req.query as { cursor?: string; limit?: string; metadataOnly?: string; peerId?: string };
+    const query = req.query as { cursor?: string; limit?: string; metadataOnly?: string; peerId?: string; session?: string };
     const cursor = Number(query.cursor ?? 0);
     const requestedLimit = Number(query.limit ?? 200);
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw httpError(400, "cursor must be a non-negative integer");
-    // The snapshot is the re-baseline path, so it is always allowed — even for
-    // a gated peer. Refreshing liveness here keeps the gate from being treated
-    // as freshly silent, but the gate itself only clears on /advance.
     if (validPeerId(query.peerId)) touchPeerActivity(sqlite, cursorKey(req.device?.id, query.peerId));
     const limit = Number.isSafeInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 200;
-    const all = fullSnapshotChanges(sqlite);
+    // Use session-scoped cache: the client provides a session id that pins
+    // the full snapshot to a single point-in-time. On the first page
+    // (cursor=0, no session) a new session is created; subsequent pages
+    // reuse the cached result. When hasMore=false, the session is released.
+    const sessionId = query.session;
+    if (sessionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId))
+      throw httpError(400, "session must be a UUID");
+    const session = sessionId ? snapshotCache.getOrCreate(sessionId, sqlite, attachmentRoot) : undefined;
+    const all = session ? session.changes : fullSnapshotChanges(sqlite);
     const page = all.slice(cursor, cursor + limit);
-    const changes = await resolveChangeEntities(sqlite, attachmentRoot, page, query.metadataOnly !== "1");
-    const nextCursor = cursor + page.length;
+    // The session stores the fully resolved state at its start. Metadata-only
+    // responses omit bodies without re-reading mutable database rows.
+    const changes = session
+      ? (page as ReturnType<typeof resolveChangeEntities>).map((change) => {
+          if (query.metadataOnly !== "1" || change.entityType !== "note" || !change.data) return change;
+          const { contentData: _contentData, plainText: _plainText, ...data } = change.data;
+          return { ...change, data };
+        })
+      : await resolveChangeEntities(sqlite, attachmentRoot, page as ReturnType<typeof fullSnapshotChanges>, query.metadataOnly !== "1");
+    const nextCursor = cursor + changes.length;
     const hasMore = nextCursor < all.length;
-    const maxChangeId = getMaxChangeId(sqlite);
-    // Only the final page proves that this peer received a complete snapshot.
-    // Do not let a partial page, or a forged /advance call, lift the gate.
-    if (!hasMore && validPeerId(query.peerId))
-      markPeerSnapshotCompleted(sqlite, cursorKey(req.device?.id, query.peerId), maxChangeId);
+    const maxChangeId = session?.maxChangeId ?? getMaxChangeId(sqlite);
+    if (!hasMore) {
+      if (validPeerId(query.peerId))
+        markPeerSnapshotCompleted(sqlite, cursorKey(req.device?.id, query.peerId), maxChangeId);
+    }
     return { cursor: nextCursor, hasMore, changes, maxChangeId };
   });
 
@@ -150,6 +166,59 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     const row = sqlite.prepare("SELECT content_data contentData,content_codec contentCodec,content_size contentSize,content_hash contentHash,plain_text plainText FROM notes WHERE id=?").get(id) as { contentData: Buffer; contentCodec: string; contentSize: number; contentHash: string; plainText: string } | undefined;
     if (!row || (hash && row.contentHash !== hash)) throw new NotFoundError("Note content version not found");
     return { ...row, contentData: Buffer.from(row.contentData).toString("base64") };
+  });
+
+  /** Batch fetch note contents. Accepts a list of {id, hash} pairs and returns
+   * matching content records. Enforces per-request size limits: at most 100
+   * notes and 16 MiB total response payload. */
+  app.post("/api/v1/sync/notes/content/batch", { bodyLimit: 64 * 1024 }, async (req) => {
+    const body = req.body as { ids?: string[]; hashes?: string[]; session?: string };
+    if (!Array.isArray(body.ids) || body.ids.length === 0) throw httpError(400, "ids must be a non-empty array");
+    if (body.ids.length > 100) throw httpError(400, "ids must contain at most 100 entries");
+    if (!Array.isArray(body.hashes) || body.hashes.length !== body.ids.length)
+      throw httpError(400, "hashes must match ids length");
+    const cachedContents = body.session ? snapshotCache.getNoteContents(body.session, body.ids, body.hashes) : undefined;
+    const params = body.ids.map(() => "?");
+    const rows = cachedContents ? [] : sqlite
+      .prepare(`SELECT id,content_data contentData,content_codec contentCodec,content_size contentSize,content_hash contentHash,plain_text plainText FROM notes WHERE id IN (${params.join(",")})`)
+      .all(...body.ids) as Array<{ id: string; contentData: Buffer; contentCodec: string; contentSize: number; contentHash: string; plainText: string }>;
+    const rowMap = new Map(rows.map((r) => [r.id, r]));
+    const contents: Record<string, { contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string } | null> = {};
+    const MAX_BYTES = 16 * 1024 * 1024;
+    let totalBytes = 0;
+    for (let i = 0; i < body.ids.length; i++) {
+      const id = body.ids[i];
+      const hash = body.hashes[i];
+      const cached = cachedContents?.[id];
+      const row = rowMap.get(id);
+      if (cached) {
+        const candidateBytes = totalBytes + Buffer.byteLength(JSON.stringify(cached));
+        if (candidateBytes <= MAX_BYTES) {
+          totalBytes = candidateBytes;
+          contents[id] = cached;
+        } else contents[id] = null;
+        continue;
+      }
+      if (!row || (hash && row.contentHash !== hash)) {
+        contents[id] = null;
+        continue;
+      }
+      const candidate = {
+        contentData: Buffer.from(row.contentData).toString("base64"),
+        contentCodec: row.contentCodec,
+        contentSize: row.contentSize,
+        contentHash: row.contentHash,
+        plainText: row.plainText,
+      };
+      const candidateBytes = totalBytes + Buffer.byteLength(JSON.stringify(candidate));
+      if (candidateBytes > MAX_BYTES) {
+        contents[id] = null;
+        continue;
+      }
+      totalBytes = candidateBytes;
+      contents[id] = candidate;
+    }
+    return { contents, truncated: body.ids.some((id) => !(id in contents) || contents[id] === null) };
   });
 
   app.get("/api/v1/sync/notes/:id/content/blob", async (req, reply) => {

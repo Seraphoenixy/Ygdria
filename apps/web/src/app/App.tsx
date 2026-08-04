@@ -294,6 +294,14 @@ export function App({
   }, []);
   const documentScrollRef = useRef<HTMLDivElement>(null);
   const pendingViewScrollRef = useRef<{ top: number; left: number } | null>(null);
+  const tabScrollPositionsRef = useRef<Map<string, { top: number; left: number }>>(new Map());
+  // Tab ids for notes contain ':' and `CSS.escape` is unavailable in some
+  // Android WebViews. Match the data attribute directly instead of building a
+  // CSS selector, so restoring a tab cannot interrupt protected-note loading.
+  const getScrollContainer = (tabId: string) =>
+    Array.from(document.querySelectorAll<HTMLDivElement>("[data-tab-id]")).find(
+      (element) => element.dataset.tabId === tabId,
+    );
   const toggleEditing = useCallback(() => {
     if (selected === SYSTEM_ROOT_NOTE_ID) {
       showToast(t(locale, "rootNoteNotEditable"));
@@ -418,9 +426,16 @@ export function App({
 
   const workspaceTabs = useWorkspaceTabs({
     onActivate: (tab, nextEditing) => {
-      // Save the current tab's editing state before switching away.
+      // Save the current tab's editing state and scroll position before switching away.
       if (activeTabIdRef.current) {
         tabEditingRef.current.set(activeTabIdRef.current, editing);
+        const scroll = getScrollContainer(activeTabIdRef.current);
+        if (scroll) {
+          tabScrollPositionsRef.current.set(activeTabIdRef.current, {
+            top: scroll.scrollTop,
+            left: scroll.scrollLeft,
+          });
+        }
       }
       activeTabIdRef.current = tab?.id;
 
@@ -453,9 +468,35 @@ export function App({
     togglePin,
     reopenClosedTab,
     openTabInNewWindow,
-    clearTabs,
     moveTab,
   } = workspaceTabs;
+
+  // Restore scroll position after the tab's view has been rendered.
+  useLayoutEffect(() => {
+    if (!activeTabId) return;
+    const position = tabScrollPositionsRef.current.get(activeTabId);
+    const scroll = getScrollContainer(activeTabId);
+    if (!position || !scroll) return;
+    const restore = () => {
+      scroll.scrollTop = position.top;
+      scroll.scrollLeft = position.left;
+    };
+    restore();
+    const frame = requestAnimationFrame(restore);
+    const settled = window.setTimeout(restore, 80);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(settled);
+    };
+  }, [activeTabId]);
+
+  // Discard snapshots for tabs that have been closed or replaced.
+  useEffect(() => {
+    const tabIds = new Set(tabs.map((tab) => tab.id));
+    for (const id of tabScrollPositionsRef.current.keys()) {
+      if (!tabIds.has(id)) tabScrollPositionsRef.current.delete(id);
+    }
+  }, [tabs]);
 
   // Keyboard navigation for tabs: Ctrl/Cmd+1..9 jump, Ctrl/Cmd+Tab cycles,
   // Ctrl/Cmd+W closes the active tab. Suppressed while typing in a field.
@@ -1348,7 +1389,7 @@ export function App({
           syncConflictCount={syncConflicts.length}
           onShowSyncConflicts={() => setShowSyncConflicts(true)}
           onSync={syncNow}
-          onClearTabs={clearTabs}
+          onNavigateHome={openNewTab}
           refreshTree={refreshTree}
           importInputRef={importInputRef}
           openImportDialog={openImportDialog}

@@ -398,65 +398,10 @@
   display: none;
 }
 .phone .note-tabs-list {
-  width: max-content;
-  min-width: 100%;
-}
-
-/* ── Collapsible tab strip (phone) ──
-   When collapsed, the full multi-tab strip is replaced by a single slim row
-   that shows only the active tab; tapping it expands the strip again. This
-   stops a tall stack of fixed bars (tab strip + toolbar + editor toolbar) from
-   eating the narrow portrait viewport. The compact row keeps the 42px height
-   so the sticky toolbar below it stays aligned. */
-.phone .note-tabs-compact {
-  height: 42px;
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  background: #f4f5f6;
-  border-bottom: 1px solid #d9dce1;
-}
-.phone .note-tabs-compact-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 10px 0 6px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: #3c3f46;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  max-width: 100%;
-}
-.phone .note-tabs-compact-toggle:active {
-  background: #e6e9ec;
-}
-.phone .note-tabs-compact-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.phone .note-tab-collapse {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  margin: 0 0 3px 4px;
   flex: 0 0 auto;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  place-items: center;
-  color: #62646b;
-  background: transparent;
-  cursor: pointer;
-}
-.phone .note-tab-collapse:hover {
-  color: #33353a;
-  background: #e3eaed;
+  width: max-content;
+  max-width: none;
+  min-width: 100%;
 }
 
 /* ── Immersive reading comfort ── */
@@ -473,9 +418,9 @@
   font-size: 17px;
   line-height: 1.7;
 }
-.phone .ygdria-document h1 { font-size: 1.6rem; }
-.phone .ygdria-document h2 { font-size: 1.35rem; }
-.phone .ygdria-document h3 { font-size: 1.18rem; }
+.phone .ygdria-document h1 { font-size: 1.45rem; }
+.phone .ygdria-document h2 { font-size: 1.25rem; }
+.phone .ygdria-document h3 { font-size: 1.12rem; }
 .phone .ygdria-editor { min-height: 220px; }
 .phone .ygdria-document pre,
 .phone .ygdria-document .tableWrapper {

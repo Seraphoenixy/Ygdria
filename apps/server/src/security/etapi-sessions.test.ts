@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { EtapiSessions } from "./etapi-sessions.js";
 
 describe("EtapiSessions", () => {
@@ -31,5 +34,20 @@ describe("EtapiSessions", () => {
     now = issued.expiresAt;
     expect(sessions.verify(issued.accessToken)).toBeNull();
     expect(sessions.list()).toEqual([]);
+  });
+
+  it("keeps an unexpired token valid when the server session service is recreated", () => {
+    const directory = mkdtempSync(join(tmpdir(), "ygdria-etapi-"));
+    const storePath = join(directory, "etapi-sessions.json");
+    const first = new EtapiSessions(storePath, () => 1_000);
+    const issued = first.issue({ label: "Persistent assistant", scopes: ["notes:read"], ttlSeconds: 60 });
+
+    try {
+      const restarted = new EtapiSessions(storePath, () => 1_001);
+      expect(restarted.verify(issued.accessToken)?.id).toBe(issued.id);
+      expect(restarted.list()).toEqual([expect.objectContaining({ id: issued.id })]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
