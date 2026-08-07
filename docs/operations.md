@@ -97,7 +97,9 @@ corepack pnpm rebuild-search-index
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `POST` | `/api/v1/maintenance/database?rebuildFts=true` | 启动后台任务：修剪 placement 撤销快照 + `VACUUM` + WAL checkpoint（可选 FTS 重建）。立即返回 `{ id }`。 |
+| `POST` | `/api/v1/maintenance/search-index` | 后台触发 `notes_fts` 全文索引的完整重建任务，立即返回任务 ID；状态通过 `GET /api/v1/maintenance/status` 查询。 |
 | `GET`  | `/api/v1/maintenance/status` | 查询当前或最近一次任务的状态与结果摘要。 |
+| `GET`  | `/api/v1/maintenance/sync-status` | 只读容量报告：同步元数据（变更日志、墓碑、peer 游标、存储清理任务、placement 删除记录）的当前行数与保留原因，以及数据库页统计；返回 `{ stats, lastRun, peers }`。 |
 
 任务在专用 SQLite 连接上运行，不阻塞主连接。约束：
 

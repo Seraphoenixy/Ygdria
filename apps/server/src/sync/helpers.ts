@@ -7,7 +7,7 @@ import {
   type ContentCodec,
   type SqliteDatabase,
 } from "@ygdria/database";
-import { CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
+import { attachmentIdsFromSerializedDocument, CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
 import { isSensitiveSettingKey } from "../http/settings.js";
 
 export type SyncSqlite = SqliteDatabase;
@@ -354,10 +354,7 @@ export function resolveChangeEntities(
 }
 
 export function attachmentIdsFromStoredContent(data: Buffer, codec: ContentCodec): string[] {
-  const ids = new Set<string>();
-  const content = decodeStoredContent(data, codec);
-  for (const match of content.matchAll(/\/api\/v1\/attachments\/([0-9a-f-]{36})(?:["'?/#]|$)/gi)) ids.add(match[1]);
-  return [...ids];
+  return [...attachmentIdsFromSerializedDocument(decodeStoredContent(data, codec))];
 }
 
 export function fullSnapshotChanges(sqlite: SyncSqlite) {

@@ -221,7 +221,7 @@ GROUP BY f.id HAVING COUNT(*) > 1;
 | 字段           | SQLite 类型 / 约束                                              | 含义                                                                 |
 | -------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `id`           | `INTEGER PRIMARY KEY AUTOINCREMENT`                            | 自增变更 ID，即同步游标的推进位点；`0` 表示无历史同步。               |
-| `entity_type`  | `TEXT NOT NULL`                                                | 实体类型：`note`、`placement`、`relation`、`attachment`、`revision`、`setting`。            |
+| `entity_type`  | `TEXT NOT NULL`                                                | 实体类型：`note`、`placement`、`placement-order`、`relation`、`attachment`、`revision`、`setting`。            |
 | `entity_id`    | `TEXT NOT NULL`                                                | 实体 ID。                                                            |
 | `change_kind`  | `TEXT NOT NULL`（`created` / `updated` / `deleted`）          | 变更类型。                                                           |
 | `created_at`   | `INTEGER NOT NULL`（毫秒时间戳）                              | 变更写入时间。                                                       |
@@ -249,6 +249,7 @@ GROUP BY f.id HAVING COUNT(*) > 1;
 | `peer_id`        | `TEXT PRIMARY KEY`  | peer 标识，由客户端在首次同步时生成。                |
 | `last_advance_id` | `INTEGER NOT NULL DEFAULT 0` | 该 peer 已确认的最大同步变更 ID。`0` 表示无历史同步。 |
 | `advanced_at`    | `INTEGER NOT NULL`  | 游标最后推进时间（毫秒）。                           |
+| `last_active_at` | `INTEGER`，可空     | 最后活跃时间（毫秒）。用于 pruneChangeLog 判断 peer 是否已过期；超期 peer 的游标会被丢弃，下次同步需从快照基线重建。 |
 
 `last_advance_id` 为 `0` 时，客户端应从 0 开始拉取全量变更日志作为基线。`pruneChangeLog` 维护函数以所有 peer 的 `MIN(last_advance_id)` 为基准，删除更旧的变更日志记录。
 

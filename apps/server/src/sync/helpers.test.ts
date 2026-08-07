@@ -2,13 +2,32 @@ import { describe, it, expect } from "vitest";
 import { applyMigrations, createDatabase } from "@ygdria/database";
 import { NoteService, RelationService } from "@ygdria/domain";
 import { CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
-import { applySyncChanges, resolveChangeEntities } from "./helpers.js";
+import { applySyncChanges, attachmentIdsFromStoredContent, resolveChangeEntities } from "./helpers.js";
 
 function freshDb() {
   const store = createDatabase(":memory:");
   applyMigrations(store.sqlite);
   return store;
 }
+
+describe("attachmentIdsFromStoredContent", () => {
+  const IMAGE_ID = "11111111-1111-1111-1111-111111111111";
+  const TEXT_ID = "22222222-2222-2222-2222-222222222222";
+  const CODE_ID = "33333333-3333-3333-3333-333333333333";
+
+  it("only recognizes attachment URLs from image nodes", () => {
+    const document = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: `Example: /api/v1/attachments/${TEXT_ID}` }] },
+        { type: "codeBlock", content: [{ type: "text", text: `/api/v1/attachments/${CODE_ID}` }] },
+        { type: "image", attrs: { src: `/api/v1/attachments/${IMAGE_ID}?download=1` } },
+      ],
+    };
+
+    expect(attachmentIdsFromStoredContent(Buffer.from(JSON.stringify(document)), "identity")).toEqual([IMAGE_ID]);
+  });
+});
 
 /** Drain A's sync change log into B via applySyncChanges, advancing a cursor. */
 function sync(peerA: ReturnType<typeof freshDb>, peerB: ReturnType<typeof freshDb>, cursor: { id: number }) {

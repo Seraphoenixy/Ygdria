@@ -14,6 +14,40 @@ export const noteContentSchema = z
   .passthrough();
 export type NoteContent = z.infer<typeof noteContentSchema>;
 
+const attachmentSourcePattern = /^\/api\/v1\/attachments\/([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})(?:[/?#]|$)/i;
+
+/**
+ * Returns attachment IDs referenced by image nodes in a TipTap document.
+ * Text, code blocks, and arbitrary node attributes are deliberately ignored:
+ * a URL-looking string in those locations is not an attachment reference.
+ */
+export function attachmentIdsFromDocument(content: unknown): Set<string> {
+  const ids = new Set<string>();
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    const value = node as { type?: unknown; attrs?: unknown; content?: unknown };
+    if (value.type === "image" && value.attrs && typeof value.attrs === "object") {
+      const src = (value.attrs as { src?: unknown }).src;
+      if (typeof src === "string") {
+        const match = attachmentSourcePattern.exec(src);
+        if (match) ids.add(match[1]);
+      }
+    }
+    if (Array.isArray(value.content)) value.content.forEach(visit);
+  };
+  visit(content);
+  return ids;
+}
+
+/** Returns no references when legacy or malformed stored content is not JSON. */
+export function attachmentIdsFromSerializedDocument(serialized: string): Set<string> {
+  try {
+    return attachmentIdsFromDocument(JSON.parse(serialized));
+  } catch {
+    return new Set<string>();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Note properties (JSON stored in notes.properties_json)
 // ---------------------------------------------------------------------------

@@ -200,10 +200,16 @@ Ygdria 提供**基于游标的增量同步**，不是 CRDT，也不做细粒度�
 
 | 端点 | 用途 |
 | --- | --- |
-| `GET /api/v1/sync/changes?cursor=&limit=` | 拉取自 `cursor` 之后的增量变更记录，返回新的游标与是否还有更多。 |
-| `POST /api/v1/sync/push` | 把客户端的变更列表推送到服务端，按 last-write-wins 时间戳合并；返回成功应用的条数。 |
+| `GET /api/v1/sync/changes?cursor=&limit=&maxBytes=&metadataOnly=&peerId=` | 拉取自 `cursor` 之后的增量变更记录，返回 `{ cursor, hasMore, changes, maxChangeId, stats }`。 |
+| `POST /api/v1/sync/push` | 把客户端的变更列表推送到服务端，按 last-write-wins 时间戳合并；返回 `{ applied, rejected }`。 |
 | `POST /api/v1/sync/advance` | 推进指定 peer 的游标到给定值。 |
 | `GET /api/v1/sync/cursor?peerId=` | 读取指定 peer 的当前游标（不存在时返回 `lastAdvanceId: 0`）。 |
+| `GET /api/v1/sync/snapshot?cursor=&limit=&metadataOnly=&peerId=&session=` | 全量状态快照，作为增量日志被修剪后的兜底基线。 |
+| `GET /api/v1/sync/notes/:id/content?hash=` | 单条笔记正文拉取（同步专用，hash 不一致返回 404）。 |
+| `POST /api/v1/sync/notes/content/batch` | 批量拉取多条笔记正文，单次最多 100 条、上限 16 MiB。 |
+| `POST /api/v1/sync/rebuild` | 为新初始化的 peer 重建同步基线。 |
+
+以上端点完整说明见 api.md §1.2。
 
 ### 5.1 变更日志与游标
 
@@ -231,6 +237,7 @@ Ygdria 提供**基于游标的增量同步**，不是 CRDT，也不做细粒度�
 - **受保护笔记天然可迁移**：密文随变更日志原样传输，新库用原主密码即可解锁。
 - **不要双写**：不要把同一份 SQLite 文件同时挂到多个服务器进程，WAL 不跨进程协调，会导致写冲突或损坏。需要迁移时停服后整体搬运数据库文件与 `attachments/` 目录。
 - **维护任务冷却**：`POST /api/v1/maintenance/database` 有 15 分钟冷却（`MAINTENANCE_COOLDOWN_MS`），冷却期内返回 `429`；同时只允许一个任务排队或运行，第二个请求返回 `409`。这防止维护接口被滥用为 DoS。
+- **移动端目标服务器地址**：移动端的唯一服务地址来自设置中的「目标服务器地址」（`settings.syncServerUrl`）；启动时把遗留的 `ygdria.api`（Capacitor Preferences）一次性并入 `syncServerUrl`，之后重连一律使用该地址。移动端的 `deviceToken` 经 `capacitor-secure-storage-plugin` 安全存储，与桌面端 `safeStorage` 等价。
 
 ### 5.4 同步环预防（`X-Ygdria-Sync-Origin`）
 

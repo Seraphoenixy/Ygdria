@@ -46,6 +46,7 @@
 | `POST`         | `/api/v1/placement-deletions/:id/undo` | 撤销指定 placement 删除。                   |
 | `GET`          | `/api/v1/search?q=...&includeArchived=false` | FTS5 全文搜索；`includeArchived=true` 时包含归档笔记。受保护笔记不进 FTS，永远搜不到。 |
 | `GET`          | `/api/v1/archived`                     | 按归档时间倒序读取未删除的归档笔记；受保护笔记不在此列表。 |
+| `GET`          | `/api/v1/tags`                         | 聚合全部未删除、未受保护笔记的 `tags` 使用次数，按次数降序返回 `{ tag, count }[]`（最多 100 条）；受保护笔记不计入。 |
 | `PATCH`        | `/api/v1/notes/:id/protected`          | 启用或关闭单笔记端到端加密。`{ protected: true, contentCiphertext }` 切换为密文态；`{ protected: false, title, content, propertiesJson? }` 还原为明文并重建 FTS。 |
 | `GET`          | `/api/v1/protected-session`            | 读取受保护会话配置：`{ configured, salt, verifier, timeoutMs }`。 |
 | `POST`         | `/api/v1/protected-session/setup`      | 设置文件主密码盐、校验值与超时；覆盖已有配置。**设备认证模式下必须携带 `auth` 字段**（官方客户端从同一主密码重新派生的 `{ accessSalt, srpSalt, verifier }`），服务端在同一事务中写入文件材料和 SRP 认证记录；因认证记录被替换，全部现有设备令牌会立即撤销。本地桌面模式（无设备认证）保留原行为——可不携带 `auth`。 |
@@ -55,6 +56,7 @@
 | `POST`         | `/api/v1/maintenance/database`         | 后台维护任务：修剪 placement 撤销快照 + `VACUUM` + WAL checkpoint（可选 FTS 重建）。立即返回任务 ID；同一时刻只允许一个任务排队或运行（`409`），15 分钟冷却期内返回 `429`。 |
 | `GET`          | `/api/v1/maintenance/status`           | 查询当前或最近一次维护任务的状态（`queued` / `running` / `succeeded` / `failed`）与结果摘要。 |
 | `POST`         | `/api/v1/maintenance/search-index`     | 后台触发 `notes_fts` 全文索引的完整重建任务，立即返回任务 ID；状态通过 `GET /api/v1/maintenance/status` 查询。 |
+| `GET`          | `/api/v1/maintenance/sync-status`      | 只读容量报告：同步元数据（变更日志、墓碑、peer 游标、存储清理任务、placement 删除记录）的当前行数与保留原因，以及数据库页统计；返回 `{ stats, lastRun, peers }`。 |
 
 请求参数通过 Zod 校验。错误统一为：
 
@@ -113,15 +115,17 @@
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| `GET` | `/api/v1/sync/changes?cursor=&limit=` | 拉取自 `cursor` 之后的变更记录；返回 `{ cursor, hasMore, changes, maxChangeId }`。 |
-| `POST` | `/api/v1/sync/push` | 提交变更列表 `{ changes: [...] }`；按 last-write-wins 合并，返回 `{ applied }`。 |
+| `GET` | `/api/v1/sync/changes?cursor=&limit=&maxBytes=&metadataOnly=&peerId=` | 拉取自 `cursor` 之后的变更记录；`limit` 1–500（默认 200），`maxBytes` 64 KiB–16 MiB（默认 4 MiB）控制响应大小上限，`metadataOnly=1` 时不返回笔记正文，`peerId` 用于刷新存活时间与重基线检查；返回 `{ cursor, hasMore, changes, maxChangeId, stats: { serializedBytes, returnedEntities, coalescedChanges } }`。 |
+| `POST` | `/api/v1/sync/push` | 提交变更列表 `{ changes: [...], peerId? }`；按 last-write-wins 合并，返回 `{ applied, rejected }`。`rejected` 为因 gated peer 或冲突而被拒绝的变更 ID 列表。 |
 | `POST` | `/api/v1/sync/advance` | 提交 `{ peerId, cursor }` 推进指定 peer 的游标。 |
-| `GET` | `/api/v1/sync/cursor?peerId=` | 读取指定 peer 的游标 `{ peerId, lastAdvanceId, advancedAt }`；不存在时 `lastAdvanceId: 0`。 |
-| `GET`          | `/api/v1/sync/snapshot?cursor=&limit=&metadataOnly=` | 全量状态快照，作为增量日志被修剪后的兜底基线；按 `cursor` 分页（`limit` 1–500，默认 200），`metadataOnly=1` 时仅返回元数据不含实体正文；返回 `{ cursor, hasMore, changes, maxChangeId }`。 |
-| `GET`          | `/api/v1/sync/notes/:id/content?hash=` | 拉取单条笔记正文（同步专用）；`hash` 命中不一致时返回 `404`。返回 `{ contentData(base64), contentCodec, contentSize, contentHash, plainText }`。另有 `GET /api/v1/sync/notes/:id/content/blob` 支持 `Range` 分块下载（`206` + `ETag`），用于大正文。 |
+| `GET` | `/api/v1/sync/cursor?peerId=` | 读取指定 peer 的游标 `{ peerId, lastAdvanceId, advancedAt, lastActiveAt }`；不存在时 `lastAdvanceId: 0`。gated peer（需重基线）返回 `SYNC_REBASELINE_REQUIRED` 错误。 |
+| `GET`          | `/api/v1/sync/snapshot?cursor=&limit=&metadataOnly=&peerId=&session=` | 全量状态快照，作为增量日志被修剪后的兜底基线；按 `cursor` 分页（`limit` 1–500，默认 200），`metadataOnly=1` 时仅返回元数据不含实体正文，`peerId` 刷新存活时间，`session` 为 UUID 用于跨页缓存；返回 `{ cursor, hasMore, changes, maxChangeId }`。 |
+| `GET`          | `/api/v1/sync/notes/:id/content?hash=` | 拉取单条笔记正文（同步专用）；`hash` 命中不一致时返回 `404`。返回 `{ contentData(base64), contentCodec, contentSize, contentHash, plainText }`。 |
+| `GET`          | `/api/v1/sync/notes/:id/content/blob` | 支持 `Range` 分块下载笔记正文（`206` + `ETag` + `Content-Range`），用于大正文；响应头含 `X-Content-Codec`、`X-Content-Size`、`X-Content-Hash`。 |
+| `POST`         | `/api/v1/sync/notes/content/batch`    | 批量拉取多条笔记正文；请求体 `{ ids: string[], hashes: string[], session? }`，`ids` 与 `hashes` 一一对应，单次最多 100 条、响应总大小上限 16 MiB；命中快照缓存（`session`）时直接取缓存内容。 |
 | `POST`         | `/api/v1/sync/rebuild`                 | 为新初始化的 peer 重建同步基线（用于迁移到增量日志已被修剪的空白服务器）；无请求体，返回基线游标信息。 |
 
-以上同步端点（含 `snapshot` / `notes/:id/content` / `rebuild`）均属于受保护 API（需设备令牌）。变更记录结构为 `{ changeId, entityType, entityId, changeKind, createdAt, data }`，`entityType` 覆盖 `note` / `placement` / `relation` / `revision` / `attachment` / `setting` / `placement_deletion`；`changeKind` 为 `created` / `updated` / `deleted`；`data` 在删除时为 `null`，否则为实体快照。附件文件二进制**不进变更日志**，客户端根据 `attachment.data.contentHash` 调用 `GET /api/v1/attachments/by-hash/:hash` 下载、`POST /api/v1/attachments/by-hash/:hash` 上传，按哈希去重。
+以上同步端点（含 `snapshot` / `notes/:id/content` / `rebuild`）均属于受保护 API（需设备令牌）。变更记录结构为 `{ changeId, entityType, entityId, changeKind, createdAt, data }`，`entityType` 覆盖 `note` / `placement` / `placement-order` / `relation` / `revision` / `attachment` / `setting`；`changeKind` 为 `created` / `updated` / `deleted`；`data` 在删除时为 `null`，否则为实体快照。附件文件二进制**不进变更日志**，客户端根据 `attachment.data.contentHash` 调用 `GET /api/v1/attachments/by-hash/:hash` 下载、`POST /api/v1/attachments/by-hash/:hash` 上传，按哈希去重。
 
 `push` 按 `updatedAt` / `createdAt` 时间戳逐记录合并；同一时间戳冲突时按确定性 JSON 序列化顺序选择。`sync_tombstones` 表用于过滤已删除实体，避免旧变更复活数据。**敏感设置不参与同步**：`auth_*`、`protected_session_*`、`server_access_password_*` 前缀的 settings 键既不出现在 `/sync/changes` 的返回中，也无法通过 `/sync/push` 修改——这些键只能通过 `/devices/initialize`、`/protected-session/setup`、`/protected-session/change-password` 等专用端点变更。这避免任何已认证设备通过同步通道覆盖认证材料导致账户接管。
 

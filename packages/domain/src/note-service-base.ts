@@ -19,6 +19,7 @@ import {
   CALENDAR_PLACEMENT_ID,
   PLACEMENT_DELETION_MAX_RECORDS,
   PLACEMENT_DELETION_RETENTION_MS,
+  attachmentIdsFromDocument,
   type NoteContent,
   type SearchResult,
 } from "@ygdria/shared";
@@ -639,9 +640,7 @@ function contentHash(content: NoteContent) {
   return createHash("sha256").update(stableJson(content)).digest("hex");
 }
 function attachmentIds(content: NoteContent): Set<string> {
-  const ids = new Set<string>();
-  for (const match of JSON.stringify(content).matchAll(/\/api\/v1\/attachments\/([0-9a-f-]{36})(?:["'?/#]|$)/gi)) ids.add(match[1]);
-  return ids;
+  return attachmentIdsFromDocument(content);
 }
 function rawContentHash(content: string) {
   return createHash("sha256").update(content).digest("hex");

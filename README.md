@@ -56,6 +56,13 @@ Ygdria 不是多人实时协作工具，也不使用 CRDT：它的同步模型�
 - **增量同步**：`sync_change_log` / `sync_cursors` / `sync_tombstones` 三表协同，客户端用游标拉取增量并按 last-write-wins 时间戳合并，删除以墓碑表达避免旧数据复活。
 - **面向 AI 的 ETAPI**：可签发的短期作用域令牌，让本机 AI 工具在受控权限下读取、搜索与编辑笔记，默认只读、15 分钟有效。
 - **多端形态**：同一份 Web 前端同时用于浏览器、Electron 桌面（Windows 安装包）与 Capacitor 移动端（Android / iOS）。
+- **深色模式**：浅色 / 深色 / 跟随系统三档，由「设置 → 外观」切换；首帧前写入 `data-theme` 属性避免闪烁，深色样式完全由设计令牌驱动。
+- **标签系统**：为笔记添加 `tags` 属性，服务端聚合 `GET /api/v1/tags` 提供按使用次数排序的标签统计，并支持按标签检索。
+- **归档与子树保护**：单篇笔记可归档（`PATCH /api/v1/notes/:id/archive`），整棵子树可一键加密保护（`protectSubtree`）；受保护子树的标题与正文都在客户端解密后才可见。
+- **多标签页与拖拽排序**：工作区支持多标签页，可拖拽重排、固定与在新窗口打开；切换或拖拽时保留各标签的滚动位置。
+- **表格行列管理**：富文本表格支持插入 / 删除行与列、列宽保留，并配合 GitHub 风格差异回退。
+- **桌面端自动同步**：Electron 桌面在未编辑、无进行中同步且无冲突时，自动向目标服务器拉推增量，无需手动触发。
+- **附件图片预览**：图片类附件可在笔记内联预览，其它附件仍走下载 / `Range` 分块下载。
 
 ---
 
@@ -115,6 +122,7 @@ Fastify 路由、Electron IPC 与 React 组件不承载核心业务规则，使�
 | 领域 | TypeScript Domain Service | 笔记、placement（含克隆）、回收站、版本、搜索、受保护笔记。 |
 | 存储 | SQLite、Drizzle、better-sqlite3、FTS5 | 本地优先持久化、迁移、备份恢复与全文搜索。 |
 | 桌面 / 移动 | Electron 43、Capacitor 7 | 复用 Web 前端；桌面主进程代理远端同步，移动端连接远端 HTTPS API。 |
+| 界面样式 | 设计令牌（CSS 自定义属性） | `apps/web/src/styles/foundation/tokens.css` 为唯一主题来源；已移除 Tailwind，深色主题以令牌覆盖实现，编辑器调色板跨主题保持一致。 |
 
 ---
 
@@ -236,6 +244,7 @@ Ygdria 提供**基于游标的增量同步**（`/api/v1/sync/changes|push|advanc
 - 首选多端模式：多客户端连接同一个常驻服务器进程（单一 SQLite 权威库），并发由乐观版本号 `expectedVersion` / `If-Match` 控制，冲突返回 `409`。
 - 增量同步面向离线搬运、定期备份与多端合并：服务端在 `sync_change_log` 按自增 id 有序记录每次实体变更，客户端用游标拉取并按 last-write-wins 时间戳合并；删除由 `sync_tombstones` 墓碑表达，避免旧数据复活。
 - 设备令牌不跨库迁移（纯内存）；受保护笔记因客户端加密而天然可随增量同步迁移。
+- 移动端的唯一服务地址来自「设置 → 目标服务器地址」（`settings.syncServerUrl`）；历史上独立的移动端端点（`ygdria.api`，Capacitor Preferences）已在启动时一次性并入 `syncServerUrl`，后续重连一律使用该地址。
 
 ---
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { decodeStoredContent, recordChange, type ContentCodec, type createDatabase } from "@ygdria/database";
+import { attachmentIdsFromSerializedDocument } from "@ygdria/shared";
 import { NotFoundError } from "./note-service-base.js";
 
 type Store = ReturnType<typeof createDatabase>;
@@ -212,9 +213,7 @@ export class AttachmentService {
     for (const row of noteRows) {
       noteTitles.set(row.id, row.title);
       const content = decodeStoredContent(row.contentData, row.contentCodec);
-      if (typeof content !== "string") continue;
-      for (const match of content.matchAll(/\/api\/v1\/attachments\/([0-9a-f-]{36})(?:["'?/#]|$)/gi)) {
-        const attachmentId = match[1];
+      for (const attachmentId of attachmentIdsFromSerializedDocument(content)) {
         const noteIds = referencingByAttachment.get(attachmentId) ?? new Set<string>();
         noteIds.add(row.id);
         referencingByAttachment.set(attachmentId, noteIds);
@@ -318,7 +317,7 @@ export class AttachmentService {
     const rows = this.store.sqlite.prepare("SELECT content_data contentData,content_codec contentCodec FROM notes WHERE is_protected=0 AND type<>'code'").all() as Array<{ contentData: Buffer; contentCodec: ContentCodec }>;
     for (const row of rows) {
       const content = decodeStoredContent(row.contentData, row.contentCodec);
-      for (const match of content.matchAll(/\/api\/v1\/attachments\/([0-9a-f-]{36})(?:["'?/#]|$)/gi)) ids.add(match[1]);
+      for (const attachmentId of attachmentIdsFromSerializedDocument(content)) ids.add(attachmentId);
     }
     return ids;
   }

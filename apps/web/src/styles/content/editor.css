@@ -361,7 +361,7 @@
   width: 44px;
   user-select: none;
   padding: 0 0 12px;
-  text-align: left;
+  text-align: right;
   color: #8b8e96;
   font-size: 14px;
   line-height: 1.65;
@@ -370,11 +370,11 @@
 }
 .ygdria-code-block-gutter span {
   display: block;
-  padding: 0 0 0 13px;
+  padding: 0 13px 0 0;
 }
 .ygdria-code-block-gutter.is-measured span {
   position: absolute;
-  left: 13px;
+  right: 13px;
   padding: 0;
 }
 

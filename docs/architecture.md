@@ -94,7 +94,7 @@ packages/shared  Zod 契约、跨端类型、系统常量（含 SRP_USERNAME / A
 packages/api-client 浏览器与移动端共用的 HTTP 请求封装（携带本地令牌与设备令牌、authConfig / SRP challenge / verify 调用）
 apps/web         React 用户界面、ProtectedClientSession（端到端加密）、客户端主密码派生与 SRP 客户端逻辑、RemoteProxyClient（桌面端 IPC 代理）
 apps/desktop     Electron 主进程：本地 Fastify 内嵌、远端代理 IPC、safeStorage 凭据存储、路径白名单与 SSRF 防护
-apps/mobile      Capacitor 壳（Android/iOS）：复用 apps/web 的 SPA（webDir: ../web/dist），集成原生状态栏/深色、键盘 resize、Android 返回键、安全凭据存储（capacitor-secure-storage-plugin）与移动端笔记树抽屉；原生工程经 cap sync 纳入。
+apps/mobile      Capacitor 壳（Android/iOS）：复用 apps/web 的 SPA（webDir: ../web/dist），集成原生状态栏/深色、键盘 resize、Android 返回键、安全凭据存储（capacitor-secure-storage-plugin）与移动端笔记树抽屉；原生工程经 cap sync 纳入。移动端的唯一服务地址统一为设置中的「目标服务器地址」`settings.syncServerUrl`（启动时把遗留的 `ygdria.api` 一次性并入），deviceToken 经 capacitor-secure-storage-plugin 安全存储。
 ```
 
 依赖方向必须保持为：
@@ -281,3 +281,28 @@ Electron 的 Renderer 不开放 Node integration、文件系统、数据库连�
 ### 5.3 同步与多端访问
 
 Ygdria 提供**基于游标的增量同步**（`/api/v1/sync/changes|push|advance|cursor`），不是 CRDT，也不做细粒度多人实时协作。首选的多端模式是多客户端连接同一个常驻服务器进程（单一 SQLite 权威库），并发由乐观版本号 `expectedVersion` / `If-Match` 控制，冲突返回 `409`。增量同步面向离线搬运、定期备份与多端合并：服务端在 `sync_change_log` 表中按自增 id 有序记录每次实体变更，客户端用游标拉取增量并按 last-write-wins 时间戳合并；删除由 `sync_tombstones` 表的墓碑表达，避免旧数据复活。它不处理字段级冲突，不适合双向高频同步。设备令牌不跨库迁移（纯内存），受保护笔记因客户端加密而天然可随增量同步迁移。详见 [auth-and-sync.md](auth-and-sync.md#5-同步机制)。
+
+## 6. 主题、设计令牌与样式系统
+
+Ygdria 的界面样式不依赖任何 CSS 框架（已移除 Tailwind），全部由一套集中的 CSS 自定义属性（设计令牌）驱动，定义在 `apps/web/src/styles/foundation/tokens.css`，由 `style.css` 顶部 `@import` 引入，确保后续所有样式表都能消费这些变量。
+
+### 6.1 设计令牌
+
+`tokens.css` 是主题化值的唯一来源，分为几类：
+
+- **半径 / 间距 / 阴影**：`--radius-*`、`--space-*`、`--elevation-*`、`--ring-*` 等刻度，分别从 `scripts/tokenize_css.py` 的 `RADIUS` / `SPACING` / `SHADOW` 映射转录而来。
+- **颜色语义令牌（浅色默认）**：`--color-bg`、`--color-surface`、`--color-fg`、`--color-border`、`--color-accent`、`--color-danger`、`--color-success`、`--color-warning` 等。新增或调整样式时应优先使用这些语义令牌，而非硬编码十六进制。
+- **文档与编辑器令牌**：`--doc-*`、`--code-*`、`--toolbar-*`、`--popover-*`、`--search-*`、`--table-*`、`--blockquote-*`、`--task-*`、`--note-reference-*` 等，覆盖正文、代码高亮、工具栏、弹层、搜索底栏与表格的配色。
+- **编辑器调色板（跨主题恒定）**：`--editor-text-*` 与 `--editor-highlight-*` 仅定义在 `:root`，不被深色主题覆盖——用户在笔记中挑选的颜色在任何主题下保持一致，并随文档可移植。
+- **字体与字号**：`--font-sans` / `--font-serif` / `--font-mono` 与 `--text-*` 字号刻度（px 制，保证 UI 尺寸可预测）。
+
+### 6.2 深色模式
+
+深色样式不是逐条规则重写，而是在 `:root[data-theme="dark"]` 下对上方语义令牌做**覆盖**（颜色取自 GitHub-dark 调色板，`--color-accent` 在深浅色中保持同一色相）。因此任何消费令牌的组件都会自动适配深色，无需各自编写 `dark` 分支。
+
+主题切换由 `apps/web/src/lib/theme.ts` 驱动：
+
+- `settings.theme`（`StoredSettings.theme`）取值 `light` / `dark` / `system`，默认 `system`；它持久化在 `localStorage["ygdria.settings"]`，由 `settingsStore.ts` 的 `readSettings()` / `writeSettings()` 同步读写。
+- `applyTheme()` 在 `main.tsx` **首帧之前**调用，把解析出的主题写到 `<html data-theme>`；`App.tsx` 监听系统配色变化（`prefers-color-scheme`）并在设置变更时重新调用——这样不会出现主题闪烁。
+- 「设置 → 外观」的 `<select>` 改变 `settings.theme` 后立即 `applyTheme()`。
+- 移动端 `capacitor.ts` 根据 `data-theme` 同步原生状态栏样式（浅色 / 深色）。

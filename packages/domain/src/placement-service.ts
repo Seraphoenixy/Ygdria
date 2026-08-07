@@ -10,6 +10,7 @@ import {
   CALENDAR_NOTE_ID,
   PLACEMENT_DELETION_MAX_RECORDS,
   PLACEMENT_DELETION_RETENTION_MS,
+  attachmentIdsFromSerializedDocument,
   SYSTEM_ROOT_NOTE_ID,
   SYSTEM_ROOT_PLACEMENT_ID,
   SYSTEM_TRASH_NOTE_ID,
@@ -295,8 +296,7 @@ export class PlacementService extends NoteServiceBase {
         | undefined;
       if (!row || row.isProtected) continue;
       const content = decodeStoredContent(row.contentData, row.contentCodec);
-      for (const match of content.matchAll(/\/api\/v1\/attachments\/([0-9a-f-]{36})(?:["'?/#]|$)/gi))
-        attachmentIds.add(match[1]);
+      for (const attachmentId of attachmentIdsFromSerializedDocument(content)) attachmentIds.add(attachmentId);
     }
     const readSize = this.store.sqlite.prepare("SELECT size FROM attachments WHERE id=?");
     let total = 0;
@@ -314,8 +314,7 @@ export class PlacementService extends NoteServiceBase {
       .all() as Array<{ contentData: Buffer; contentCodec: ContentCodec }>;
     for (const row of noteRows) {
       const content = decodeStoredContent(row.contentData, row.contentCodec);
-      for (const match of content.matchAll(/\/api\/v1\/attachments\/([0-9a-f-]{36})(?:["'?/#]|$)/gi))
-        referenced.add(match[1]);
+      for (const attachmentId of attachmentIdsFromSerializedDocument(content)) referenced.add(attachmentId);
     }
     const attachments = this.store.sqlite
       .prepare("SELECT id,storage_key storageKey FROM attachments")
@@ -468,6 +467,9 @@ export class PlacementService extends NoteServiceBase {
     if (!Array.isArray(snapshot.placements) || !Array.isArray(snapshot.autoTrashedNoteIds))
       throw new ConflictError("Invalid placement undo snapshot");
     this.store.sqlite.transaction(() => {
+      // A restored placement is a new sync mutation. Retaining its original
+      // timestamp can make a peer's later deletion tombstone win.
+      const restoredAt = now();
       const snapshotIds = new Set(snapshot.placements.map((placement) => placement.id));
       for (const placement of snapshot.placements) {
         if (this.store.sqlite.prepare("SELECT 1 FROM placements WHERE id=?").get(placement.id))
@@ -497,7 +499,7 @@ export class PlacementService extends NoteServiceBase {
           parentPlacementId,
           placement.position,
           placement.createdAt,
-          placement.updatedAt,
+          restoredAt,
         );
       }
       this.store.sqlite

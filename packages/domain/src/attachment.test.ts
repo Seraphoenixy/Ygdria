@@ -103,4 +103,24 @@ describe("AttachmentService", () => {
     expect(adapter.files.has(unused.storageKey)).toBe(false);
     expect(adapter.files.has(used.storageKey)).toBe(true);
   });
+
+  it("does not treat attachment-like text or code as a reference", async () => {
+    adapter.files.set("tmp/text", "text");
+    adapter.files.set("tmp/code", "code");
+    const text = await service.addAttachment({ noteId: firstNoteId, filename: "text.txt", tempFilePath: "tmp/text" });
+    const code = await service.addAttachment({ noteId: firstNoteId, filename: "code.txt", tempFilePath: "tmp/code" });
+    notes.update(firstNoteId, {
+      content: {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: `Example: /api/v1/attachments/${text.id}` }] },
+          { type: "codeBlock", content: [{ type: "text", text: `/api/v1/attachments/${code.id}` }] },
+        ],
+      },
+      expectedVersion: 1,
+    });
+
+    expect(service.countUnusedAttachments()).toBe(2);
+    expect(service.clearUnusedAttachments().count).toBe(2);
+  });
 });
