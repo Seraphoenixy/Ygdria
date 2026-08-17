@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../lib/i18n";
 import { readSettings, type TimeUnit } from "../features/settings/settingsStore";
+import { linesFromContent } from "../components/note/DiffView";
 
 function durationMs(value: number, unit: TimeUnit) {
   const multiplier = { seconds: 1_000, minutes: 60_000, hours: 3_600_000, days: 86_400_000 }[unit];
@@ -46,6 +47,22 @@ export type SaveConflict = {
 function isConflictError(error: unknown): boolean {
   const e = error as { code?: string; statusCode?: number } | null;
   return e?.code === "ConflictError" || e?.statusCode === 409;
+}
+
+/** True when two note contents flatten to identical diff lines. This mirrors
+ * the ConflictDialog's "no diff" judgement (empty DiffView hunks) and is used
+ * to absorb a 409 silently when only the version diverged while both sides
+ * remain textually identical. */
+export function isSameDiffContent(a: unknown, b: unknown): boolean {
+  const linesA = linesFromContent(a);
+  const linesB = linesFromContent(b);
+  return linesA.length === linesB.length && linesA.every((line, index) => line === linesB[index]);
+}
+
+function sameTags(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  const left = a ?? [];
+  const right = [...(b ?? [])].sort();
+  return left.length === right.length && [...left].sort().every((tag, index) => tag === right[index]);
 }
 
 export function useNotes({
@@ -288,18 +305,68 @@ export function useNotes({
       // The note was modified elsewhere (another device via sync, or a second
       // tab) so the optimistic-lock version no longer matches. Surface it as a
       // resolvable conflict instead of silently dropping the user's edits.
-      if (isConflictError(error)) {
-        const nextConflict = {
-          noteId: request.noteId,
-          type: request.type === "code" ? "code" : "text",
-          isProtected: request.isProtected,
-          localContent: request.content,
-        } satisfies SaveConflict;
+      if (!isConflictError(error)) return;
+      const nextConflict = {
+        noteId: request.noteId,
+        type: request.type === "code" ? "code" : "text",
+        isProtected: request.isProtected,
+        localContent: request.content,
+      } satisfies SaveConflict;
+      const surface = () => {
         // Do not interrupt an active mobile editing session. The latest failed
         // save is presented once editing ends.
         if (editingRef.current) setDeferredConflict(nextConflict);
         else setConflict((current) => current ?? nextConflict);
+      };
+      // Protected content is ciphertext here and cannot be compared against the
+      // server's view, so keep the explicit dialog for it.
+      if (request.isProtected) {
+        surface();
+        return;
       }
+      void (async () => {
+        try {
+          // Version-only divergence (sync applied another device's save of the
+          // same text, a second tab bumped the version, ...): the conflict
+          // dialog would show "no diff" and only alarm the user. Absorb it
+          // silently and refresh the tracked version instead.
+          const serverNote = await client.getNote(request.noteId);
+          const raw = request.content as
+            | { content?: unknown; code?: string; tags?: string[]; codeLanguage?: string }
+            | string
+            | undefined;
+          const wrapper = raw && typeof raw === "object" ? raw : undefined;
+          const localForCompare =
+            request.type === "code"
+              ? (typeof raw === "string" ? raw : wrapper?.code)
+              : (wrapper && "content" in wrapper ? wrapper.content : raw);
+          const tagsUnchanged =
+            wrapper?.tags === undefined || sameTags(wrapper.tags, serverNote?.tags as string[] | undefined);
+          const codeLanguageUnchanged =
+            request.type !== "code" ||
+            wrapper?.codeLanguage === undefined ||
+            wrapper.codeLanguage === serverNote?.codeLanguage;
+          if (
+            serverNote &&
+            typeof serverNote.version === "number" &&
+            tagsUnchanged &&
+            codeLanguageUnchanged &&
+            isSameDiffContent(localForCompare, serverNote.content)
+          ) {
+            noteVersionRef.current.set(
+              request.noteId,
+              Math.max(noteVersionRef.current.get(request.noteId) ?? 0, serverNote.version),
+            );
+            if (request.noteId === selectedRef.current)
+              autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, serverNote.version);
+            qc.invalidateQueries({ queryKey: ["note", request.noteId] });
+            return;
+          }
+        } catch {
+          // The freshness check itself failed; keep the explicit dialog.
+        }
+        surface();
+      })();
     },
   });
 
@@ -357,17 +424,59 @@ export function useNotes({
         autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, updated.version);
       }
     },
-    onError: (error) => {
+    onError: (error, nextTitle) => {
       // Title save failures (409 conflict, network error) must not be silent.
       // Surface them so the user knows the title was not persisted.
-      if (isConflictError(error)) {
+      if (!isConflictError(error)) return;
+      const noteId = selectedRef.current!;
+      const surface = () => {
         setConflict({
-          noteId: selected!,
+          noteId,
           type: note.data?.type === "code" ? "code" : "text",
           isProtected: note.data?.isProtected,
           localContent: note.data?.content,
         });
+      };
+      if (note.data?.isProtected) {
+        surface();
+        return;
       }
+      void (async () => {
+        try {
+          // The dialog would compare the cached server content with itself
+          // here and always show "no diff". When the server content indeed
+          // matches, retry the title write on the fresh version instead so
+          // the user's edit is not lost to a version-only divergence.
+          const serverNote = await client.getNote(noteId);
+          if (
+            serverNote &&
+            typeof serverNote.version === "number" &&
+            isSameDiffContent(note.data?.content, serverNote.content)
+          ) {
+            noteVersionRef.current.set(
+              noteId,
+              Math.max(noteVersionRef.current.get(noteId) ?? 0, serverNote.version),
+            );
+            autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, serverNote.version);
+            const updated = await client.updateNote(noteId, {
+              title: nextTitle.trim() || "Untitled note",
+              expectedVersion: serverNote.version,
+            });
+            const version = (updated as { version?: unknown } | null)?.version;
+            if (typeof version === "number") {
+              noteVersionRef.current.set(noteId, Math.max(noteVersionRef.current.get(noteId) ?? 0, version));
+              autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, version);
+            }
+            qc.invalidateQueries({ queryKey: ["note", noteId] });
+            qc.invalidateQueries({ queryKey: ["tree"] });
+            qc.invalidateQueries({ queryKey: ["history"] });
+            return;
+          }
+        } catch {
+          // The freshness check or the retry failed; keep the explicit dialog.
+        }
+        surface();
+      })();
     },
   });
 
