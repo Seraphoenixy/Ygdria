@@ -1,7 +1,30 @@
-import { decodeStoredContent, encodeDocumentContent, recordChange, type ContentCodec } from "@ygdria/database";
+import {
+  decodeStoredContent,
+  encodeDocumentContent,
+  recordChange,
+  type ContentCodec,
+} from "@ygdria/database";
 import { markdownToTiptap, tiptapToMarkdown } from "@ygdria/editor/markdown";
-import { CALENDAR_NOTE_ID, CALENDAR_PLACEMENT_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID, type NoteContent, type SearchResult, type TagStats } from "@ygdria/shared";
-import { ConflictError, escapeHtml, id, NotFoundError, now, type RevisionRow, type SearchRow } from "./note-service-base.js";
+import {
+  CALENDAR_NOTE_ID,
+  CALENDAR_PLACEMENT_ID,
+  SYSTEM_ROOT_NOTE_ID,
+  SYSTEM_ROOT_PLACEMENT_ID,
+  SYSTEM_TRASH_NOTE_ID,
+  SYSTEM_TRASH_PLACEMENT_ID,
+  type NoteContent,
+  type SearchResult,
+  type TagStats,
+} from "@ygdria/shared";
+import {
+  ConflictError,
+  escapeHtml,
+  id,
+  NotFoundError,
+  now,
+  type RevisionRow,
+  type SearchRow,
+} from "./note-service-base.js";
 import { PlacementService } from "./placement-service.js";
 import { readTags } from "./properties-utils.js";
 
@@ -40,31 +63,49 @@ function applyLiteralEdits(source: string, edits: ExternalTextEdit[]) {
     }
     const expected = edit.expectedMatches ?? 1;
     if (positions.length !== expected) {
-      throw new PatchTargetError(`Edit ${editIndex + 1} expected ${expected} literal match(es), found ${positions.length}`);
+      throw new PatchTargetError(
+        `Edit ${editIndex + 1} expected ${expected} literal match(es), found ${positions.length}`,
+      );
     }
     matches.push(positions.length);
-    for (const start of positions) replacements.push({ start, end: start + edit.oldText.length, text: edit.newText, editIndex });
+    for (const start of positions)
+      replacements.push({ start, end: start + edit.oldText.length, text: edit.newText, editIndex });
   }
-  const ordered = replacements.sort((left, right) => left.start - right.start || left.end - right.end);
+  const ordered = replacements.sort(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
   for (let index = 1; index < ordered.length; index += 1) {
     if (ordered[index].start < ordered[index - 1].end) {
-      throw new PatchTargetError(`Edits ${ordered[index - 1].editIndex + 1} and ${ordered[index].editIndex + 1} overlap`);
+      throw new PatchTargetError(
+        `Edits ${ordered[index - 1].editIndex + 1} and ${ordered[index].editIndex + 1} overlap`,
+      );
     }
   }
   let content = source;
   for (const replacement of [...ordered].sort((left, right) => right.start - left.start)) {
-    content = content.slice(0, replacement.start) + replacement.text + content.slice(replacement.end);
+    content =
+      content.slice(0, replacement.start) + replacement.text + content.slice(replacement.end);
   }
   return { content, matches };
 }
 
 export class NoteService extends PlacementService {
   private externalNodeFromRow(row: ExternalTreeNode): ExternalTreeNode {
-    return { ...row, title: row.isProtected ? "" : row.title, isProtected: Boolean(row.isProtected), hasChildren: Boolean(row.hasChildren) };
+    return {
+      ...row,
+      title: row.isProtected ? "" : row.title,
+      isProtected: Boolean(row.isProtected),
+      hasChildren: Boolean(row.hasChildren),
+    };
   }
 
   private externalVisibility(includeArchived: boolean) {
-    return [SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID, includeArchived ? 1 : 0] as const;
+    return [
+      SYSTEM_ROOT_NOTE_ID,
+      SYSTEM_TRASH_NOTE_ID,
+      SYSTEM_TRASH_PLACEMENT_ID,
+      includeArchived ? 1 : 0,
+    ] as const;
   }
 
   private externalNodeQuery(where: string, order = "p.position,p.id", limit?: number) {
@@ -81,7 +122,8 @@ export class NoteService extends PlacementService {
 
   private externalOne(placementId: string, includeArchived: boolean): ExternalTreeNode {
     const visibility = this.externalVisibility(includeArchived);
-    const row = this.store.sqlite.prepare(this.externalNodeQuery("AND p.id=?"))
+    const row = this.store.sqlite
+      .prepare(this.externalNodeQuery("AND p.id=?"))
       .get(...visibility, ...visibility, placementId) as ExternalTreeNode | undefined;
     if (!row) throw new NotFoundError("Tree node not found");
     return this.externalNodeFromRow(row);
@@ -90,13 +132,26 @@ export class NoteService extends PlacementService {
   externalRoots(includeArchived = false, limit = 50, cursor?: string) {
     const visibility = this.externalVisibility(includeArchived);
     const cursorRow = cursor ? this.externalOne(cursor, includeArchived) : undefined;
-    const after = cursorRow
-      ? "AND (p.position>? OR (p.position=? AND p.id>?))"
-      : "";
+    const after = cursorRow ? "AND (p.position>? OR (p.position=? AND p.id>?))" : "";
     const params = cursorRow
-      ? [...visibility, ...visibility, SYSTEM_ROOT_PLACEMENT_ID, cursorRow.position, cursorRow.position, cursorRow.placementId, limit + 1]
+      ? [
+          ...visibility,
+          ...visibility,
+          SYSTEM_ROOT_PLACEMENT_ID,
+          cursorRow.position,
+          cursorRow.position,
+          cursorRow.placementId,
+          limit + 1,
+        ]
       : [...visibility, ...visibility, SYSTEM_ROOT_PLACEMENT_ID, limit + 1];
-    const rows = this.store.sqlite.prepare(this.externalNodeQuery(`AND p.parent_placement_id=? ${after}`, "p.position,p.id", limit + 1))
+    const rows = this.store.sqlite
+      .prepare(
+        this.externalNodeQuery(
+          `AND p.parent_placement_id=? ${after}`,
+          "p.position,p.id",
+          limit + 1,
+        ),
+      )
       .all(...params) as ExternalTreeNode[];
     return this.externalPage(rows, limit);
   }
@@ -111,23 +166,39 @@ export class NoteService extends PlacementService {
     const cursorRow = cursor ? this.externalOne(cursor, includeArchived) : undefined;
     const after = cursorRow ? "AND (p.position>? OR (p.position=? AND p.id>?))" : "";
     const params = cursorRow
-      ? [...visibility, ...visibility, placementId, cursorRow.position, cursorRow.position, cursorRow.placementId, limit + 1]
+      ? [
+          ...visibility,
+          ...visibility,
+          placementId,
+          cursorRow.position,
+          cursorRow.position,
+          cursorRow.placementId,
+          limit + 1,
+        ]
       : [...visibility, ...visibility, placementId, limit + 1];
-    const rows = this.store.sqlite.prepare(this.externalNodeQuery(`AND p.parent_placement_id=? ${after}`, "p.position,p.id", limit + 1))
+    const rows = this.store.sqlite
+      .prepare(
+        this.externalNodeQuery(
+          `AND p.parent_placement_id=? ${after}`,
+          "p.position,p.id",
+          limit + 1,
+        ),
+      )
       .all(...params) as ExternalTreeNode[];
     return this.externalPage(rows, limit);
   }
 
   private externalPage(rows: ExternalTreeNode[], limit: number) {
     const items = rows.slice(0, limit).map((row) => this.externalNodeFromRow(row));
-    return { items, nextCursor: rows.length > limit ? items.at(-1)?.placementId ?? null : null };
+    return { items, nextCursor: rows.length > limit ? (items.at(-1)?.placementId ?? null) : null };
   }
 
   externalSubtree(placementId: string, includeArchived = false, maxDepth = 1, maxNodes = 100) {
     this.externalOne(placementId, includeArchived);
     const visibility = this.externalVisibility(includeArchived);
-    const rows = this.store.sqlite.prepare(
-      `WITH RECURSIVE subtree(placementId,noteId,parentPlacementId,position,title,isProtected,depth) AS (
+    const rows = this.store.sqlite
+      .prepare(
+        `WITH RECURSIVE subtree(placementId,noteId,parentPlacementId,position,title,isProtected,depth) AS (
          SELECT p.id,p.note_id,p.parent_placement_id,p.position,n.title,n.is_protected,0
          FROM placements p JOIN notes n ON n.id=p.note_id
          WHERE p.id=? AND n.deleted_at IS NULL AND n.id NOT IN (?,?) AND p.id<>? AND (?=1 OR n.archived_at IS NULL)
@@ -139,7 +210,15 @@ export class NoteService extends PlacementService {
        SELECT s.*, EXISTS(SELECT 1 FROM placements c JOIN notes cn ON cn.id=c.note_id
          WHERE c.parent_placement_id=s.placementId AND cn.deleted_at IS NULL AND cn.id NOT IN (?,?) AND c.id<>? AND (?=1 OR cn.archived_at IS NULL)) hasChildren
        FROM subtree s ORDER BY depth,position,placementId LIMIT ?`,
-    ).all(placementId, ...visibility, maxDepth, ...visibility, ...visibility, maxNodes) as ExternalTreeNode[];
+      )
+      .all(
+        placementId,
+        ...visibility,
+        maxDepth,
+        ...visibility,
+        ...visibility,
+        maxNodes,
+      ) as ExternalTreeNode[];
     return rows.map((row) => this.externalNodeFromRow(row));
   }
 
@@ -150,7 +229,14 @@ export class NoteService extends PlacementService {
     const params = parentPlacementId
       ? [...visibility, ...visibility, `%${escaped}%`, parentPlacementId, limit]
       : [...visibility, ...visibility, `%${escaped}%`, limit];
-    const rows = this.store.sqlite.prepare(this.externalNodeQuery(`AND n.is_protected=0 AND n.title LIKE ? ESCAPE '\\' ${parent}`, "p.position,p.id", limit))
+    const rows = this.store.sqlite
+      .prepare(
+        this.externalNodeQuery(
+          `AND n.is_protected=0 AND n.title LIKE ? ESCAPE '\\' ${parent}`,
+          "p.position,p.id",
+          limit,
+        ),
+      )
       .all(...params) as ExternalTreeNode[];
     return rows.map((row) => this.externalNodeFromRow(row));
   }
@@ -165,10 +251,10 @@ export class NoteService extends PlacementService {
          FROM placements WHERE note_id=? ORDER BY created_at,id`,
       )
       .all(noteId) as Array<{
-        placementId: string;
-        parentPlacementId: string | null;
-        position: number;
-      }>;
+      placementId: string;
+      parentPlacementId: string | null;
+      position: number;
+    }>;
     return {
       id: note.id,
       title: note.title,
@@ -183,10 +269,7 @@ export class NoteService extends PlacementService {
       version: note.version,
       createdAt: note.createdAt,
       updatedAt: note.updatedAt,
-      archivedAt:
-        note.archivedAt === null
-          ? null
-          : new Date(note.archivedAt).toISOString(),
+      archivedAt: note.archivedAt === null ? null : new Date(note.archivedAt).toISOString(),
     };
   }
 
@@ -246,7 +329,8 @@ export class NoteService extends PlacementService {
     if (note.isProtected) throw new ConflictError("Cannot access protected note content via ETAPI");
     if (note.type === "code") {
       const source = typeof note.content === "string" ? note.content : "";
-      if (format === "html") return `<article><h1>${escapeHtml(note.title)}</h1><pre><code>${escapeHtml(source)}</code></pre></article>`;
+      if (format === "html")
+        return `<article><h1>${escapeHtml(note.title)}</h1><pre><code>${escapeHtml(source)}</code></pre></article>`;
       return source;
     }
     if (format === "json") return note.content;
@@ -265,7 +349,8 @@ export class NoteService extends PlacementService {
     if (!note) throw new NotFoundError();
     if (note.isProtected) throw new ConflictError("Cannot modify protected note content via ETAPI");
     if (note.type === "code") {
-      if (typeof body !== "string") throw new ConflictError("Code note content must be plain source text");
+      if (typeof body !== "string")
+        throw new ConflictError("Code note content must be plain source text");
       return this.update(noteId, { code: body, expectedVersion, createRevision });
     }
     const parsed =
@@ -280,11 +365,20 @@ export class NoteService extends PlacementService {
     if (!note) throw new NotFoundError();
     if (note.isProtected) throw new ConflictError("Cannot modify protected note content via ETAPI");
     if (note.version !== input.expectedVersion) throw new ConflictError();
-    const source = note.type === "code"
-      ? (typeof note.content === "string" ? note.content : "")
-      : tiptapToMarkdown(note.content as NoteContent).markdown;
+    const source =
+      note.type === "code"
+        ? typeof note.content === "string"
+          ? note.content
+          : ""
+        : tiptapToMarkdown(note.content as NoteContent).markdown;
     const result = applyLiteralEdits(source, input.edits);
-    if (input.dryRun) return { dryRun: true as const, version: note.version, matches: result.matches, content: result.content };
+    if (input.dryRun)
+      return {
+        dryRun: true as const,
+        version: note.version,
+        matches: result.matches,
+        content: result.content,
+      };
     return this.putContent(noteId, result.content, "markdown", input.expectedVersion);
   }
   revisions(noteId: string) {
@@ -301,11 +395,14 @@ export class NoteService extends PlacementService {
     }));
   }
   clearExcessRevisions(limit: number) {
-    if (!Number.isInteger(limit) || limit < -1) throw new ConflictError("Revision limit must be -1 or a non-negative integer");
+    if (!Number.isInteger(limit) || limit < -1)
+      throw new ConflictError("Revision limit must be -1 or a non-negative integer");
     if (limit === -1) return { count: 0 };
     const revisionIds: string[] = [];
     this.store.sqlite.transaction(() => {
-      const noteIds = this.store.sqlite.prepare("SELECT DISTINCT note_id noteId FROM revisions").all() as Array<{ noteId: string }>;
+      const noteIds = this.store.sqlite
+        .prepare("SELECT DISTINCT note_id noteId FROM revisions")
+        .all() as Array<{ noteId: string }>;
       const selectExcess = this.store.sqlite.prepare(
         "SELECT id FROM revisions WHERE note_id=? ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?",
       );
@@ -325,14 +422,16 @@ export class NoteService extends PlacementService {
     if (!note) throw new NotFoundError();
     if (note.isProtected) throw new ConflictError("Cannot access protected note revisions");
     const revision = this.store.sqlite
-      .prepare("SELECT content_data contentData,content_codec contentCodec FROM revisions WHERE id=? AND note_id=?")
+      .prepare(
+        "SELECT content_data contentData,content_codec contentCodec FROM revisions WHERE id=? AND note_id=?",
+      )
       .get(revisionId, noteId) as { contentData: Buffer; contentCodec: ContentCodec } | undefined;
     if (!revision) throw new NotFoundError("Revision not found");
     const content = decodeStoredContent(revision.contentData, revision.contentCodec);
-    return { content: note.type === "code" ? content : JSON.parse(content) as NoteContent };
+    return { content: note.type === "code" ? content : (JSON.parse(content) as NoteContent) };
   }
   recentHistory(limit = 200, includeArchived = false) {
-    const notes = (this.store.sqlite
+    const notes = this.store.sqlite
       .prepare(
         `SELECT id,title,updated_at updatedAt,deleted_at IS NOT NULL isTrashed,archived_at IS NOT NULL isArchived
          FROM notes
@@ -340,7 +439,7 @@ export class NoteService extends PlacementService {
          ORDER BY updated_at DESC
          LIMIT ?`,
       )
-      .all(SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, limit)) as Array<{
+      .all(SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, limit) as Array<{
       id: string;
       title: string;
       updatedAt: number;
@@ -388,15 +487,20 @@ export class NoteService extends PlacementService {
   }
   restoreRevision(noteId: string, revisionId: string, expectedVersion: number) {
     const revision = this.store.sqlite
-      .prepare("SELECT content_data contentData,content_codec contentCodec FROM revisions WHERE id=? AND note_id=?")
+      .prepare(
+        "SELECT content_data contentData,content_codec contentCodec FROM revisions WHERE id=? AND note_id=?",
+      )
       .get(revisionId, noteId) as { contentData: Buffer; contentCodec: ContentCodec } | undefined;
     if (!revision) throw new NotFoundError("Revision not found");
     const note = this.get(noteId);
     if (!note) throw new NotFoundError();
     const restored = decodeStoredContent(revision.contentData, revision.contentCodec);
-    return this.update(noteId, note.type === "code"
-      ? { code: restored, expectedVersion }
-      : { content: JSON.parse(restored) as NoteContent, expectedVersion });
+    return this.update(
+      noteId,
+      note.type === "code"
+        ? { code: restored, expectedVersion }
+        : { content: JSON.parse(restored) as NoteContent, expectedVersion },
+    );
   }
   search(query: string, includeArchived = false, placementId?: string): SearchResult[] {
     if (!query.trim()) return [];
@@ -416,8 +520,12 @@ export class NoteService extends PlacementService {
       .map((term) => `${term}*`)
       .join(" AND ");
     if (!ftsQuery && hanTerms.length === 0) return [];
-    const escapedHanTerms = hanTerms.map((term) => `%${term.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`);
-    const hanPredicates = hanTerms.map(() => "(n.title LIKE ? ESCAPE '\\' OR n.plain_text LIKE ? ESCAPE '\\')").join(" AND ");
+    const escapedHanTerms = hanTerms.map(
+      (term) => `%${term.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`,
+    );
+    const hanPredicates = hanTerms
+      .map(() => "(n.title LIKE ? ESCAPE '\\' OR n.plain_text LIKE ? ESCAPE '\\')")
+      .join(" AND ");
     const visibility = `n.deleted_at IS NULL AND n.is_protected=0 ${includeArchived ? "" : "AND n.archived_at IS NULL"}`;
     this.assertSearchPlacement(placementId);
     const subtreeFilter = placementId
@@ -426,20 +534,35 @@ export class NoteService extends PlacementService {
     const subtreeParams = placementId ? [placementId] : [];
     const hanParams = escapedHanTerms.flatMap((term) => [term, term]);
     const rows: Array<SearchRow & { relevance: number }> = ftsQuery
-      ? this.store.sqlite.prepare(
-        `SELECT n.id noteId,n.title title,snippet(notes_fts,1,'<mark>','</mark>','…',10) snippet,n.updated_at updatedAt,n.archived_at IS NOT NULL isArchived,bm25(notes_fts) relevance
+      ? (this.store.sqlite
+          .prepare(
+            `SELECT n.id noteId,n.title title,snippet(notes_fts,1,'<mark>','</mark>','…',10) snippet,n.updated_at updatedAt,n.archived_at IS NOT NULL isArchived,bm25(notes_fts) relevance
          FROM notes_fts JOIN notes n ON n.rowid=notes_fts.rowid
          WHERE notes_fts MATCH ? AND ${visibility} ${hanPredicates ? `AND ${hanPredicates}` : ""} ${subtreeFilter}
          ORDER BY relevance,n.updated_at DESC LIMIT ${resultLimit}`,
-      ).all(ftsQuery, ...hanParams, ...subtreeParams) as Array<SearchRow & { relevance: number }>
-      : this.store.sqlite.prepare(
-        `SELECT n.id noteId,n.title title,
+          )
+          .all(ftsQuery, ...hanParams, ...subtreeParams) as Array<
+          SearchRow & { relevance: number }
+        >)
+      : (this.store.sqlite
+          .prepare(
+            `SELECT n.id noteId,n.title title,
            CASE WHEN instr(n.plain_text, ?) > 0 THEN replace(substr(n.plain_text,MAX(1,instr(n.plain_text,?)-60),180),?,'<mark>' || ? || '</mark>')
            ELSE replace(n.title,?,'<mark>' || ? || '</mark>') END snippet,
            n.updated_at updatedAt,n.archived_at IS NOT NULL isArchived,0 relevance
          FROM notes n WHERE ${visibility} AND ${hanPredicates} ${subtreeFilter}
          ORDER BY n.updated_at DESC LIMIT ${resultLimit}`,
-      ).all(hanTerms[0], hanTerms[0], hanTerms[0], hanTerms[0], hanTerms[0], hanTerms[0], ...hanParams, ...subtreeParams) as Array<SearchRow & { relevance: number }>;
+          )
+          .all(
+            hanTerms[0],
+            hanTerms[0],
+            hanTerms[0],
+            hanTerms[0],
+            hanTerms[0],
+            hanTerms[0],
+            ...hanParams,
+            ...subtreeParams,
+          ) as Array<SearchRow & { relevance: number }>);
 
     // Keep the response stable if a future query path contributes the same
     // note more than once, then rank FTS relevance before recency.
@@ -447,27 +570,81 @@ export class NoteService extends PlacementService {
       .sort((left, right) => left.relevance - right.relevance || right.updatedAt - left.updatedAt)
       .map((row) => {
         const tags = this.getTagsForNoteId(row.noteId);
-        return { noteId: row.noteId, title: row.title, snippet: row.snippet, matchedField: "content" as const, updatedAt: new Date(row.updatedAt).toISOString(), tags };
+        return {
+          noteId: row.noteId,
+          title: row.title,
+          snippet: row.snippet,
+          matchedField: "content" as const,
+          updatedAt: new Date(row.updatedAt).toISOString(),
+          tags,
+        };
       });
     return this.withMatchedPlacements(results, placementId);
   }
   protected ensureCalendarDay() {
     const date = new Date();
     const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-    const months = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
-    const year = this.ensureCalendarChild(CALENDAR_PLACEMENT_ID, String(date.getFullYear()));
-    const month = this.ensureCalendarChild(year, `${String(date.getMonth() + 1).padStart(2, "0")} - ${months[date.getMonth()]}`);
-    return this.ensureCalendarChild(month, `${String(date.getDate()).padStart(2, "0")} - ${weekdays[date.getDay()]}`);
+    const months = [
+      "一月",
+      "二月",
+      "三月",
+      "四月",
+      "五月",
+      "六月",
+      "七月",
+      "八月",
+      "九月",
+      "十月",
+      "十一月",
+      "十二月",
+    ];
+    const year = this.ensureCalendarChild(
+      CALENDAR_PLACEMENT_ID,
+      String(date.getFullYear()),
+      this.calendarNodeIds(date, "year"),
+    );
+    const month = this.ensureCalendarChild(
+      year,
+      `${String(date.getMonth() + 1).padStart(2, "0")} - ${months[date.getMonth()]}`,
+      this.calendarNodeIds(date, "month"),
+    );
+    return this.ensureCalendarChild(
+      month,
+      `${String(date.getDate()).padStart(2, "0")} - ${weekdays[date.getDay()]}`,
+      this.calendarNodeIds(date, "day"),
+    );
   }
-  private ensureCalendarChild(parentPlacementId: string, title: string) {
+  /**
+   * Calendar nodes need stable identities: two offline desktops can otherwise
+   * both observe a missing day, create different UUIDs, and sync both nodes.
+   */
+  private calendarNodeIds(date: Date, level: "year" | "month" | "day") {
+    const prefix = level === "year" ? "a" : level === "month" ? "b" : "c";
+    const dateKey =
+      level === "year"
+        ? `${date.getFullYear().toString().padStart(4, "0")}000`
+        : level === "month"
+          ? `${date.getFullYear().toString().padStart(4, "0")}${(date.getMonth() + 1).toString(16)}00`
+          : `${date.getFullYear().toString().padStart(4, "0")}${(date.getMonth() + 1).toString(16)}${date.getDate().toString(16).padStart(2, "0")}`;
+    const base = `${prefix}${dateKey}-0000-4000`;
+    return {
+      noteId: `${base}-8001-000000000001`,
+      placementId: `${base}-8002-000000000001`,
+    };
+  }
+  private ensureCalendarChild(
+    parentPlacementId: string,
+    title: string,
+    ids: { noteId: string; placementId: string },
+  ) {
     const existing = this.store.sqlite
-      .prepare("SELECT p.id id FROM placements p JOIN notes n ON n.id=p.note_id WHERE p.parent_placement_id=? AND n.title=? AND n.deleted_at IS NULL LIMIT 1")
+      .prepare(
+        "SELECT p.id id FROM placements p JOIN notes n ON n.id=p.note_id WHERE p.parent_placement_id=? AND n.title=? AND n.deleted_at IS NULL LIMIT 1",
+      )
       .get(parentPlacementId, title) as { id: string } | undefined;
     if (existing) return existing.id;
-    const note = this.create({ title, parentPlacementId });
-    return (this.store.sqlite
-      .prepare("SELECT id FROM placements WHERE note_id=? AND parent_placement_id=?")
-      .get(note.id, parentPlacementId) as { id: string }).id;
+    this.create({ title, parentPlacementId, ...ids });
+    return ids.placementId;
   }
   /** Administrative integrity check for the denormalized FTS projection. */
   findDuplicateSearchIndexEntries(): Array<{ noteId: string; count: number }> {
@@ -497,14 +674,22 @@ export class NoteService extends PlacementService {
          ORDER BY n.updated_at DESC
          LIMIT ?`,
       )
-      .all(tag, ...subtreeParams(placementId), resultLimit) as Array<{ noteId: string; title: string; plainText: string; updatedAt: number }>;
+      .all(tag, ...subtreeParams(placementId), resultLimit) as Array<{
+      noteId: string;
+      title: string;
+      plainText: string;
+      updatedAt: number;
+    }>;
     const results = rows.map((row) => {
       const tags = readTags(
-        (this.store.sqlite
-          .prepare("SELECT properties_json FROM notes WHERE id=?")
-          .get(row.noteId) as { properties_json: string } | undefined)?.properties_json ?? "{}",
+        (
+          this.store.sqlite
+            .prepare("SELECT properties_json FROM notes WHERE id=?")
+            .get(row.noteId) as { properties_json: string } | undefined
+        )?.properties_json ?? "{}",
       );
-      const snippet = row.plainText.length > 200 ? row.plainText.slice(0, 200) + "…" : row.plainText;
+      const snippet =
+        row.plainText.length > 200 ? row.plainText.slice(0, 200) + "…" : row.plainText;
       return {
         noteId: row.noteId,
         title: row.title,
@@ -546,7 +731,9 @@ export class NoteService extends PlacementService {
   private assertSearchPlacement(placementId?: string) {
     if (!placementId) return;
     const row = this.store.sqlite
-      .prepare("SELECT p.id FROM placements p JOIN notes n ON n.id=p.note_id WHERE p.id=? AND n.deleted_at IS NULL")
+      .prepare(
+        "SELECT p.id FROM placements p JOIN notes n ON n.id=p.note_id WHERE p.id=? AND n.deleted_at IS NULL",
+      )
       .get(placementId);
     if (!row) throw new NotFoundError("Placement not found");
   }
@@ -554,13 +741,19 @@ export class NoteService extends PlacementService {
     if (!placementId || results.length === 0) return results;
     const noteIds = results.map((result) => result.noteId);
     const placeholders = noteIds.map(() => "?").join(",");
-    const rows = this.store.sqlite.prepare(
-      `WITH RECURSIVE subtree AS (SELECT id,note_id FROM placements WHERE id=? UNION ALL SELECT p.id,p.note_id FROM placements p JOIN subtree s ON p.parent_placement_id=s.id)
+    const rows = this.store.sqlite
+      .prepare(
+        `WITH RECURSIVE subtree AS (SELECT id,note_id FROM placements WHERE id=? UNION ALL SELECT p.id,p.note_id FROM placements p JOIN subtree s ON p.parent_placement_id=s.id)
        SELECT id placementId,note_id noteId FROM subtree WHERE note_id IN (${placeholders})`,
-    ).all(placementId, ...noteIds) as Array<{ placementId: string; noteId: string }>;
+      )
+      .all(placementId, ...noteIds) as Array<{ placementId: string; noteId: string }>;
     const byNoteId = new Map<string, string[]>();
-    for (const row of rows) byNoteId.set(row.noteId, [...(byNoteId.get(row.noteId) ?? []), row.placementId]);
-    return results.map((result) => ({ ...result, matchedPlacementIds: byNoteId.get(result.noteId) ?? [] }));
+    for (const row of rows)
+      byNoteId.set(row.noteId, [...(byNoteId.get(row.noteId) ?? []), row.placementId]);
+    return results.map((result) => ({
+      ...result,
+      matchedPlacementIds: byNoteId.get(result.noteId) ?? [],
+    }));
   }
 }
 

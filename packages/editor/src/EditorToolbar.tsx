@@ -31,8 +31,11 @@ import {
   Palette,
   Paintbrush,
   Quote,
+  RectangleHorizontal,
+  RectangleVertical,
   Redo,
   SquareCode,
+  SquareDashed,
   Strikethrough,
   Table,
   Trash2,
@@ -40,6 +43,8 @@ import {
   Underline,
   Undo,
 } from "lucide-react";
+import { selectTable, selectTableColumn, selectTableRow, TABLE_ACTION_LABELS } from "./table-actions.js";
+import { TableInsertPicker } from "./TableInsertPicker.js";
 
 type Locale = "zh-CN" | "en";
 type DropdownKey = "paragraph" | "alignment" | "decoration" | "tableActions" | null;
@@ -257,6 +262,9 @@ function EditorTools({
       if ((target as Element)?.closest?.(".editor-toolbar-dropdown-panel")) return;
       if ((target as Element)?.closest?.(".editor-toolbar-overflow-panel")) return;
       if ((target as Element)?.closest?.(".editor-toolbar-link-popover")) return;
+      // The table picker renders its grid in a separate portal; clicking a cell
+      // must not tear down the overflow panel before the click handler runs.
+      if ((target as Element)?.closest?.(".editor-table-picker-panel")) return;
       setOpenDropdown(null);
       setShowLinkInput(false);
       setShowMore(false);
@@ -536,21 +544,15 @@ function EditorTools({
         <div className="editor-toolbar-secondary-overflow"><ToolbarGroup>
           <ToolbarButton active={state.isBlockquote} label={labels.quote} onClick={() => run(() => editor.chain().focus().toggleBlockquote().run())} icon={<Quote size={16} />} />
           <ToolbarButton active={state.isCodeBlock} label={labels.codeBlock} onClick={() => run(toggleCodeBlock)} icon={<SquareCode size={16} />} />
-          <ToolbarButton active={false} label={labels.table} onClick={() => run(() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run())} icon={<Table size={16} />} />
+          <TableInsertPicker editor={editor} locale={locale} label={labels.table} onInserted={() => run(() => undefined)} />
           {state.isInTable && (
-            <ToolbarDropdown active={openDropdown === "tableActions"} compact label={labels.tableActions} icon={<Table size={16} />} onToggle={() => toggleDropdown("tableActions")}>
-              <ToolbarGroup>
-                <ToolbarButton active={false} label={labels.addRowBefore} icon={<ArrowUp size={16} />} onClick={() => run(() => editor.chain().focus().addRowBefore().run())} />
-                <ToolbarButton active={false} label={labels.addRowAfter} icon={<ArrowDown size={16} />} onClick={() => run(() => editor.chain().focus().addRowAfter().run())} />
-                <ToolbarButton active={false} label={labels.deleteRow} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteRow().run())} />
-              </ToolbarGroup>
-              <ToolbarSeparator />
-              <ToolbarGroup>
-                <ToolbarButton active={false} label={labels.addColumnBefore} icon={<ArrowLeft size={16} />} onClick={() => run(() => editor.chain().focus().addColumnBefore().run())} />
-                <ToolbarButton active={false} label={labels.addColumnAfter} icon={<ArrowRight size={16} />} onClick={() => run(() => editor.chain().focus().addColumnAfter().run())} />
-                <ToolbarButton active={false} label={labels.deleteColumn} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteColumn().run())} />
-              </ToolbarGroup>
-            </ToolbarDropdown>
+            <TableActionsMenu
+              editor={editor}
+              locale={locale}
+              open={openDropdown === "tableActions"}
+              onToggle={() => toggleDropdown("tableActions")}
+              run={run}
+            />
           )}
           <ToolbarButton active={state.isCode} label={labels.inlineCode} onClick={() => run(() => editor.chain().focus().toggleCode().run())} icon={<Code size={16} />} />
           <ToolbarDropdown active={openDropdown === "alignment"} compact label={labels.alignment} icon={<AlignJustify size={16} />} onToggle={() => toggleDropdown("alignment")}><ToolbarGroup>
@@ -601,21 +603,15 @@ function EditorTools({
             <ToolbarButton active={state.isCodeBlock} label={labels.codeBlock} onClick={() => run(toggleCodeBlock)} icon={<SquareCode size={16} />} />
           </ToolbarGroup>}
           {overflowLevel > 0 && <ToolbarGroup>
-            <ToolbarButton active={false} label={labels.table} onClick={() => run(() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run())} icon={<Table size={16} />} />
+            <TableInsertPicker editor={editor} locale={locale} label={labels.table} onInserted={() => run(() => undefined)} />
             {state.isInTable && (
-              <ToolbarDropdown active={openDropdown === "tableActions"} compact label={labels.tableActions} icon={<Table size={16} />} onToggle={() => toggleDropdown("tableActions")}>
-                <ToolbarGroup>
-                  <ToolbarButton active={false} label={labels.addRowBefore} icon={<ArrowUp size={16} />} onClick={() => run(() => editor.chain().focus().addRowBefore().run())} />
-                  <ToolbarButton active={false} label={labels.addRowAfter} icon={<ArrowDown size={16} />} onClick={() => run(() => editor.chain().focus().addRowAfter().run())} />
-                  <ToolbarButton active={false} label={labels.deleteRow} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteRow().run())} />
-                </ToolbarGroup>
-                <ToolbarSeparator />
-                <ToolbarGroup>
-                  <ToolbarButton active={false} label={labels.addColumnBefore} icon={<ArrowLeft size={16} />} onClick={() => run(() => editor.chain().focus().addColumnBefore().run())} />
-                  <ToolbarButton active={false} label={labels.addColumnAfter} icon={<ArrowRight size={16} />} onClick={() => run(() => editor.chain().focus().addColumnAfter().run())} />
-                  <ToolbarButton active={false} label={labels.deleteColumn} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteColumn().run())} />
-                </ToolbarGroup>
-              </ToolbarDropdown>
+              <TableActionsMenu
+                editor={editor}
+                locale={locale}
+                open={openDropdown === "tableActions"}
+                onToggle={() => toggleDropdown("tableActions")}
+                run={run}
+              />
             )}
             <ToolbarButton active={state.isCode} label={labels.inlineCode} onClick={() => run(() => editor.chain().focus().toggleCode().run())} icon={<Code size={16} />} />
           </ToolbarGroup>}
@@ -769,6 +765,43 @@ function ToolbarDropdown({
         document.body,
       )}
     </div>
+  );
+}
+
+function TableActionsMenu({
+  editor,
+  locale,
+  open,
+  onToggle,
+  run,
+}: {
+  editor: Editor;
+  locale: Locale;
+  open: boolean;
+  onToggle: () => void;
+  run: (command: () => boolean | void) => void;
+}) {
+  const tableLabels = TABLE_ACTION_LABELS[locale];
+  return (
+    <ToolbarDropdown active={open} compact label={tableLabels.tableActions} icon={<Table size={16} />} onToggle={onToggle}>
+      <ToolbarGroup>
+        <ToolbarButton active={false} label={tableLabels.addRowBefore} icon={<ArrowUp size={16} />} onClick={() => run(() => editor.chain().focus().addRowBefore().run())} />
+        <ToolbarButton active={false} label={tableLabels.addRowAfter} icon={<ArrowDown size={16} />} onClick={() => run(() => editor.chain().focus().addRowAfter().run())} />
+        <ToolbarButton active={false} label={tableLabels.deleteRow} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteRow().run())} />
+      </ToolbarGroup>
+      <ToolbarSeparator />
+      <ToolbarGroup>
+        <ToolbarButton active={false} label={tableLabels.addColumnBefore} icon={<ArrowLeft size={16} />} onClick={() => run(() => editor.chain().focus().addColumnBefore().run())} />
+        <ToolbarButton active={false} label={tableLabels.addColumnAfter} icon={<ArrowRight size={16} />} onClick={() => run(() => editor.chain().focus().addColumnAfter().run())} />
+        <ToolbarButton active={false} label={tableLabels.deleteColumn} icon={<Trash2 size={16} />} onClick={() => run(() => editor.chain().focus().deleteColumn().run())} />
+      </ToolbarGroup>
+      <ToolbarSeparator />
+      <ToolbarGroup>
+        <ToolbarButton active={false} label={tableLabels.selectRow} icon={<RectangleHorizontal size={16} />} onClick={() => run(() => selectTableRow(editor))} />
+        <ToolbarButton active={false} label={tableLabels.selectColumn} icon={<RectangleVertical size={16} />} onClick={() => run(() => selectTableColumn(editor))} />
+        <ToolbarButton active={false} label={tableLabels.selectTable} icon={<SquareDashed size={16} />} onClick={() => run(() => selectTable(editor))} />
+      </ToolbarGroup>
+    </ToolbarDropdown>
   );
 }
 
@@ -928,13 +961,6 @@ const TOOLBAR_LABELS = {
     importMarkdown: "从剪贴板导入 Markdown",
     markdownView: "Markdown 源码",
     richTextView: "富文本",
-    tableActions: "表格操作",
-    addRowBefore: "在上方插入行",
-    addRowAfter: "在下方插入行",
-    deleteRow: "删除当前行",
-    addColumnBefore: "在左侧插入列",
-    addColumnAfter: "在右侧插入列",
-    deleteColumn: "删除当前列",
   },
   en: {
     toolbar: "Editor toolbar",
@@ -974,12 +1000,5 @@ const TOOLBAR_LABELS = {
     importMarkdown: "Import Markdown from clipboard",
     markdownView: "Markdown source",
     richTextView: "Rich text",
-    tableActions: "Table actions",
-    addRowBefore: "Insert row above",
-    addRowAfter: "Insert row below",
-    deleteRow: "Delete row",
-    addColumnBefore: "Insert column left",
-    addColumnAfter: "Insert column right",
-    deleteColumn: "Delete column",
   },
 };

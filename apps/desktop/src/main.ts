@@ -1,15 +1,18 @@
-import { app, BrowserWindow, ipcMain, Menu, safeStorage, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, type IpcMainInvokeEvent } from "electron";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { buildApp } from "../../server/src/app";
+import { deferQuitOnce, startupFailureDialog } from "./startup";
 
 let window: BrowserWindow | undefined;
 let apiUrl = "";
 let localApi: ReturnType<typeof buildApp> | undefined;
 let localApiToken = "";
-let isQuitting = false;
+const quitState = { quitting: false };
+const isQuitting = () => quitState.quitting;
 let closeLocalApiPromise: Promise<void> | undefined;
+let focusRequestedBeforeWindowExists = false;
 const REMOTE_REQUEST_TIMEOUT_MS = 120_000;
 const legacyUserDataPath = app.getPath("userData");
 const appDataPath = app.getPath("appData");
@@ -21,23 +24,32 @@ const desktopWindowIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "icon.ico")
   : path.resolve(desktopAppPath, "../../assets/icons/ygdria-forest.ico");
 
-function closeLocalApi() {
+async function closeLocalApi() {
   if (closeLocalApiPromise) return closeLocalApiPromise;
   const api = localApi;
   localApi = undefined;
-  closeLocalApiPromise = api ? api.close() : Promise.resolve();
-  return closeLocalApiPromise;
+  apiUrl = "";
+  const closing = api ? api.close() : Promise.resolve();
+  closeLocalApiPromise = closing;
+  try {
+    await closing;
+  } finally {
+    if (closeLocalApiPromise === closing) closeLocalApiPromise = undefined;
+  }
 }
 
 function quitAfterClosingLocalApi(exitCode?: number) {
-  void closeLocalApi()
-    .catch((error) => {
-      console.error("Failed to close Ygdria local API cleanly", error);
-    })
-    .finally(() => {
+  deferQuitOnce(
+    quitState,
+    () =>
+      closeLocalApi().catch((error) => {
+        console.error("Failed to close Ygdria local API cleanly", error);
+      }),
+    () => {
       if (exitCode === undefined) app.quit();
       else app.exit(exitCode);
-    });
+    },
+  );
 }
 const minimumZoomLevel = -5;
 const maximumZoomLevel = 5;
@@ -103,6 +115,15 @@ app.setPath("userData", path.join(appDataPath, "Ygdria"));
 // Keep Electron's disposable session cache alongside the app data. This avoids
 // creating a second top-level "Ygdria Cache" folder in the user's profile.
 app.setPath("sessionData", path.join(appDataPath, "Ygdria", "session-data"));
+// Configure the app-specific data path before claiming the process lock, then
+// acquire it before any database or local-server work begins.
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => focusMainWindow());
+}
 
 function databasePath() {
   const dataPath = path.join(app.getPath("userData"), "data");
@@ -119,6 +140,60 @@ function databasePath() {
 
 function etapiSessionStorePath() {
   return path.join(app.getPath("userData"), "etapi-sessions.json");
+}
+
+async function startLocalApiWithRetry() {
+  while (!isQuitting()) {
+    try {
+      const databaseUrl = databasePath();
+      const webDist = app.isPackaged
+        ? path.join(process.resourcesPath, "web")
+        : path.resolve(desktopAppPath, "../web/dist");
+      localApiToken = randomBytes(32).toString("base64url");
+      localApi = buildApp({
+        databaseUrl,
+        webDist,
+        origin: "http://localhost:5173",
+        localToken: localApiToken,
+        enableEtapi: true,
+        etapiSessionStorePath: etapiSessionStorePath(),
+      });
+      apiUrl = await localApi.listen({
+        // Keep the loopback endpoint discoverable for local integrations. The
+        // per-launch local token, not port obscurity, protects this API.
+        port: 4318,
+        host: "127.0.0.1",
+      });
+      return true;
+    } catch (error) {
+      console.error("Failed to start Ygdria local API", error);
+      await closeLocalApi().catch((closeError) => console.error("Failed to close Ygdria local API", closeError));
+      const failure = startupFailureDialog(error);
+      const response = await dialog.showMessageBox({
+        type: "error",
+        title: failure.title,
+        message: failure.message,
+        detail: failure.detail,
+        buttons: ["Retry", "Exit"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (response.response !== 0) return false;
+    }
+  }
+  return false;
+}
+
+function focusMainWindow() {
+  const mainWindow = window ?? BrowserWindow.getAllWindows().at(0);
+  if (!mainWindow) {
+    focusRequestedBeforeWindowExists = true;
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 /**
@@ -249,26 +324,12 @@ async function createWindow(initialTab?: unknown) {
 app
   .whenReady()
   .then(async () => {
+    if (!hasSingleInstanceLock) return;
     Menu.setApplicationMenu(null);
-    const databaseUrl = databasePath();
-    const webDist = app.isPackaged
-      ? path.join(process.resourcesPath, "web")
-      : path.resolve(desktopAppPath, "../web/dist");
-    localApiToken = randomBytes(32).toString("base64url");
-    localApi = buildApp({
-      databaseUrl,
-      webDist,
-      origin: "http://localhost:5173",
-      localToken: localApiToken,
-      enableEtapi: true,
-      etapiSessionStorePath: etapiSessionStorePath(),
-    });
-    apiUrl = await localApi.listen({
-      // Keep the loopback endpoint discoverable for local integrations. The
-      // per-launch local token, not port obscurity, protects this API.
-      port: 4318,
-      host: "127.0.0.1",
-    });
+    if (!(await startLocalApiWithRetry())) {
+      quitAfterClosingLocalApi(1);
+      return;
+    }
     ipcMain.handle("ygdria:connection", () => ({
       baseUrl: apiUrl,
       token: localApiToken,
@@ -440,6 +501,10 @@ app
       event.sender.openDevTools({ mode: "detach" });
     });
     await createWindow();
+    if (focusRequestedBeforeWindowExists) {
+      focusRequestedBeforeWindowExists = false;
+      focusMainWindow();
+    }
     app.on("activate", () => {
       if (!BrowserWindow.getAllWindows().length) void createWindow();
     });
@@ -449,14 +514,15 @@ app
     quitAfterClosingLocalApi(1);
   });
 app.on("before-quit", (event) => {
-  if (isQuitting) return;
+  if (isQuitting()) return;
   // Keep Electron alive until Fastify closes its sole SQLite connection. The
   // close hook checkpoints and truncates the WAL before releasing the database.
   event.preventDefault();
-  isQuitting = true;
+  // quitAfterClosingLocalApi raises the quitting flag itself and re-issues
+  // app.quit() once the API has closed; that second before-quit then passes
+  // through the guard above.
   quitAfterClosingLocalApi();
 });
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
-// TODO: production bootstrap starts the shared Fastify app on a dynamic loopback port and closes it before quit.

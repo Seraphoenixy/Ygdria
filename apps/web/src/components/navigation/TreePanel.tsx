@@ -222,7 +222,6 @@ export function TreePanel({
       for (const id of autoSet) next.add(id);
       return next;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabs, tree, isSearching]);
 
   // A newly created child or today's calendar note can arrive after its parent

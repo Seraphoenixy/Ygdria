@@ -5,6 +5,7 @@ import { YgdriaEditor } from "@ygdria/editor";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement } from "../../types/workspace";
 import { ProtectedClientSession, type ProtectedPayload } from "../../lib/client-crypto";
+import { clipboardAdapter } from "../../lib/clipboard";
 import { ChildNoteList } from "./ChildNoteList";
 import { TagEditor } from "./TagEditor";
 
@@ -249,6 +250,9 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
                   handleSaveContent(block.code, block.language);
                 } : undefined}
                 onUploadError={onUploadError}
+                readClipboardText={clipboardAdapter.readText}
+                readClipboardHtml={clipboardAdapter.readHtml}
+                writeClipboardText={clipboardAdapter.writeText}
               />
           : <YgdriaEditor
               key={note.id}
@@ -262,6 +266,9 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
               readOnly={!editing || isTrashed}
               markdownView={markdownView}
               onUploadError={onUploadError}
+              readClipboardText={clipboardAdapter.readText}
+              readClipboardHtml={clipboardAdapter.readHtml}
+              writeClipboardText={clipboardAdapter.writeText}
             />}
         {(editing && !isTrashed) || (!editing && displayTags.length > 0) ? (
           <footer className="note-content-footer">

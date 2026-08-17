@@ -1,8 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { applyMigrations, createDatabase } from "@ygdria/database";
 import { NoteService, RelationService } from "@ygdria/domain";
-import { CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
-import { applySyncChanges, attachmentIdsFromStoredContent, resolveChangeEntities } from "./helpers.js";
+import {
+  CALENDAR_NOTE_ID,
+  SYSTEM_ROOT_NOTE_ID,
+  SYSTEM_ROOT_PLACEMENT_ID,
+  SYSTEM_TRASH_NOTE_ID,
+  SYSTEM_TRASH_PLACEMENT_ID,
+} from "@ygdria/shared";
+import {
+  applySyncChanges,
+  attachmentIdsFromStoredContent,
+  resolveChangeEntities,
+} from "./helpers.js";
 
 function freshDb() {
   const store = createDatabase(":memory:");
@@ -19,18 +29,27 @@ describe("attachmentIdsFromStoredContent", () => {
     const document = {
       type: "doc",
       content: [
-        { type: "paragraph", content: [{ type: "text", text: `Example: /api/v1/attachments/${TEXT_ID}` }] },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: `Example: /api/v1/attachments/${TEXT_ID}` }],
+        },
         { type: "codeBlock", content: [{ type: "text", text: `/api/v1/attachments/${CODE_ID}` }] },
         { type: "image", attrs: { src: `/api/v1/attachments/${IMAGE_ID}?download=1` } },
       ],
     };
 
-    expect(attachmentIdsFromStoredContent(Buffer.from(JSON.stringify(document)), "identity")).toEqual([IMAGE_ID]);
+    expect(
+      attachmentIdsFromStoredContent(Buffer.from(JSON.stringify(document)), "identity"),
+    ).toEqual([IMAGE_ID]);
   });
 });
 
 /** Drain A's sync change log into B via applySyncChanges, advancing a cursor. */
-function sync(peerA: ReturnType<typeof freshDb>, peerB: ReturnType<typeof freshDb>, cursor: { id: number }) {
+function sync(
+  peerA: ReturnType<typeof freshDb>,
+  peerB: ReturnType<typeof freshDb>,
+  cursor: { id: number },
+) {
   const raw = peerA.sqlite
     .prepare(
       "SELECT id,entity_type entityType,entity_id entityId,change_kind changeKind,created_at createdAt FROM sync_change_log WHERE id>? ORDER BY id",
@@ -61,6 +80,28 @@ function sync(peerA: ReturnType<typeof freshDb>, peerB: ReturnType<typeof freshD
 }
 
 describe("cross-device purge propagation", () => {
+  it("uses one calendar day when two desktops create it before syncing", () => {
+    const peerA = freshDb();
+    const peerB = freshDb();
+    const dayA = new NoteService(peerA).ensureTodayNote();
+    const dayB = new NoteService(peerB).ensureTodayNote();
+
+    // Both peers were offline while creating the hierarchy. Stable calendar
+    // IDs make their independently-created year/month/day nodes converge.
+    expect(dayA.id).toBe(dayB.id);
+    sync(peerA, peerB, { id: 0 });
+    sync(peerB, peerA, { id: 0 });
+
+    for (const peer of [peerA, peerB]) {
+      const dayPlacements = peer.sqlite
+        .prepare(
+          "SELECT p.id FROM placements p JOIN notes n ON n.id=p.note_id WHERE p.note_id=? AND n.deleted_at IS NULL",
+        )
+        .all(dayA.id);
+      expect(dayPlacements).toHaveLength(1);
+    }
+  });
+
   it("treats a repeated latest note snapshot as an idempotent sync retry", () => {
     const peerA = freshDb();
     const peerB = freshDb();
@@ -72,14 +113,23 @@ describe("cross-device purge propagation", () => {
     // resolve to the same latest snapshot, as can happen with a retry from an
     // older peer or after an interrupted cursor advance.
     const raw = peerA.sqlite
-      .prepare("SELECT id,entity_type entityType,entity_id entityId,change_kind changeKind,created_at createdAt FROM sync_change_log WHERE entity_type='note' AND entity_id=? ORDER BY id")
-      .all(note.id) as Array<{ id: number; entityType: string; entityId: string; changeKind: string; createdAt: number }>;
+      .prepare(
+        "SELECT id,entity_type entityType,entity_id entityId,change_kind changeKind,created_at createdAt FROM sync_change_log WHERE entity_type='note' AND entity_id=? ORDER BY id",
+      )
+      .all(note.id) as Array<{
+      id: number;
+      entityType: string;
+      entityId: string;
+      changeKind: string;
+      createdAt: number;
+    }>;
     const resolved = resolveChangeEntities(peerA.sqlite, "", raw, true);
     const result = applySyncChanges(peerB.sqlite, resolved, false);
 
     expect(result.rejected).toEqual([]);
     expect(
-      (peerB.sqlite.prepare("SELECT title FROM notes WHERE id=?").get(note.id) as { title: string }).title,
+      (peerB.sqlite.prepare("SELECT title FROM notes WHERE id=?").get(note.id) as { title: string })
+        .title,
     ).toBe("Saved");
   });
 
@@ -156,7 +206,9 @@ describe("cross-device purge propagation", () => {
 
     // Before trashing, B holds exactly the note's original (root) placement.
     const beforeCount = (
-      peerB.sqlite.prepare("SELECT COUNT(*) c FROM placements WHERE note_id=?").get(note.id) as { c: number }
+      peerB.sqlite.prepare("SELECT COUNT(*) c FROM placements WHERE note_id=?").get(note.id) as {
+        c: number;
+      }
     ).c;
     expect(beforeCount).toBe(1);
 
@@ -167,9 +219,9 @@ describe("cross-device purge propagation", () => {
     // B must have soft-deleted the note and created a trash placement, while the
     // former non-trash placement is gone so the two databases stay consistent.
     const deletedAt = (
-      peerB.sqlite
-        .prepare("SELECT deleted_at deletedAt FROM notes WHERE id=?")
-        .get(note.id) as { deletedAt: number | null }
+      peerB.sqlite.prepare("SELECT deleted_at deletedAt FROM notes WHERE id=?").get(note.id) as {
+        deletedAt: number | null;
+      }
     ).deletedAt;
     expect(deletedAt).not.toBeNull();
     expect(
@@ -229,15 +281,24 @@ describe("atomic sibling-order sync", () => {
     const firstChild = notesA.create({ title: "First child" });
     const secondChild = notesA.create({ title: "Second child" });
     sync(peerA, peerB, cursor);
-    const [parentPlacement, firstChildPlacement, secondChildPlacement] = [parent, firstChild, secondChild].map((note) =>
-      peerA.sqlite.prepare("SELECT id FROM placements WHERE note_id=?").get(note.id) as { id: string },
+    const [parentPlacement, firstChildPlacement, secondChildPlacement] = [
+      parent,
+      firstChild,
+      secondChild,
+    ].map(
+      (note) =>
+        peerA.sqlite.prepare("SELECT id FROM placements WHERE note_id=?").get(note.id) as {
+          id: string;
+        },
     );
 
     notesA.movePlacements([firstChildPlacement.id, secondChildPlacement.id], parentPlacement.id, 0);
     sync(peerA, peerB, cursor);
 
     const children = peerB.sqlite
-      .prepare("SELECT id,parent_placement_id parentPlacementId,position FROM placements WHERE id IN (?,?) ORDER BY position")
+      .prepare(
+        "SELECT id,parent_placement_id parentPlacementId,position FROM placements WHERE id IN (?,?) ORDER BY position",
+      )
       .all(firstChildPlacement.id, secondChildPlacement.id);
     expect(children).toEqual([
       { id: firstChildPlacement.id, parentPlacementId: parentPlacement.id, position: 0 },
@@ -254,14 +315,24 @@ describe("atomic sibling-order sync", () => {
     const b = notesA.create({ title: "B" });
     const c = notesA.create({ title: "C" });
     sync(peerA, peerB, cursor);
-    const cPlacement = peerA.sqlite.prepare("SELECT id FROM placements WHERE note_id=?").get(c.id) as { id: string };
+    const cPlacement = peerA.sqlite
+      .prepare("SELECT id FROM placements WHERE note_id=?")
+      .get(c.id) as { id: string };
 
     notesA.movePlacement(cPlacement.id, SYSTEM_ROOT_PLACEMENT_ID, 0);
     sync(peerA, peerB, cursor);
 
-    const order = (store: ReturnType<typeof freshDb>) => store.sqlite
-      .prepare("SELECT note_id noteId FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id")
-      .all(SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID) as Array<{ noteId: string }>;
+    const order = (store: ReturnType<typeof freshDb>) =>
+      store.sqlite
+        .prepare(
+          "SELECT note_id noteId FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id",
+        )
+        .all(
+          SYSTEM_ROOT_PLACEMENT_ID,
+          SYSTEM_ROOT_NOTE_ID,
+          SYSTEM_TRASH_NOTE_ID,
+          CALENDAR_NOTE_ID,
+        ) as Array<{ noteId: string }>;
     expect(order(peerB).map((row) => row.noteId)).toEqual(order(peerA).map((row) => row.noteId));
     expect(order(peerB).map((row) => row.noteId)).toEqual([c.id, a.id, b.id]);
   });
@@ -300,7 +371,9 @@ describe("cross-device attachment deletion", () => {
 
     // The peer reconciles the explicit deletion through reference-aware cleanup
     // and removes the now-orphaned metadata row so the two databases converge.
-    expect(peerB.sqlite.prepare("SELECT 1 FROM attachments WHERE id=?").get(ORPHAN_ID)).toBeUndefined();
+    expect(
+      peerB.sqlite.prepare("SELECT 1 FROM attachments WHERE id=?").get(ORPHAN_ID),
+    ).toBeUndefined();
   });
 
   it("retains a still-referenced attachment despite a peer deletion change", () => {
@@ -358,8 +431,11 @@ describe("cross-device relation sync", () => {
     sync(peerA, peerB, cursor);
 
     const edge = peerB.sqlite
-      .prepare("SELECT source_note_id,target_note_id,relation_type FROM relations WHERE source_note_id=? AND target_note_id=?")
-      .get(a, b) as { source_note_id: string; target_note_id: string; relation_type: string } | undefined;
+      .prepare(
+        "SELECT source_note_id,target_note_id,relation_type FROM relations WHERE source_note_id=? AND target_note_id=?",
+      )
+      .get(a, b) as
+      { source_note_id: string; target_note_id: string; relation_type: string } | undefined;
     expect(edge).toBeDefined();
     expect(edge?.relation_type).toBe("uses");
   });
@@ -374,11 +450,15 @@ describe("cross-device relation sync", () => {
 
     const created = relationsA.createRelation(a, b, "related");
     sync(peerA, peerB, cursor);
-    expect(peerB.sqlite.prepare("SELECT 1 FROM relations WHERE id=?").get(created!.id)).toBeDefined();
+    expect(
+      peerB.sqlite.prepare("SELECT 1 FROM relations WHERE id=?").get(created!.id),
+    ).toBeDefined();
 
     relationsA.deleteRelation(created!.id);
     sync(peerA, peerB, cursor);
-    expect(peerB.sqlite.prepare("SELECT 1 FROM relations WHERE id=?").get(created!.id)).toBeUndefined();
+    expect(
+      peerB.sqlite.prepare("SELECT 1 FROM relations WHERE id=?").get(created!.id),
+    ).toBeUndefined();
   });
 
   it("refuses to resurrect a relation the peer deleted after its creation", () => {
@@ -398,7 +478,9 @@ describe("cross-device relation sync", () => {
       )
       .run(R, a, b, "related", OLD);
     peerA.sqlite
-      .prepare("INSERT INTO sync_change_log (entity_type,entity_id,change_kind,created_at) VALUES ('relation',?,?,?)")
+      .prepare(
+        "INSERT INTO sync_change_log (entity_type,entity_id,change_kind,created_at) VALUES ('relation',?,?,?)",
+      )
       .run(R, "created", OLD);
 
     // B receives the creation.
@@ -409,7 +491,9 @@ describe("cross-device relation sync", () => {
     // timestamp far newer than OLD.
     peerB.sqlite.prepare("DELETE FROM relations WHERE id=?").run(R);
     const tombstone = peerB.sqlite
-      .prepare("SELECT deleted_at deletedAt FROM sync_tombstones WHERE entity_type='relation' AND entity_id=?")
+      .prepare(
+        "SELECT deleted_at deletedAt FROM sync_tombstones WHERE entity_type='relation' AND entity_id=?",
+      )
       .get(R) as { deletedAt: number };
     expect(tombstone.deletedAt).toBeGreaterThan(OLD);
 
@@ -422,7 +506,13 @@ describe("cross-device relation sync", () => {
           entityType: "relation",
           entityId: R,
           changeKind: "created",
-          data: { id: R, sourceNoteId: a, targetNoteId: b, relationType: "related", createdAt: OLD },
+          data: {
+            id: R,
+            sourceNoteId: a,
+            targetNoteId: b,
+            relationType: "related",
+            createdAt: OLD,
+          },
           createdAt: OLD,
         },
       ],

@@ -67,15 +67,16 @@ export async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function isInvalidDeviceToken(error: unknown) {
+export function isInvalidDeviceToken(error: unknown) {
   // Desktop requests are wrapped by RemoteProxyClient with the request method
   // and path (for example: "Invalid device token（GET /api/v1/sync/changes…）").
-  // Treat all authentication failures as re-authentication candidates instead
-  // of requiring the unwrapped server message to match exactly.
-  return (
-    error instanceof Error &&
-    /invalid device token|unauthorized|\bHTTP (?:401|403)\b/i.test(error.message)
-  );
+  // A 403 can be returned by a proxy or WAF and must never be mistaken for a
+  // stale device credential.  Preserve the explicit server wording as a
+  // backwards-compatible fallback for older IPC transports that did not
+  // expose statusCode.
+  if (!(error instanceof Error)) return false;
+  const statusCode = (error as Error & { statusCode?: unknown }).statusCode;
+  return statusCode === 401 || /invalid device token/i.test(error.message);
 }
 
 function formatSyncBytes(bytes: number) {

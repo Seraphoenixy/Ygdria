@@ -23,12 +23,7 @@ import {
   type NoteContent,
   type SearchResult,
 } from "@ygdria/shared";
-import {
-  readCodeLanguage,
-  readTags,
-  codeProperties,
-  tagsProperties,
-} from "./properties-utils.js";
+import { readCodeLanguage, readTags, codeProperties, tagsProperties } from "./properties-utils.js";
 type Store = ReturnType<typeof createDatabase>;
 // `updated_at` is used as a last-writer-wins version by sync. Date.now() alone
 // can return the same value for consecutive mutations, causing a causally later
@@ -119,10 +114,19 @@ export class ConflictError extends Error {
 }
 export class NoteServiceBase {
   constructor(protected store: Store) {}
-  create(input: { title: string; parentPlacementId?: string | null; type?: "text" | "code"; content?: NoteContent; code?: string; tags?: string[] }) {
+  create(input: {
+    title: string;
+    parentPlacementId?: string | null;
+    type?: "text" | "code";
+    content?: NoteContent;
+    code?: string;
+    tags?: string[];
+    noteId?: string;
+    placementId?: string;
+  }) {
     const t = now(),
-      noteId = id(),
-      placementId = id(),
+      noteId = input.noteId ?? id(),
+      placementId = input.placementId ?? id(),
       noteType = input.type ?? "text",
       document = input.content ?? emptyDocument,
       code = input.code ?? "",
@@ -131,9 +135,10 @@ export class NoteServiceBase {
     this.assertCanUseAsNormalParent(parentPlacementId);
     const rawContent = noteType === "code" ? code : JSON.stringify(document);
     const stored = encodeDocumentContent(rawContent);
-    const propsJson = noteType === "code"
-      ? codeProperties("plaintext", tagsProperties(input.tags))
-      : tagsProperties(input.tags);
+    const propsJson =
+      noteType === "code"
+        ? codeProperties("plaintext", tagsProperties(input.tags))
+        : tagsProperties(input.tags);
     const p = this.store.sqlite
       .prepare(
         "SELECT COALESCE(MAX(position),-1)+1 p FROM placements WHERE parent_placement_id IS ?",
@@ -208,9 +213,12 @@ export class NoteServiceBase {
       type: row.type,
       codeLanguage: row.type === "code" ? readCodeLanguage(row.properties_json) : undefined,
       tags: row.is_protected ? [] : readTags(row.properties_json),
-      content: row.type === "code"
-        ? decodeStoredContent(row.content_data, row.content_codec as ContentCodec)
-        : JSON.parse(decodeStoredContent(row.content_data, row.content_codec as ContentCodec)) as NoteContent,
+      content:
+        row.type === "code"
+          ? decodeStoredContent(row.content_data, row.content_codec as ContentCodec)
+          : (JSON.parse(
+              decodeStoredContent(row.content_data, row.content_codec as ContentCodec),
+            ) as NoteContent),
       version: row.version,
       createdAt: new Date(row.created_at).toISOString(),
       updatedAt: new Date(row.updated_at).toISOString(),
@@ -228,8 +236,11 @@ export class NoteServiceBase {
   archiveNote(noteId: string, archived: boolean) {
     this.assertNotSystemNote(noteId);
     const row = this.store.sqlite
-      .prepare("SELECT deleted_at deletedAt,archived_at archivedAt,is_protected isProtected FROM notes WHERE id=?")
-      .get(noteId) as { deletedAt: number | null; archivedAt: number | null; isProtected: number } | undefined;
+      .prepare(
+        "SELECT deleted_at deletedAt,archived_at archivedAt,is_protected isProtected FROM notes WHERE id=?",
+      )
+      .get(noteId) as
+      { deletedAt: number | null; archivedAt: number | null; isProtected: number } | undefined;
     if (!row) throw new NotFoundError();
     if (row.deletedAt !== null)
       throw new ConflictError("Deleted notes must be restored before changing archive status");
@@ -259,8 +270,11 @@ export class NoteServiceBase {
         if (id === SYSTEM_ROOT_NOTE_ID || id === SYSTEM_TRASH_NOTE_ID || id === CALENDAR_NOTE_ID)
           continue;
         const row = this.store.sqlite
-          .prepare("SELECT deleted_at deletedAt,archived_at archivedAt,is_protected isProtected FROM notes WHERE id=?")
-          .get(id) as { deletedAt: number | null; archivedAt: number | null; isProtected: number } | undefined;
+          .prepare(
+            "SELECT deleted_at deletedAt,archived_at archivedAt,is_protected isProtected FROM notes WHERE id=?",
+          )
+          .get(id) as
+          { deletedAt: number | null; archivedAt: number | null; isProtected: number } | undefined;
         if (!row || row.deletedAt !== null) continue;
         if (Boolean(row.isProtected)) continue;
         if ((row.archivedAt !== null) === archived) continue;
@@ -274,14 +288,24 @@ export class NoteServiceBase {
     })();
     return changed;
   }
-  setProtected(noteId: string, input: { protected: true; contentCiphertext: string } | { protected: false; title: string; content: NoteContent | string; propertiesJson?: string }) {
+  setProtected(
+    noteId: string,
+    input:
+      | { protected: true; contentCiphertext: string }
+      | { protected: false; title: string; content: NoteContent | string; propertiesJson?: string },
+  ) {
     this.assertNotSystemNote(noteId);
-    const row = this.store.sqlite.prepare("SELECT * FROM notes WHERE id=? AND deleted_at IS NULL").get(noteId) as NoteRow | undefined;
+    const row = this.store.sqlite
+      .prepare("SELECT * FROM notes WHERE id=? AND deleted_at IS NULL")
+      .get(noteId) as NoteRow | undefined;
     if (!row) throw new NotFoundError();
     if (Boolean(row.is_protected) === input.protected) return this.get(noteId)!;
     if (input.protected && row.type !== "code") {
-      const document = JSON.parse(decodeStoredContent(row.content_data, row.content_codec as ContentCodec)) as NoteContent;
-      if (attachmentIds(document).size > 0) throw new ConflictError("Remove attachments before protecting this note");
+      const document = JSON.parse(
+        decodeStoredContent(row.content_data, row.content_codec as ContentCodec),
+      ) as NoteContent;
+      if (attachmentIds(document).size > 0)
+        throw new ConflictError("Remove attachments before protecting this note");
     }
     // Enable secure deletion before removing the old FTS and revision rows.
     this.store.sqlite.pragma("secure_delete=ON");
@@ -290,17 +314,56 @@ export class NoteServiceBase {
         const { contentCiphertext } = input as { protected: true; contentCiphertext: string };
         const stored = encodeCiphertextContent(contentCiphertext);
         this.deleteIndex(noteId);
-        this.store.sqlite.prepare("UPDATE notes SET title='',content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text='',properties_json='{}',is_protected=1,version=version+1,updated_at=? WHERE id=?").run(stored.data, stored.codec, stored.size, createHash("sha256").update(contentCiphertext).digest("hex"), now(), noteId);
-        const revisionIds = this.store.sqlite.prepare("SELECT id FROM revisions WHERE note_id=?").all(noteId) as Array<{ id: string }>;
+        this.store.sqlite
+          .prepare(
+            "UPDATE notes SET title='',content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text='',properties_json='{}',is_protected=1,version=version+1,updated_at=? WHERE id=?",
+          )
+          .run(
+            stored.data,
+            stored.codec,
+            stored.size,
+            createHash("sha256").update(contentCiphertext).digest("hex"),
+            now(),
+            noteId,
+          );
+        const revisionIds = this.store.sqlite
+          .prepare("SELECT id FROM revisions WHERE note_id=?")
+          .all(noteId) as Array<{ id: string }>;
         this.store.sqlite.prepare("DELETE FROM revisions WHERE note_id=?").run(noteId);
         recordChange(this.store.sqlite, "note", noteId, "updated");
-        recordChanges(this.store.sqlite, revisionIds.map(({ id }) => ({ entityType: "revision", entityId: id, changeKind: "deleted" as const })));
+        recordChanges(
+          this.store.sqlite,
+          revisionIds.map(({ id }) => ({
+            entityType: "revision",
+            entityId: id,
+            changeKind: "deleted" as const,
+          })),
+        );
       } else {
-        const { title, content, propertiesJson } = input as { protected: false; title: string; content: NoteContent | string; propertiesJson?: string };
+        const { title, content, propertiesJson } = input as {
+          protected: false;
+          title: string;
+          content: NoteContent | string;
+          propertiesJson?: string;
+        };
         const rawContent = row.type === "code" ? String(content) : JSON.stringify(content);
         const stored = encodeDocumentContent(rawContent);
         const indexedText = row.type === "code" ? rawContent : plainText(content as NoteContent);
-        this.store.sqlite.prepare("UPDATE notes SET title=?,content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text=?,properties_json=?,is_protected=0,version=version+1,updated_at=? WHERE id=?").run(title, stored.data, stored.codec, stored.size, rawContentHash(rawContent), indexedText, propertiesJson ?? "{}", now(), noteId);
+        this.store.sqlite
+          .prepare(
+            "UPDATE notes SET title=?,content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text=?,properties_json=?,is_protected=0,version=version+1,updated_at=? WHERE id=?",
+          )
+          .run(
+            title,
+            stored.data,
+            stored.codec,
+            stored.size,
+            rawContentHash(rawContent),
+            indexedText,
+            propertiesJson ?? "{}",
+            now(),
+            noteId,
+          );
         this.index(noteId, title);
         recordChange(this.store.sqlite, "note", noteId, "updated");
       }
@@ -325,7 +388,18 @@ export class NoteServiceBase {
   }
   update(
     noteId: string,
-    input: { title?: string; type?: "text" | "code"; content?: NoteContent; code?: string; codeLanguage?: string; tags?: string[]; contentCiphertext?: string; revisionIntervalMs?: number; createRevision?: boolean; expectedVersion: number },
+    input: {
+      title?: string;
+      type?: "text" | "code";
+      content?: NoteContent;
+      code?: string;
+      codeLanguage?: string;
+      tags?: string[];
+      contentCiphertext?: string;
+      revisionIntervalMs?: number;
+      createRevision?: boolean;
+      expectedVersion: number;
+    },
   ) {
     this.assertNotSystemNote(noteId);
     const old = this.get(noteId);
@@ -355,28 +429,77 @@ export class NoteServiceBase {
     if (input.type && input.type !== old.type) {
       const nextType = input.type;
       const title = input.title ?? old.title;
-      const code = old.type === "code"
-        ? (typeof old.content === "string" ? old.content : "")
-        : plainText(old.content as NoteContent);
-      const document: NoteContent = old.type === "code"
-        ? { type: "doc", content: [{ type: "codeBlock", attrs: { language: old.codeLanguage ?? "plaintext" }, content: code ? [{ type: "text", text: code }] : [] }] }
-        : (old.content as NoteContent);
+      const code =
+        old.type === "code"
+          ? typeof old.content === "string"
+            ? old.content
+            : ""
+          : plainText(old.content as NoteContent);
+      const document: NoteContent =
+        old.type === "code"
+          ? {
+              type: "doc",
+              content: [
+                {
+                  type: "codeBlock",
+                  attrs: { language: old.codeLanguage ?? "plaintext" },
+                  content: code ? [{ type: "text", text: code }] : [],
+                },
+              ],
+            }
+          : (old.content as NoteContent);
       this.store.sqlite.transaction(() => {
         this.deleteIndex(noteId);
         const previous = old.type === "code" ? code : JSON.stringify(old.content);
         const previousStored = encodeDocumentContent(previous);
         const revisionId = id();
-        this.store.sqlite.prepare("INSERT INTO revisions (id,note_id,content_data,content_codec,content_hash,created_at) VALUES (?,?,?,?,?,?)")
-          .run(revisionId, noteId, previousStored.data, previousStored.codec, old.type === "code" ? rawContentHash(previous) : contentHash(old.content as NoteContent), t);
+        this.store.sqlite
+          .prepare(
+            "INSERT INTO revisions (id,note_id,content_data,content_codec,content_hash,created_at) VALUES (?,?,?,?,?,?)",
+          )
+          .run(
+            revisionId,
+            noteId,
+            previousStored.data,
+            previousStored.codec,
+            old.type === "code"
+              ? rawContentHash(previous)
+              : contentHash(old.content as NoteContent),
+            t,
+          );
         recordChange(this.store.sqlite, "revision", revisionId, "created");
         const rawContent = nextType === "code" ? code : JSON.stringify(document);
         const stored = encodeDocumentContent(rawContent);
-        const oldPropsJson = (this.store.sqlite.prepare("SELECT properties_json FROM notes WHERE id=?").get(noteId) as { properties_json: string } | undefined)?.properties_json ?? "{}";
-        const nextPropsJson = nextType === "code"
-          ? codeProperties(input.codeLanguage ?? old.codeLanguage ?? "plaintext", tagsProperties(input.tags, oldPropsJson))
-          : tagsProperties(input.tags, oldPropsJson);
-        const updated = this.store.sqlite.prepare("UPDATE notes SET title=?,type=?,content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text=?,properties_json=?,version=version+1,updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL")
-          .run(title, nextType, stored.data, stored.codec, stored.size, nextType === "code" ? rawContentHash(rawContent) : contentHash(document), nextType === "code" ? code : plainText(document), nextPropsJson, t, noteId, input.expectedVersion);
+        const oldPropsJson =
+          (
+            this.store.sqlite
+              .prepare("SELECT properties_json FROM notes WHERE id=?")
+              .get(noteId) as { properties_json: string } | undefined
+          )?.properties_json ?? "{}";
+        const nextPropsJson =
+          nextType === "code"
+            ? codeProperties(
+                input.codeLanguage ?? old.codeLanguage ?? "plaintext",
+                tagsProperties(input.tags, oldPropsJson),
+              )
+            : tagsProperties(input.tags, oldPropsJson);
+        const updated = this.store.sqlite
+          .prepare(
+            "UPDATE notes SET title=?,type=?,content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text=?,properties_json=?,version=version+1,updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL",
+          )
+          .run(
+            title,
+            nextType,
+            stored.data,
+            stored.codec,
+            stored.size,
+            nextType === "code" ? rawContentHash(rawContent) : contentHash(document),
+            nextType === "code" ? code : plainText(document),
+            nextPropsJson,
+            t,
+            noteId,
+            input.expectedVersion,
+          );
         if (!updated.changes) throw new ConflictError();
         this.index(noteId, title);
         recordChange(this.store.sqlite, "note", noteId, "updated");
@@ -391,31 +514,67 @@ export class NoteServiceBase {
       title = input.title ?? old.title;
     if (old.type === "code") {
       const code = input.code ?? (typeof old.content === "string" ? old.content : "");
-      const contentChanged = input.code !== undefined && rawContentHash(code) !== rawContentHash(typeof old.content === "string" ? old.content : "");
+      const contentChanged =
+        input.code !== undefined &&
+        rawContentHash(code) !== rawContentHash(typeof old.content === "string" ? old.content : "");
       const titleChanged = title !== old.title;
       const language = input.codeLanguage ?? old.codeLanguage ?? "plaintext";
       const languageChanged = language !== (old.codeLanguage ?? "plaintext");
       const tagsChanged = input.tags !== undefined;
       if (!contentChanged && !titleChanged && !languageChanged && !tagsChanged) return old;
-      const oldRow = this.store.sqlite.prepare("SELECT properties_json FROM notes WHERE id=?").get(noteId) as { properties_json: string } | undefined;
+      const oldRow = this.store.sqlite
+        .prepare("SELECT properties_json FROM notes WHERE id=?")
+        .get(noteId) as { properties_json: string } | undefined;
       const oldPropsJson = oldRow?.properties_json ?? "{}";
       this.store.sqlite.transaction(() => {
         this.deleteIndex(noteId);
         const newPropsJson = codeProperties(language, tagsProperties(input.tags, oldPropsJson));
         if (contentChanged) {
-          const previous = encodeDocumentContent(typeof old.content === "string" ? old.content : "");
-          if (input.createRevision !== false && this.shouldCreateRevision(noteId, t, input.revisionIntervalMs)) {
+          const previous = encodeDocumentContent(
+            typeof old.content === "string" ? old.content : "",
+          );
+          if (
+            input.createRevision !== false &&
+            this.shouldCreateRevision(noteId, t, input.revisionIntervalMs)
+          ) {
             const revisionId = id();
-            this.store.sqlite.prepare("INSERT INTO revisions (id,note_id,content_data,content_codec,content_hash,created_at) VALUES (?,?,?,?,?,?)")
-              .run(revisionId, noteId, previous.data, previous.codec, rawContentHash(typeof old.content === "string" ? old.content : ""), t);
+            this.store.sqlite
+              .prepare(
+                "INSERT INTO revisions (id,note_id,content_data,content_codec,content_hash,created_at) VALUES (?,?,?,?,?,?)",
+              )
+              .run(
+                revisionId,
+                noteId,
+                previous.data,
+                previous.codec,
+                rawContentHash(typeof old.content === "string" ? old.content : ""),
+                t,
+              );
             recordChange(this.store.sqlite, "revision", revisionId, "created");
           }
           const stored = encodeDocumentContent(code);
-          const updated = this.store.sqlite.prepare("UPDATE notes SET title=?,content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text=?,properties_json=?,version=version+1,updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL")
-            .run(title, stored.data, stored.codec, stored.size, rawContentHash(code), code, newPropsJson, t, noteId, input.expectedVersion);
+          const updated = this.store.sqlite
+            .prepare(
+              "UPDATE notes SET title=?,content_data=?,content_codec=?,content_size=?,content_hash=?,plain_text=?,properties_json=?,version=version+1,updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL",
+            )
+            .run(
+              title,
+              stored.data,
+              stored.codec,
+              stored.size,
+              rawContentHash(code),
+              code,
+              newPropsJson,
+              t,
+              noteId,
+              input.expectedVersion,
+            );
           if (!updated.changes) throw new ConflictError();
         } else {
-          const updated = this.store.sqlite.prepare("UPDATE notes SET title=?,properties_json=?,version=version+1,updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL")
+          const updated = this.store.sqlite
+            .prepare(
+              "UPDATE notes SET title=?,properties_json=?,version=version+1,updated_at=? WHERE id=? AND version=? AND deleted_at IS NULL",
+            )
             .run(title, newPropsJson, t, noteId, input.expectedVersion);
           if (!updated.changes) throw new ConflictError();
         }
@@ -433,15 +592,22 @@ export class NoteServiceBase {
       this.deleteIndex(noteId);
       if (contentChanged) {
         const previous = encodeDocumentContent(JSON.stringify(old.content));
-        if (input.createRevision !== false && this.shouldCreateRevision(noteId, t, input.revisionIntervalMs)) {
+        if (
+          input.createRevision !== false &&
+          this.shouldCreateRevision(noteId, t, input.revisionIntervalMs)
+        ) {
           const revisionId = id();
           this.store.sqlite
-            .prepare("INSERT INTO revisions (id,note_id,content_data,content_codec,content_hash,created_at) VALUES (?,?,?,?,?,?)")
+            .prepare(
+              "INSERT INTO revisions (id,note_id,content_data,content_codec,content_hash,created_at) VALUES (?,?,?,?,?,?)",
+            )
             .run(revisionId, noteId, previous.data, previous.codec, contentHash(oldDocument), t);
           recordChange(this.store.sqlite, "revision", revisionId, "created");
         }
         const stored = encodeDocumentContent(JSON.stringify(document));
-        const oldRow = this.store.sqlite.prepare("SELECT properties_json FROM notes WHERE id=?").get(noteId) as { properties_json: string } | undefined;
+        const oldRow = this.store.sqlite
+          .prepare("SELECT properties_json FROM notes WHERE id=?")
+          .get(noteId) as { properties_json: string } | undefined;
         const oldPropsJson = oldRow?.properties_json ?? "{}";
         const newPropsJson = tagsProperties(input.tags, oldPropsJson);
         const updated = this.store.sqlite
@@ -462,7 +628,9 @@ export class NoteServiceBase {
           );
         if (!updated.changes) throw new ConflictError();
       } else {
-        const oldRow = this.store.sqlite.prepare("SELECT properties_json FROM notes WHERE id=?").get(noteId) as { properties_json: string } | undefined;
+        const oldRow = this.store.sqlite
+          .prepare("SELECT properties_json FROM notes WHERE id=?")
+          .get(noteId) as { properties_json: string } | undefined;
         const oldPropsJson = oldRow?.properties_json ?? "{}";
         const newPropsJson = tagsProperties(input.tags, oldPropsJson);
         const updated = this.store.sqlite
@@ -480,25 +648,43 @@ export class NoteServiceBase {
   }
   protected index(noteId: string, title: string) {
     this.store.sqlite
-      .prepare("INSERT INTO notes_fts(rowid,title,plain_text,properties_json) SELECT rowid,title,plain_text,properties_json FROM notes WHERE id=?")
+      .prepare(
+        "INSERT INTO notes_fts(rowid,title,plain_text,properties_json) SELECT rowid,title,plain_text,properties_json FROM notes WHERE id=?",
+      )
       .run(noteId);
   }
   private releaseRemovedAttachments(previous: NoteContent, next: NoteContent, timestamp: number) {
-    const removed = [...attachmentIds(previous)].filter((attachmentId) => !attachmentIds(next).has(attachmentId));
+    const removed = [...attachmentIds(previous)].filter(
+      (attachmentId) => !attachmentIds(next).has(attachmentId),
+    );
     if (removed.length === 0) return;
     const referenced = new Set<string>();
-    const rows = this.store.sqlite.prepare("SELECT content_data contentData,content_codec contentCodec FROM notes WHERE is_protected=0 AND type<>'code'").all() as Array<{ contentData: Buffer; contentCodec: ContentCodec }>;
+    const rows = this.store.sqlite
+      .prepare(
+        "SELECT content_data contentData,content_codec contentCodec FROM notes WHERE is_protected=0 AND type<>'code'",
+      )
+      .all() as Array<{ contentData: Buffer; contentCodec: ContentCodec }>;
     for (const row of rows) {
       try {
-        for (const id of attachmentIds(JSON.parse(decodeStoredContent(row.contentData, row.contentCodec)) as NoteContent)) referenced.add(id);
-      } catch { return; /* invalid documents are handled by doctor; never infer deletion from them */ }
+        for (const id of attachmentIds(
+          JSON.parse(decodeStoredContent(row.contentData, row.contentCodec)) as NoteContent,
+        ))
+          referenced.add(id);
+      } catch {
+        return; /* invalid documents are handled by doctor; never infer deletion from them */
+      }
     }
     for (const attachmentId of removed) {
       if (referenced.has(attachmentId)) continue;
-      const attachment = this.store.sqlite.prepare("SELECT storage_key storageKey FROM attachments WHERE id=?").get(attachmentId) as { storageKey: string } | undefined;
+      const attachment = this.store.sqlite
+        .prepare("SELECT storage_key storageKey FROM attachments WHERE id=?")
+        .get(attachmentId) as { storageKey: string } | undefined;
       if (!attachment) continue;
       this.store.sqlite.prepare("DELETE FROM attachments WHERE id=?").run(attachmentId);
-      this.store.sqlite.prepare("INSERT OR IGNORE INTO storage_cleanup_jobs(id,storage_key,reason,attempts,created_at) VALUES (?,?,?,?,?)")
+      this.store.sqlite
+        .prepare(
+          "INSERT OR IGNORE INTO storage_cleanup_jobs(id,storage_key,reason,attempts,created_at) VALUES (?,?,?,?,?)",
+        )
         .run(id(), attachment.storageKey, "content-reference-removed", 0, timestamp);
       recordChange(this.store.sqlite, "attachment", attachmentId, "deleted");
     }
@@ -508,7 +694,11 @@ export class NoteServiceBase {
       throw new ConflictError("System notes are protected");
   }
   protected assertNotSystemPlacement(placementId: string) {
-    if (placementId === SYSTEM_ROOT_PLACEMENT_ID || placementId === SYSTEM_TRASH_PLACEMENT_ID || placementId === CALENDAR_PLACEMENT_ID)
+    if (
+      placementId === SYSTEM_ROOT_PLACEMENT_ID ||
+      placementId === SYSTEM_TRASH_PLACEMENT_ID ||
+      placementId === CALENDAR_PLACEMENT_ID
+    )
       throw new ConflictError("System placements are protected");
   }
   protected assertCanUseAsNormalParent(placementId: string) {
@@ -615,8 +805,12 @@ export class NoteServiceBase {
   }
   protected rebuildSearchIndex(noteId: string) {
     const note = this.store.sqlite
-      .prepare("SELECT title,content_data contentData,content_codec contentCodec,is_protected isProtected FROM notes WHERE id=? AND deleted_at IS NULL")
-      .get(noteId) as { title: string; contentData: Buffer; contentCodec: ContentCodec; isProtected: number } | undefined;
+      .prepare(
+        "SELECT title,content_data contentData,content_codec contentCodec,is_protected isProtected FROM notes WHERE id=? AND deleted_at IS NULL",
+      )
+      .get(noteId) as
+      | { title: string; contentData: Buffer; contentCodec: ContentCodec; isProtected: number }
+      | undefined;
     if (!note) return;
     if (note.isProtected) return;
     this.index(noteId, note.title);
@@ -624,7 +818,9 @@ export class NoteServiceBase {
   private shouldCreateRevision(noteId: string, timestamp: number, intervalMs?: number) {
     if (!intervalMs) return true;
     const latest = this.store.sqlite
-      .prepare("SELECT created_at createdAt FROM revisions WHERE note_id=? ORDER BY created_at DESC LIMIT 1")
+      .prepare(
+        "SELECT created_at createdAt FROM revisions WHERE note_id=? ORDER BY created_at DESC LIMIT 1",
+      )
       .get(noteId) as { createdAt: number } | undefined;
     return !latest || timestamp - latest.createdAt >= intervalMs;
   }

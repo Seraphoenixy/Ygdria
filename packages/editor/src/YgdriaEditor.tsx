@@ -20,27 +20,31 @@ import { markdownToTiptap, tiptapToMarkdown } from "./markdown.js";
 import { YgdriaCodeBlock } from "./CodeBlock.js";
 import { SearchReplace, SearchReplaceBar } from "./SearchReplaceBar.js";
 import { Redacted } from "./Redacted.js";
+import { selectTable, selectTableColumn, selectTableRow, TABLE_ACTION_LABELS } from "./table-actions.js";
 import katex from "katex";
 // @ts-ignore
 import "katex/dist/katex.min.css";
 
 type EditorContextMenu = { x: number; y: number; hasSelection: boolean; isInTable: boolean } | null;
 
-const ClipboardShortcuts = Extension.create({
-  name: "clipboardShortcuts",
-  addKeyboardShortcuts() {
-    return {
-      "Mod-Shift-v": () => {
-        navigator.clipboard.readText().then((text) => {
-          this.editor.commands.insertContent(text);
-        }).catch(() => {
-          // Clipboard API may reject in insecure contexts
-        });
-        return true;
-      },
-    };
-  },
-});
+function createClipboardShortcuts(readText?: () => Promise<string>) {
+  const doReadText = readText ?? (() => navigator.clipboard.readText());
+  return Extension.create({
+    name: "clipboardShortcuts",
+    addKeyboardShortcuts() {
+      return {
+        "Mod-Shift-v": () => {
+          doReadText().then((text) => {
+            this.editor.commands.insertContent(text);
+          }).catch(() => {
+            // Clipboard API may reject in insecure contexts
+          });
+          return true;
+        },
+      };
+    },
+  });
+}
 
 const Indent = Extension.create({
   name: "indent",
@@ -60,8 +64,23 @@ const Indent = Extension.create({
   },
   addKeyboardShortcuts() {
     return {
-      Tab: () => (this.editor.commands as any).sinkListItem("listItem"),
-      "Shift-Tab": () => (this.editor.commands as any).liftListItem("listItem"),
+      Tab: () => {
+        // Inside a table, mirror the Table extension's shortcut: move to
+        // the next cell, appending a row at the end. Indent's own keymap may
+        // run first depending on plugin order, so delegate explicitly.
+        if (this.editor.isActive("table")) {
+          if ((this.editor.commands as any).goToNextCell()) return true;
+          if (!this.editor.can().addRowAfter()) return false;
+          return this.editor.chain().addRowAfter().goToNextCell().run();
+        }
+        return (this.editor.commands as any).sinkListItem("listItem");
+      },
+      "Shift-Tab": () => {
+        if (this.editor.isActive("table")) {
+          return (this.editor.commands as any).goToPreviousCell();
+        }
+        return (this.editor.commands as any).liftListItem("listItem");
+      },
     };
   },
 });
@@ -182,6 +201,9 @@ export function YgdriaEditor({
   markdownView = false,
   onUploadError,
   documentId,
+  readClipboardText,
+  readClipboardHtml,
+  writeClipboardText,
 }: {
   content: NoteContent;
   onSave?: (content: NoteContent) => void;
@@ -196,6 +218,12 @@ export function YgdriaEditor({
   onUploadError?: (message: string) => void;
   /** Stable owning-note identity; protects a reused editor from stale content. */
   documentId?: string;
+  /** Optional clipboard read function for plain text (defaults to navigator.clipboard.readText). */
+  readClipboardText?: () => Promise<string>;
+  /** Optional clipboard read function for HTML (defaults to navigator.clipboard.read). */
+  readClipboardHtml?: () => Promise<string | null>;
+  /** Optional clipboard write function (defaults to navigator.clipboard.writeText). */
+  writeClipboardText?: (text: string) => Promise<void>;
 }) {
   const [contextMenu, setContextMenu] = useState<EditorContextMenu>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -233,7 +261,7 @@ export function YgdriaEditor({
       AuthenticatedImage,
       MathInline,
       MathBlock,
-      ClipboardShortcuts,
+      createClipboardShortcuts(readClipboardText),
       Indent,
       NoteReference,
       Redacted,
@@ -311,7 +339,7 @@ export function YgdriaEditor({
           const isInTable = editor?.isActive("table") ?? false;
           setContextMenu({
             x: Math.max(8, Math.min(mouseEvent.clientX, window.innerWidth - 316)),
-            y: Math.max(8, Math.min(mouseEvent.clientY, window.innerHeight - (isInTable ? 420 : 230))),
+            y: Math.max(8, Math.min(mouseEvent.clientY, window.innerHeight - (isInTable ? 560 : 230))),
             hasSelection,
             isInTable,
           });
@@ -326,6 +354,12 @@ export function YgdriaEditor({
     editor?.setEditable(!readOnly);
     if (readOnly) setContextMenu(null);
   }, [editor, readOnly]);
+  useEffect(() => {
+    const storage = editor?.storage as unknown as Record<string, unknown> | undefined;
+    if (storage?.codeBlock) {
+      (storage.codeBlock as Record<string, unknown>).writeClipboardText = writeClipboardText;
+    }
+  }, [editor, writeClipboardText]);
   useEffect(() => {
     if (!editor) return;
     const hideOnOutsidePointer = (event: PointerEvent) => {
@@ -453,20 +487,14 @@ export function YgdriaEditor({
     if (markdownInitializedRef.current) commitMarkdown();
   }, []);
 
-  const labels =
-    locale === "zh-CN"
+  const labels = {
+    ...(locale === "zh-CN"
       ? {
           cut: "剪切",
           copy: "复制",
           markdown: "复制为 Markdown",
           paste: "粘贴",
           plain: "以纯文本粘贴",
-          addRowBefore: "在上方插入行",
-          addRowAfter: "在下方插入行",
-          deleteRow: "删除当前行",
-          addColumnBefore: "在左侧插入列",
-          addColumnAfter: "在右侧插入列",
-          deleteColumn: "删除当前列",
         }
       : {
           cut: "Cut",
@@ -474,13 +502,9 @@ export function YgdriaEditor({
           markdown: "Copy as Markdown",
           paste: "Paste",
           plain: "Paste as plain text",
-          addRowBefore: "Insert row above",
-          addRowAfter: "Insert row below",
-          deleteRow: "Delete row",
-          addColumnBefore: "Insert column left",
-          addColumnAfter: "Insert column right",
-          deleteColumn: "Delete column",
-        };
+        }),
+    ...TABLE_ACTION_LABELS[locale],
+  };
   const closeMenu = () => setContextMenu(null);
   const selectedMarkdown = () => {
     if (!editor || editor.state.selection.empty) return "";
@@ -493,23 +517,36 @@ export function YgdriaEditor({
     document.execCommand(command);
     closeMenu();
   };
+  const doReadText = readClipboardText ?? (() => navigator.clipboard.readText());
+  const doReadHtml = readClipboardHtml ?? (async () => {
+    if (!navigator.clipboard?.read) return null;
+    const [item] = await navigator.clipboard.read();
+    if (item?.types.includes("text/html")) {
+      return (await item.getType("text/html")).text();
+    }
+    return null;
+  });
+  const doWriteText = writeClipboardText ?? ((text: string) => navigator.clipboard.writeText(text));
   const paste = async (plain: boolean) => {
     if (!editor) return;
     try {
-      if (!plain && navigator.clipboard?.read) {
-        const [item] = await navigator.clipboard.read();
-        if (item?.types.includes("text/html")) {
-          const html = await (await item.getType("text/html")).text();
+      if (!plain) {
+        let html: string | null = null;
+        try {
+          html = await doReadHtml();
+        } catch {
+          // readHtml failed; fall back to readText below
+        }
+        if (html) {
           editor.commands.insertContent(normalizePastedHtml(html));
           closeMenu();
           return;
         }
       }
-      const text = await navigator.clipboard.readText();
+      const text = await doReadText();
       editor.commands.insertContent(text);
     } catch {
-      // Browsers may reject clipboard reads outside a secure, permitted context.
-      // The native keyboard shortcut remains available in that case.
+      onUploadErrorRef.current?.("Clipboard read failed");
     }
     closeMenu();
   };
@@ -571,7 +608,7 @@ export function YgdriaEditor({
             disabled={!contextMenu.hasSelection}
             onClick={async () => {
               const markdown = selectedMarkdown();
-              if (markdown) await navigator.clipboard?.writeText(markdown);
+              if (markdown) await doWriteText(markdown);
               closeMenu();
             }}
           />
@@ -621,6 +658,22 @@ export function YgdriaEditor({
                 icon="🗑"
                 label={labels.deleteColumn}
                 onClick={() => { editor?.chain().focus().deleteColumn().run(); closeMenu(); }}
+              />
+              <div className="editor-context-separator" />
+              <EditorMenuButton
+                icon="▭"
+                label={labels.selectRow}
+                onClick={() => { selectTableRow(editor); closeMenu(); }}
+              />
+              <EditorMenuButton
+                icon="▯"
+                label={labels.selectColumn}
+                onClick={() => { selectTableColumn(editor); closeMenu(); }}
+              />
+              <EditorMenuButton
+                icon="⊞"
+                label={labels.selectTable}
+                onClick={() => { selectTable(editor); closeMenu(); }}
               />
             </>
           )}

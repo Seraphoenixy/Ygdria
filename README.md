@@ -167,7 +167,7 @@ corepack pnpm --filter @ygdria/web build:electron
 corepack pnpm --filter @ygdria/desktop dist:win
 ```
 
-安装版把 Web 界面与本地 API 一并打包；笔记数据库保存在当前用户的应用数据目录，而非安装目录。
+安装版把 Web 界面与本地 API 一并打包；笔记数据库保存在当前用户的应用数据目录，而非安装目录。Windows 客户端一次只允许运行一个实例：再次启动会唤醒已有窗口。它固定使用 `127.0.0.1:4318` 供本地界面与 ETAPI 使用；若该端口已被占用，应用会提示关闭占用程序后重试，不会改用其他端口。
 
 ### 方式四：Linux 独立服务包
 
@@ -313,8 +313,8 @@ corepack pnpm ygdria restore <dir> [restore-root]
 corepack pnpm typecheck   # 仅 TypeScript 类型检查（不生成产物）
 corepack pnpm test        # 运行测试（Vitest）
 corepack pnpm build       # 构建所有工作区
-corepack pnpm lint        # ESLint（apps/web/src）
-corepack pnpm check-i18n  # 校验中英文案完整性
+corepack pnpm lint        # 校验中英文案完整性（= check-i18n，扫描 apps/web/src）
+corepack pnpm check-i18n  # 校验中英文案完整性（同 lint）
 ```
 
 界面文案支持简体中文（`zh-CN`）与英文（`en`），由 `apps/web/src/lib/i18n.ts` 管理，根据浏览器语言自动检测。

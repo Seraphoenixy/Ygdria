@@ -193,7 +193,7 @@ function markdownTokenToNodes(token: any, warnings: string[]): any[] {
       // trailing line break becomes a visually empty final line in Tiptap's
       // code-block editor. Normalize only the final line breaks; whitespace
       // and blank lines within the source remain untouched.
-      const code = String(token.text ?? "").replace(/(?:\r?\n)+$/, "");
+      const code = String(token.text ?? "").replace(/(?:\r\n|\r|\n)+$/, "");
       return [{ type: "codeBlock", attrs: { language: token.lang || null }, content: code ? [{ type: "text", text: code }] : [] }];
     }
     case "blockquote": return [{ type: "blockquote", content: (token.tokens ?? []).flatMap((item: any) => markdownTokenToNodes(item, warnings)) }];

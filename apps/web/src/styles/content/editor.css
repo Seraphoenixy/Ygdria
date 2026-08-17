@@ -112,7 +112,12 @@
   outline-offset: 3px;
 }
 .ygdria-editor .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
   background: rgba(15, 108, 189, 0.08);
+  pointer-events: none;
 }
 
 /* ── Document typography ── */
@@ -478,6 +483,7 @@
   border-bottom: 1px solid var(--doc-border);
   vertical-align: middle;
   position: relative;
+  user-select: text;
 }
 .ygdria-document td > :first-child,
 .ygdria-document th > :first-child {
@@ -1010,6 +1016,46 @@
 .editor-toolbar-color-panel .editor-toolbar-color-swatches button.is-active {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
+}
+
+/* ── Table insert picker ── */
+.editor-table-picker-panel {
+  z-index: 20;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--popover-border);
+  border-radius: 10px;
+  background: var(--popover-bg);
+  box-shadow: var(--popover-shadow);
+  color: var(--popover-fg);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+.editor-table-picker-grid {
+  display: grid;
+  gap: 3px;
+}
+.editor-table-picker-grid button {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--table-border);
+  border-radius: 2px;
+  background: var(--popover-bg);
+  cursor: pointer;
+}
+.editor-table-picker-grid button:hover {
+  border-color: var(--color-accent);
+}
+.editor-table-picker-grid button.is-active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.editor-table-picker-caption {
+  color: var(--dropdown-label-fg);
+  text-align: center;
+  white-space: nowrap;
 }
 
 /* ── Link popover ── */

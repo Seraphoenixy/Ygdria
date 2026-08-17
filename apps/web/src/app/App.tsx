@@ -66,6 +66,7 @@ import { useMobileGestures } from "../hooks/useMobileGestures";
 import { applyTheme } from "../lib/theme";
 import { saveRemoteCredential, clearRemoteCredential } from "../lib/credentialStorage";
 import { isPhoneLayout, isNativePhone } from "../lib/mobileLayout";
+import { readClipboardText } from "../lib/clipboard";
 import { configureShareReceiver } from "../lib/shareReceiver";
 
 // Local development uses Vite's same-origin proxy; deployments can set VITE_API_URL.
@@ -322,7 +323,7 @@ export function App({
       return;
     }
     try {
-      const text = await navigator.clipboard.readText();
+      const text = await readClipboardText();
       if (!text || !text.trim()) {
         showToast(t(locale, "clipboardEmpty"));
         return;

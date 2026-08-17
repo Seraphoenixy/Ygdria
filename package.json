@@ -11,7 +11,7 @@
     "typecheck": "corepack pnpm -r typecheck",
     "test": "corepack pnpm -r test",
     "build": "corepack pnpm -r build",
-    "lint": "eslint apps/web/src",
+    "lint": "node scripts/check-i18n.mjs",
     "check-i18n": "node scripts/check-i18n.mjs",
     "rebuild-search-index": "corepack pnpm --filter @ygdria/database rebuild-search-index",
     "check-search-index": "corepack pnpm --filter @ygdria/database check-search-index",
@@ -19,16 +19,13 @@
     "ygdria": "corepack pnpm --filter @ygdria/database ygdria"
   },
   "devDependencies": {
-    "@eslint/js": "^9.30.0",
     "@types/node": "^24.0.0",
-    "esbuild": "0.25.9",
-    "eslint": "^9.30.0",
-    "globals": "^15.0.0",
+    "esbuild": "0.28.0",
     "postject": "1.0.0-alpha.6",
     "prettier": "^3.6.2",
     "typescript": "^5.8.3",
-    "typescript-eslint": "^8.0.0",
-    "vitest": "^3.2.4"
+    "vite": "8.1.0",
+    "vitest": "^4.1.0"
   },
   "pnpm": {
     "patchedDependencies": {

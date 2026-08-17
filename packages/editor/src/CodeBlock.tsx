@@ -183,7 +183,15 @@ function CodeBlockNodeView({ node, updateAttributes, editor }: NodeViewProps) {
   }, [code, editable]);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(code);
+      const storage = editor.storage as unknown as Record<string, unknown>;
+      const writeFn = storage.codeBlock
+        ? (storage.codeBlock as Record<string, unknown>).writeClipboardText as ((text: string) => Promise<void>) | undefined
+        : undefined;
+      if (writeFn) {
+        await writeFn(code);
+      } else {
+        await navigator.clipboard.writeText(code);
+      }
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
@@ -218,6 +226,9 @@ function CodeBlockNodeView({ node, updateAttributes, editor }: NodeViewProps) {
 }
 
 export const YgdriaCodeBlock = CodeBlockLowlight.extend({
+  addStorage() {
+    return { writeClipboardText: undefined as ((text: string) => Promise<void>) | undefined };
+  },
   addNodeView() { return ReactNodeViewRenderer(CodeBlockNodeView); },
   addProseMirrorPlugins() { return [debouncedHighlightPlugin()]; },
 }).configure({ lowlight: editorLowlight, defaultLanguage: "plaintext", enableTabIndentation: true, tabSize: 4 });

@@ -81,6 +81,12 @@ describe("Markdown conversion", () => {
 
     expect(codeBlock?.content?.[0]?.text).toBe("const value = 1;");
   });
+  it("removes trailing blank lines from CRLF clipboard code blocks", () => {
+    const document = markdownToTiptap("```typescript\r\nconst value = 1;\r\n\r\n```").document;
+    const codeBlock = document.content?.find((node: any) => node.type === "codeBlock") as any;
+
+    expect(codeBlock?.content?.[0]?.text).toBe("const value = 1;");
+  });
   it("appends imported Markdown without replacing the existing document", () => {
     const existing = markdownToTiptap("# Existing\n\nKeep this paragraph.").document;
     const imported = markdownToTiptap("## Imported\n\nAdd this paragraph.").document;

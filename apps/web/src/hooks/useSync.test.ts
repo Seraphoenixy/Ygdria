@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { mapWithConcurrency, protectedSessionSyncAction, shouldAutoSync, type AutoSyncOptions } from "./useSync.js";
+import {
+  isInvalidDeviceToken,
+  mapWithConcurrency,
+  protectedSessionSyncAction,
+  shouldAutoSync,
+  type AutoSyncOptions,
+} from "./useSync.js";
 
 function base(): AutoSyncOptions {
   return {
@@ -113,6 +119,19 @@ describe("mapWithConcurrency", () => {
 
     expect(peak).toBe(2);
     expect(result).toEqual([2, 4, 6, 8, 10]);
+  });
+});
+
+describe("isInvalidDeviceToken", () => {
+  it("requires re-authentication for an explicit invalid token or HTTP 401", () => {
+    expect(isInvalidDeviceToken(new Error("Invalid device token"))).toBe(true);
+    const unauthorized = Object.assign(new Error("HTTP 401"), { statusCode: 401 });
+    expect(isInvalidDeviceToken(unauthorized)).toBe(true);
+  });
+
+  it("does not mistake a proxy or WAF HTTP 403 for an invalid device token", () => {
+    const forbidden = Object.assign(new Error("HTTP 403"), { statusCode: 403 });
+    expect(isInvalidDeviceToken(forbidden)).toBe(false);
   });
 });
 

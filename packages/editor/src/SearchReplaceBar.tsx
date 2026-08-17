@@ -109,7 +109,6 @@ export function SearchReplaceBar({
     }
     const id = window.requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => window.cancelAnimationFrame(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keep the rich-text match count in sync with the ProseMirror plugin state.
@@ -144,7 +143,6 @@ export function SearchReplaceBar({
     if (!markdownView) return;
     setMdCurrent(mdMatches.length ? 0 : -1);
     if (mdMatches.length) selectMarkdown(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [term, matchCase, wholeWord, markdownView]);
 
   // Keep the Markdown match index within bounds after content edits.

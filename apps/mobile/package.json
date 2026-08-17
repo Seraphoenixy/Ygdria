@@ -14,16 +14,17 @@
   "dependencies": {
     "@capacitor/android": "^7.4.2",
     "@capacitor/app": "^7.0.1",
+    "@capacitor/clipboard": "7.0.1",
     "@capacitor/core": "^7.4.2",
     "@capacitor/filesystem": "^7.0.1",
     "@capacitor/haptics": "^7.0.1",
     "@capacitor/keyboard": "^7.0.1",
     "@capacitor/preferences": "^7.0.1",
-    "capacitor-secure-storage-plugin": "^0.12.0",
     "@capacitor/splash-screen": "^7.0.1",
     "@capacitor/status-bar": "^7.0.1",
     "@capgo/capacitor-share-target": "^7.0.0",
-    "@ygdria/web": "workspace:*"
+    "@ygdria/web": "workspace:*",
+    "capacitor-secure-storage-plugin": "^0.12.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.2"

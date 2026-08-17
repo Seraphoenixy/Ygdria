@@ -29,7 +29,7 @@ export default defineConfig(({ mode }) => ({
                     external: ["better-sqlite3", "bufferutil", "utf-8-validate"],
                     output: { entryFileNames: "[name].cjs", format: "cjs" },
                   },
-                } as any,
+                },
               },
             },
             preload: {
@@ -57,7 +57,7 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     target: "es2022",
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         // Split heavy / rarely-changing dependencies into their own chunks so
         // the first paint only parses the app shell, and repeat mobile launches

@@ -80,6 +80,10 @@ export class RemoteProxyClient {
             : `HTTP ${response.status}`;
       const error = new Error(`${message}（${method} ${path}）`);
       const code = typeof body === "object" ? body?.error?.code : undefined;
+      // Keep the transport status available to callers.  Matching on the
+      // rendered message alone turns an unrelated proxy/WAF 403 into an
+      // authentication failure.
+      (error as Error & { statusCode?: number }).statusCode = response.status;
       if (code) (error as Error & { code?: string }).code = code;
       throw error;
     }
