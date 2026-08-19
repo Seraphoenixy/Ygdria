@@ -109,7 +109,9 @@ export class RelationService {
       targetNoteId: row.targetNoteId,
       relationType: row.relationType as RelationType,
       createdAt: row.createdAt,
-      peerTitle: (row.targetTitle ?? row.sourceTitle ?? row.targetNoteId) as string,
+      peerTitle: (
+        row.targetTitle ?? row.sourceTitle ?? (row.targetTitle !== undefined ? row.targetNoteId : row.sourceNoteId)
+      ) as string,
     });
     return {
       outgoing: outgoingRows.map(peer),

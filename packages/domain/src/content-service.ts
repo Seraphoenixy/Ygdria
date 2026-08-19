@@ -547,8 +547,12 @@ export class NoteService extends PlacementService {
       : (this.store.sqlite
           .prepare(
             `SELECT n.id noteId,n.title title,
-           CASE WHEN instr(n.plain_text, ?) > 0 THEN replace(substr(n.plain_text,MAX(1,instr(n.plain_text,?)-60),180),?,'<mark>' || ? || '</mark>')
-           ELSE replace(n.title,?,'<mark>' || ? || '</mark>') END snippet,
+           ${hanTerms
+             .reduce(
+               (expr, _term) => `replace(${expr},?,'<mark>' || ? || '</mark>')`,
+               `CASE WHEN instr(n.plain_text, ?) > 0 THEN substr(n.plain_text,MAX(1,instr(n.plain_text,?)-60),180) ELSE n.title END`,
+             )
+           } snippet,
            n.updated_at updatedAt,n.archived_at IS NOT NULL isArchived,0 relevance
          FROM notes n WHERE ${visibility} AND ${hanPredicates} ${subtreeFilter}
          ORDER BY n.updated_at DESC LIMIT ${resultLimit}`,
@@ -556,10 +560,7 @@ export class NoteService extends PlacementService {
           .all(
             hanTerms[0],
             hanTerms[0],
-            hanTerms[0],
-            hanTerms[0],
-            hanTerms[0],
-            hanTerms[0],
+            ...hanTerms.flatMap((term) => [term, term]),
             ...hanParams,
             ...subtreeParams,
           ) as Array<SearchRow & { relevance: number }>);

@@ -475,6 +475,13 @@ export class PlacementService extends NoteServiceBase {
         if (this.store.sqlite.prepare("SELECT 1 FROM placements WHERE id=?").get(placement.id))
           throw new ConflictError("A placement from this deletion has already been recreated");
       }
+      const noteIds = new Set(
+        snapshot.placements.map((p: { noteId: string }) => p.noteId),
+      );
+      for (const noteId of noteIds) {
+        if (!this.store.sqlite.prepare("SELECT 1 FROM notes WHERE id=?").get(noteId))
+          throw new ConflictError("Cannot undo deletion: a note has been permanently purged");
+      }
       for (const noteId of snapshot.autoTrashedNoteIds) {
         this.store.sqlite
           .prepare("DELETE FROM placements WHERE note_id=? AND parent_placement_id=?")

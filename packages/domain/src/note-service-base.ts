@@ -31,7 +31,9 @@ type Store = ReturnType<typeof createDatabase>;
 let lastTimestamp = 0;
 
 export const now = () => {
-  lastTimestamp = Math.max(Date.now(), lastTimestamp + 1);
+  const current = Date.now();
+  if (lastTimestamp > current + 86_400_000) lastTimestamp = current;
+  lastTimestamp = Math.max(current, lastTimestamp + 1);
   return lastTimestamp;
 };
 export const id = () => randomUUID();
@@ -690,7 +692,7 @@ export class NoteServiceBase {
     }
   }
   protected assertNotSystemNote(noteId: string) {
-    if (noteId === SYSTEM_ROOT_NOTE_ID || noteId === SYSTEM_TRASH_NOTE_ID)
+    if (noteId === SYSTEM_ROOT_NOTE_ID || noteId === SYSTEM_TRASH_NOTE_ID || noteId === CALENDAR_NOTE_ID)
       throw new ConflictError("System notes are protected");
   }
   protected assertNotSystemPlacement(placementId: string) {

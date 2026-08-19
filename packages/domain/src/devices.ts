@@ -118,9 +118,10 @@ export class Devices {
   private issuePairingToken(createdByDeviceId: string | null, ttlMs: number): { pairingToken: string; expiresAt: number } {
     this.pruneExpiredPairingTokens();
     const pairingToken = randomToken(PAIRING_TOKEN_BYTES);
+    const tokenHash = sha256Hex(pairingToken);
     const expiresAt = Date.now() + ttlMs;
-    this.pairingByTokenHash.set(sha256Hex(pairingToken), {
-      tokenHash: sha256Hex(pairingToken),
+    this.pairingByTokenHash.set(tokenHash, {
+      tokenHash,
       expiresAt,
       usedAt: null,
       createdByDeviceId,
