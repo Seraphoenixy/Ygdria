@@ -1,4 +1,3 @@
-import React from "react";
 import { ExternalLink, Columns2, AppWindow, Pencil } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement, WorkspaceTab } from "../../types/workspace";

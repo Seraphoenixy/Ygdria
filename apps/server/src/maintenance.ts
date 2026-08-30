@@ -125,7 +125,7 @@ export class MaintenanceRunner {
       const sqlite = this.mainSqlite;
       setImmediate(() => {
         try {
-          this.runTaskOnConnection(id, task, sqlite, rebuildFts);
+          this.runTaskOnConnection(task, sqlite, rebuildFts);
         } catch (err) {
           task.status = "failed";
           task.completedAt = Date.now();
@@ -134,7 +134,7 @@ export class MaintenanceRunner {
       });
     } else {
       // File-based: open a dedicated connection and run asynchronously.
-      this.runTaskInBackground(id, task, rebuildFts).catch((err) => {
+      this.runTaskInBackground(task, rebuildFts).catch((err) => {
         console.error("[maintenance] background task crashed:", err);
       });
     }
@@ -143,14 +143,13 @@ export class MaintenanceRunner {
   }
 
   private runTaskInBackground(
-    id: string,
     task: InternalMaintenanceTask,
     rebuildFts: boolean,
   ): Promise<void> {
     return (async () => {
       const { sqlite: bgSqlite } = createDatabase(this.dbPath);
       try {
-        this.runTaskOnConnection(id, task, bgSqlite, rebuildFts);
+        this.runTaskOnConnection(task, bgSqlite, rebuildFts);
       } finally {
         bgSqlite.close();
       }
@@ -158,7 +157,6 @@ export class MaintenanceRunner {
   }
 
   private runTaskOnConnection(
-    id: string,
     task: InternalMaintenanceTask,
     sqlite: SqliteDatabase,
     rebuildFts: boolean,

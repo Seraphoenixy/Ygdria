@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Capacitor } from "@capacitor/core";
 import type { YgdriaClient, RejectedSyncChange } from "@ygdria/api-client";
 import { YgdriaClient as YgdriaClientClass } from "@ygdria/api-client";
@@ -174,6 +175,7 @@ export function useSync({
   isDesktopApp,
   editing,
 }: UseSyncOptions) {
+  const queryClient = useQueryClient();
   // --- Remote client state ---
   const [remoteClient, setRemoteClient] = useState<
     RemoteProxyClient | YgdriaClient | null | undefined
@@ -635,6 +637,10 @@ export function useSync({
         });
       }
       await refreshTree();
+      // Sync writes remote changes directly into the local database. Refresh
+      // the note queries as well so an already-open note does not keep showing
+      // the pre-sync content from React Query's cache.
+      await queryClient.invalidateQueries({ queryKey: ["note"] });
       const finalState = await computeSyncState(peer);
       if (syncEpoch === syncEpochRef.current) setSyncState(finalState);
       if (syncEpoch === syncEpochRef.current) {
@@ -643,7 +649,6 @@ export function useSync({
         setSyncItemCount({ out: 0, in: 0 });
       }
       showSyncComplete();
-      setSyncProgress(undefined);
     })()
       .catch((error) => {
         console.error("Immediate sync failed", error);
@@ -670,6 +675,7 @@ export function useSync({
         if (syncEpoch === syncEpochRef.current) {
           setSyncing(false);
           syncLockRef.current = false;
+          setSyncProgress(undefined);
         }
       });
   }, [
@@ -679,6 +685,7 @@ export function useSync({
     isDesktopApp,
     openSettings,
     refreshTree,
+    queryClient,
     remoteClient,
     showSyncComplete,
     showToast,

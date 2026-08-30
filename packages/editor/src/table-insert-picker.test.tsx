@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, afterEach } from "vitest";
-import React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { Editor } from "@tiptap/core";

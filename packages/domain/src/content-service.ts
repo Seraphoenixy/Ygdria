@@ -1,12 +1,10 @@
 import {
   decodeStoredContent,
-  encodeDocumentContent,
   recordChange,
   type ContentCodec,
 } from "@ygdria/database";
 import { markdownToTiptap, tiptapToMarkdown } from "@ygdria/editor/markdown";
 import {
-  CALENDAR_NOTE_ID,
   CALENDAR_PLACEMENT_ID,
   SYSTEM_ROOT_NOTE_ID,
   SYSTEM_ROOT_PLACEMENT_ID,
@@ -19,9 +17,7 @@ import {
 import {
   ConflictError,
   escapeHtml,
-  id,
   NotFoundError,
-  now,
   type RevisionRow,
   type SearchRow,
 } from "./note-service-base.js";
@@ -32,7 +28,6 @@ export class PatchTargetError extends Error {
   statusCode = 422;
   code = "PatchTargetError";
 }
-
 export type ExternalTextEdit = {
   oldText: string;
   newText: string;
@@ -547,8 +542,12 @@ export class NoteService extends PlacementService {
       : (this.store.sqlite
           .prepare(
             `SELECT n.id noteId,n.title title,
-           CASE WHEN instr(n.plain_text, ?) > 0 THEN replace(substr(n.plain_text,MAX(1,instr(n.plain_text,?)-60),180),?,'<mark>' || ? || '</mark>')
-           ELSE replace(n.title,?,'<mark>' || ? || '</mark>') END snippet,
+           ${hanTerms
+             .reduce(
+               (expr, _term) => `replace(${expr},?,'<mark>' || ? || '</mark>')`,
+               `CASE WHEN instr(n.plain_text, ?) > 0 THEN substr(n.plain_text,MAX(1,instr(n.plain_text,?)-60),180) ELSE n.title END`,
+             )
+           } snippet,
            n.updated_at updatedAt,n.archived_at IS NOT NULL isArchived,0 relevance
          FROM notes n WHERE ${visibility} AND ${hanPredicates} ${subtreeFilter}
          ORDER BY n.updated_at DESC LIMIT ${resultLimit}`,
@@ -556,10 +555,7 @@ export class NoteService extends PlacementService {
           .all(
             hanTerms[0],
             hanTerms[0],
-            hanTerms[0],
-            hanTerms[0],
-            hanTerms[0],
-            hanTerms[0],
+            ...hanTerms.flatMap((term) => [term, term]),
             ...hanParams,
             ...subtreeParams,
           ) as Array<SearchRow & { relevance: number }>);
@@ -674,7 +670,9 @@ export class NoteService extends PlacementService {
          ORDER BY n.updated_at DESC
          LIMIT ?`,
       )
-      .all(tag, ...subtreeParams(placementId), resultLimit) as Array<{
+      .all(
+        placementId ? [tag, placementId, resultLimit] : [tag, resultLimit],
+      ) as Array<{
       noteId: string;
       title: string;
       plainText: string;
@@ -755,8 +753,4 @@ export class NoteService extends PlacementService {
       matchedPlacementIds: byNoteId.get(result.noteId) ?? [],
     }));
   }
-}
-
-function subtreeParams(placementId?: string): string[] {
-  return placementId ? [placementId] : [];
 }

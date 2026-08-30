@@ -34,5 +34,7 @@ export function decodeStoredContent(data: Buffer | Uint8Array, codec: ContentCod
       return bytes.toString("utf8");
     case "zstd-v1":
       return zstdDecompressSync(bytes).toString("utf8");
+    default:
+      return bytes.toString("utf8");
   }
 }

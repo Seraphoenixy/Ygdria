@@ -90,7 +90,6 @@ export class RelationService {
   /** List every relation touching `noteId`: outgoing (this note is the source)
    *  and incoming (this note is the target — i.e. backlinks). */
   listRelations(noteId: string): { outgoing: RelationWithPeer[]; incoming: RelationWithPeer[] } {
-    const titleLookup = new Map<string, string>();
     const outgoingRows = this.store.sqlite
       .prepare(
         "SELECT r.id,r.source_note_id sourceNoteId,r.target_note_id targetNoteId,r.relation_type relationType,r.created_at createdAt,n.title targetTitle FROM relations r JOIN notes n ON n.id=r.target_note_id WHERE r.source_note_id=? ORDER BY r.created_at",
@@ -101,19 +100,24 @@ export class RelationService {
         "SELECT r.id,r.source_note_id sourceNoteId,r.target_note_id targetNoteId,r.relation_type relationType,r.created_at createdAt,n.title sourceTitle FROM relations r JOIN notes n ON n.id=r.source_note_id WHERE r.target_note_id=? ORDER BY r.created_at",
       )
       .all(noteId) as Array<Relation & { sourceTitle: string }>;
-    for (const row of outgoingRows) titleLookup.set(row.targetNoteId, row.targetTitle);
-    for (const row of incomingRows) titleLookup.set(row.sourceNoteId, row.sourceTitle);
-    const peer = (row: Relation & { targetTitle?: string; sourceTitle?: string }): RelationWithPeer => ({
+    const peer = (
+      row: Relation & { targetTitle?: string; sourceTitle?: string },
+      isOutgoing: boolean,
+    ): RelationWithPeer => ({
       id: row.id,
       sourceNoteId: row.sourceNoteId,
       targetNoteId: row.targetNoteId,
       relationType: row.relationType as RelationType,
       createdAt: row.createdAt,
-      peerTitle: (row.targetTitle ?? row.sourceTitle ?? row.targetNoteId) as string,
+      peerTitle: (
+        isOutgoing
+          ? row.targetTitle ?? row.targetNoteId
+          : row.sourceTitle ?? row.sourceNoteId
+      ) as string,
     });
     return {
-      outgoing: outgoingRows.map(peer),
-      incoming: incomingRows.map(peer),
+      outgoing: outgoingRows.map((row) => peer(row, true)),
+      incoming: incomingRows.map((row) => peer(row, false)),
     };
   }
 }

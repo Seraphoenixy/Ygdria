@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo } from "react";
 import type { YgdriaClient } from "@ygdria/api-client";
-import { SYSTEM_ROOT_NOTE_ID } from "@ygdria/shared";
 import type { Locale } from "../lib/i18n";
 import { t } from "../lib/i18n";
 import type { TreePlacement, WorkspaceTab } from "../types/workspace";
@@ -27,7 +26,6 @@ type UseWorkspaceSelectionOptions = {
   setDeleteConfirmation: (placements: TreePlacement[] | null) => void;
   refreshTree: () => void;
   openNote: (noteId: string, isTrashed?: boolean, editing?: boolean, openInNewTab?: boolean, placementId?: string) => void;
-  tabs: WorkspaceTab[];
   noteData?: { id: string; title: string; isProtected?: boolean } | null;
 };
 
@@ -53,7 +51,6 @@ export function useWorkspaceSelection({
   setDeleteConfirmation,
   refreshTree,
   openNote,
-  tabs,
   noteData,
 }: UseWorkspaceSelectionOptions) {
   const childrenByParent = useMemo(() => {

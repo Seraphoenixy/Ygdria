@@ -15,14 +15,16 @@ export function ancestorChain(
   const seen = new Set<string>();
   let cur: string | null | undefined = placementId;
 
-  while (cur) {
+  while (true) {
+    if (!cur) break; // Reached the system root (parentPlacementId === null)
     if (seen.has(cur)) break; // Cycle guard
     seen.add(cur);
+    const placement = byId.get(cur);
+    const parent: string | null = placement?.parentPlacementId ?? null;
     chain.unshift(cur);
-    cur = byId.get(cur)?.parentPlacementId ?? null;
-    if (cur === null) break; // Reached the system root (parentPlacementId === null)
+    if (parent === null) break;
+    cur = parent;
   }
-
   return chain;
 }
 

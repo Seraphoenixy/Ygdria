@@ -8,7 +8,7 @@ import {
   type ContentCodec,
   type createDatabase,
 } from "@ygdria/database";
-import { markdownToTiptap, plainText, tiptapToMarkdown } from "@ygdria/editor/markdown";
+import { plainText } from "@ygdria/editor/markdown";
 import {
   emptyDocument,
   SYSTEM_ROOT_NOTE_ID,
@@ -17,11 +17,8 @@ import {
   SYSTEM_TRASH_PLACEMENT_ID,
   CALENDAR_NOTE_ID,
   CALENDAR_PLACEMENT_ID,
-  PLACEMENT_DELETION_MAX_RECORDS,
-  PLACEMENT_DELETION_RETENTION_MS,
   attachmentIdsFromDocument,
   type NoteContent,
-  type SearchResult,
 } from "@ygdria/shared";
 import { readCodeLanguage, readTags, codeProperties, tagsProperties } from "./properties-utils.js";
 type Store = ReturnType<typeof createDatabase>;
@@ -31,7 +28,9 @@ type Store = ReturnType<typeof createDatabase>;
 let lastTimestamp = 0;
 
 export const now = () => {
-  lastTimestamp = Math.max(Date.now(), lastTimestamp + 1);
+  const current = Date.now();
+  if (lastTimestamp > current + 86_400_000) lastTimestamp = current;
+  lastTimestamp = Math.max(current, lastTimestamp + 1);
   return lastTimestamp;
 };
 export const id = () => randomUUID();
@@ -167,7 +166,7 @@ export class NoteServiceBase {
       this.store.sqlite
         .prepare("INSERT INTO placements VALUES (?,?,?,?,?,?)")
         .run(placementId, noteId, parentPlacementId, p.p, t, t);
-      this.index(noteId, input.title);
+      this.index(noteId);
       recordChange(this.store.sqlite, "note", noteId, "created");
       recordChange(this.store.sqlite, "placement", placementId, "created");
     })();
@@ -364,7 +363,7 @@ export class NoteServiceBase {
             now(),
             noteId,
           );
-        this.index(noteId, title);
+        this.index(noteId);
         recordChange(this.store.sqlite, "note", noteId, "updated");
       }
     })();
@@ -501,7 +500,7 @@ export class NoteServiceBase {
             input.expectedVersion,
           );
         if (!updated.changes) throw new ConflictError();
-        this.index(noteId, title);
+        this.index(noteId);
         recordChange(this.store.sqlite, "note", noteId, "updated");
       })();
       return this.get(noteId)!;
@@ -578,7 +577,7 @@ export class NoteServiceBase {
             .run(title, newPropsJson, t, noteId, input.expectedVersion);
           if (!updated.changes) throw new ConflictError();
         }
-        this.index(noteId, title);
+      this.index(noteId);
         recordChange(this.store.sqlite, "note", noteId, "updated");
       })();
       return this.get(noteId)!;
@@ -640,13 +639,13 @@ export class NoteServiceBase {
           .run(title, newPropsJson, t, noteId, input.expectedVersion);
         if (!updated.changes) throw new ConflictError();
       }
-      if (contentChanged || titleChanged) this.index(noteId, title);
+      if (contentChanged || titleChanged) this.index(noteId);
       if (contentChanged) this.releaseRemovedAttachments(oldDocument, document, t);
       recordChange(this.store.sqlite, "note", noteId, "updated");
     })();
     return this.get(noteId)!;
   }
-  protected index(noteId: string, title: string) {
+  protected index(noteId: string) {
     this.store.sqlite
       .prepare(
         "INSERT INTO notes_fts(rowid,title,plain_text,properties_json) SELECT rowid,title,plain_text,properties_json FROM notes WHERE id=?",
@@ -690,7 +689,7 @@ export class NoteServiceBase {
     }
   }
   protected assertNotSystemNote(noteId: string) {
-    if (noteId === SYSTEM_ROOT_NOTE_ID || noteId === SYSTEM_TRASH_NOTE_ID)
+    if (noteId === SYSTEM_ROOT_NOTE_ID || noteId === SYSTEM_TRASH_NOTE_ID || noteId === CALENDAR_NOTE_ID)
       throw new ConflictError("System notes are protected");
   }
   protected assertNotSystemPlacement(placementId: string) {
@@ -813,7 +812,7 @@ export class NoteServiceBase {
       | undefined;
     if (!note) return;
     if (note.isProtected) return;
-    this.index(noteId, note.title);
+    this.index(noteId);
   }
   private shouldCreateRevision(noteId: string, timestamp: number, intervalMs?: number) {
     if (!intervalMs) return true;

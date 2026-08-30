@@ -1,6 +1,3 @@
-import { SRP_LOGIN_TTL_MS, MAX_SECURITY_STATE_RECORDS } from "../http/errors.js";
-import { evictOldest } from "./rate-limit.js";
-
 export function pruneExpiredSrpSessions(
   sessions: Map<string, { serverSecretEphemeral: string; expiresAt: number }>,
 ) {

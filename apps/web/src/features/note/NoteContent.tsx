@@ -55,6 +55,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
   const protectedPayloadRef = useRef<ProtectedPayload | null>(null);
   const protectedSaveGenerationRef = useRef(0);
   const protectedNoteIdRef = useRef(note.id);
+  const decryptingGenerationRef = useRef(0);
   if (protectedNoteIdRef.current !== note.id) {
     protectedNoteIdRef.current = note.id;
     protectedSaveGenerationRef.current++;
@@ -68,10 +69,11 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
   useEffect(() => {
     if (note.isProtected && note.contentCiphertext && session?.isUnlocked) {
       let cancelled = false;
+      const generation = ++decryptingGenerationRef.current;
       decryptingRef.current = true;
       session.decrypt<ProtectedPayload>(note.contentCiphertext)
         .then((payload) => {
-          if (cancelled) return;
+          if (cancelled || generation !== decryptingGenerationRef.current) return;
           setProtectedDecryptFailed(false);
           setDecryptedPayload(payload);
           setDecryptedPayloadNoteId(note.id);
@@ -80,13 +82,13 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
           savedTitleRef.current = payload.title;
         })
         .catch(() => {
-          if (!cancelled) {
+          if (!cancelled && generation === decryptingGenerationRef.current) {
             setProtectedDecryptFailed(true);
             setDecryptedPayload(null);
             setDecryptedPayloadNoteId(note.id);
           }
         })
-        .finally(() => { if (!cancelled) decryptingRef.current = false; });
+        .finally(() => { if (generation === decryptingGenerationRef.current) decryptingRef.current = false; });
       return () => { cancelled = true; };
     } else {
       setProtectedDecryptFailed(false);

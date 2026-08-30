@@ -34,12 +34,19 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
     onActivate(tab, editing);
   };
 
-  useEffect(() => {
+  const restoreWindowTab = () => {
     const tab = readWindowTab();
     if (!tab) return;
     setTabs([tab]);
     activateTab(tab);
     window.history.replaceState({}, "", window.location.pathname);
+  };
+
+  useEffect(() => {
+    restoreWindowTab();
+    const onPopState = () => restoreWindowTab();
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
   const openNote = (noteId: string, isTrashed = false, editing?: boolean, openInNewTab = false, placementId?: string) => {
@@ -66,7 +73,25 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
     activateTab(tab);
   };
   const openSettings = () => openSingletonTab({ id: "settings", kind: "settings" });
-  const openSearch = () => openSingletonTab({ id: "search", kind: "search" });
+  const openSearch = (options: { replaceActiveNewTab?: boolean } = {}) => {
+    const searchTab: WorkspaceTab = { id: "search", kind: "search" };
+    const activeIndex = tabs.findIndex((item) => item.id === activeTabId);
+    const active = tabs[activeIndex];
+
+    if (options.replaceActiveNewTab && active?.kind === "new" && !pinnedTabIds.has(active.id)) {
+      const existingSearch = tabs.find((item) => item.id === "search");
+      if (existingSearch) {
+        setTabs((current) => current.filter((item) => item.id !== active.id));
+        activateTab(existingSearch);
+      } else {
+        setTabs((current) => current.map((item) => (item.id === active.id ? searchTab : item)));
+        activateTab(searchTab);
+      }
+      return;
+    }
+
+    openSingletonTab(searchTab);
+  };
   const openHistory = () => openSingletonTab({ id: "history", kind: "history" });
   const openArchive = () => openSingletonTab({ id: "archive", kind: "archive" });
   const openAttachments = () => openSingletonTab({ id: "attachments", kind: "attachments" });

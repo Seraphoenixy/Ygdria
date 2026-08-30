@@ -1,4 +1,3 @@
-import React from "react";
 import {
   X, Pin, PinOff, Undo2, ExternalLink, CopyPlus,
 } from "lucide-react";

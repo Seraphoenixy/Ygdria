@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Search, ChevronsLeft, FilePlus2, History, Settings, Archive, Calendar, Lock, Unlock, RefreshCw, CloudCheck, CloudUpload, CloudAlert, AlertTriangle, Paperclip, Home } from "lucide-react";
-import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement, WorkspaceTab } from "../../types/workspace";
 import { NoteTree } from "./NoteTree";
@@ -34,26 +33,19 @@ function QuickButton({ label, active = false, className = "", disabled = false, 
 }
 
 type TreePanelProps = {
-  client: YgdriaClient;
   locale: Locale;
   tree: TreePlacement[];
   tabs: WorkspaceTab[];
   selected?: string;
   selectedPlacementId?: string;
   selectedPlacementIds: Set<string>;
-  selectionParentId: string | null | undefined;
-  selectionAnchorId: string | undefined;
-  treeClipboard: { placements: TreePlacement[]; mode: "cut" | "copy" } | null;
   activeTabId?: string;
   settingsOpen: boolean;
   collapsed: boolean;
-  panelWidth: number;
   creatingNote: boolean;
   onCreateNote: (parentPlacementId?: string, type?: "text" | "code") => void;
   onSelectPlacement: (placement: TreePlacement, event: React.MouseEvent<HTMLElement>) => void;
-  onToggleExpand: (placementId: string) => void;
   onContextMenu: (placement: TreePlacement, x: number, y: number) => void;
-  onSetClipboard: (clipboard: { placements: TreePlacement[]; mode: "cut" | "copy" } | null) => void;
   onMovePlacement: (placementIds: string[], parentPlacementId: string, position: number) => void;
   onResizePanel: (event: React.PointerEvent<HTMLDivElement>) => void;
   onToggleCollapse: () => void;
@@ -71,7 +63,6 @@ type TreePanelProps = {
   onOpenTodayNote: () => void;
   syncing: boolean;
   syncState: "unconfigured" | "synced" | "pending";
-  syncProgress?: string;
   lastSyncedAt?: number;
   syncItemCount?: { out: number; in: number };
   lastSyncError?: string;
@@ -79,24 +70,19 @@ type TreePanelProps = {
   onShowSyncConflicts?: () => void;
   onSync: () => void;
   onNavigateHome: () => void;
-  refreshTree: () => void;
-  importInputRef: React.RefObject<HTMLInputElement | null>;
-  openImportDialog: (targetPlacementId: string) => void;
-  exportPlacements: (placements: TreePlacement[]) => Promise<void>;
-  importNotes: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   /** Decrypted titles for protected notes (noteId -> title). Empty when locked. */
   decryptedTitles: Map<string, string>;
 };
 
 export function TreePanel({
-  client, locale, tree, tabs, selected, selectedPlacementId, selectedPlacementIds,
-  selectionParentId, selectionAnchorId, treeClipboard, activeTabId, settingsOpen,
-  collapsed, panelWidth, creatingNote, onCreateNote, onSelectPlacement, onToggleExpand,
-  onContextMenu, onSetClipboard, onMovePlacement, onResizePanel, onToggleCollapse,
+  locale, tree, tabs, selected, selectedPlacementId, selectedPlacementIds,
+  activeTabId, settingsOpen,
+  collapsed, creatingNote, onCreateNote, onSelectPlacement,
+  onContextMenu, onMovePlacement, onResizePanel, onToggleCollapse,
   onOpenHistory, onCloseHistory, onOpenSettings, onOpenSearch, onCloseSearch, onCloseSettings, onOpenArchive,
   onOpenAttachments, onCloseAttachments,
   protectedSession, onProtectedSessionToggle,
-  onOpenTodayNote, syncing, syncState, syncProgress, lastSyncedAt, syncItemCount, lastSyncError, syncConflictCount, onShowSyncConflicts, onSync, onNavigateHome, refreshTree, importInputRef, openImportDialog, exportPlacements, importNotes,
+  onOpenTodayNote, syncing, syncState, lastSyncedAt, syncItemCount, lastSyncError, syncConflictCount, onShowSyncConflicts, onSync, onNavigateHome,
   decryptedTitles,
 }: TreePanelProps) {
   const [search, setSearch] = useState("");
@@ -225,16 +211,20 @@ export function TreePanel({
   }, [tabs, tree, isSearching]);
 
   // A newly created child or today's calendar note can arrive after its parent
-  // was deliberately collapsed. Reveal the selected placement's full path once
-  // it is present in the refreshed tree, overriding that stale collapse choice.
+  // was deliberately collapsed. Reveal the selected placement's ancestors once
+  // it is present in the refreshed tree, overriding those stale collapse
+  // choices. The selected placement itself is left alone: its toggle state
+  // only affects its children's visibility, and re-expanding it here would
+  // undo a deliberate collapse (re-click on the selected, expanded branch).
   useEffect(() => {
     if (!selectedPlacementId || isSearching) return;
-    const path = ancestorChain(selectedPlacementId, byId);
-    if (!path.length) return;
+    const chain = ancestorChain(selectedPlacementId, byId);
+    if (!chain.length) return;
+    const ancestorIds = chain.slice(0, -1);
     setUserExpanded((current) => {
       const next = new Set(current);
       let changed = false;
-      for (const placementId of path) {
+      for (const placementId of ancestorIds) {
         if (next.delete(placementId)) changed = true;
       }
       return changed ? next : current;
@@ -266,6 +256,11 @@ export function TreePanel({
         // Never auto-collapse the branch that holds the active note.
         if (activeBranchIds.has(placementId)) {
           pending.set(placementId, count + 1);
+        } else if (userExpanded.has(placementId)) {
+          // An explicit user toggle already dictates this branch's visible
+          // state. Removing it from `expanded` would flip the toggle's XOR
+          // meaning and pop the branch back open, so just drop the candidate.
+          pending.delete(placementId);
         } else {
           pending.delete(placementId);
           shouldCollapse.add(placementId);
@@ -317,28 +312,6 @@ export function TreePanel({
     }
     return merged;
   }, [expanded, userExpanded, searchExpanded]);
-
-  const pastePlacements = async (target: TreePlacement, mode: "inside" | "after") => {
-    if (!treeClipboard) return;
-    const parentPlacementId = mode === "inside" ? target.placementId : target.parentPlacementId;
-    if (!parentPlacementId) return;
-    const siblings = tree.filter(
-      (item) => item.parentPlacementId === parentPlacementId && !item.isSystem && !item.isTrash,
-    );
-    const targetIndex = siblings.findIndex((item) => item.placementId === target.placementId);
-    const position = mode === "inside" ? siblings.length : targetIndex + 1;
-    if (position < 0) return;
-    for (let index = 0; index < treeClipboard.placements.length; index += 1) {
-      const source = treeClipboard.placements[index];
-      if (treeClipboard.mode === "cut") await client.movePlacement(source.placementId, parentPlacementId, position + index);
-      else {
-        const clone = await client.clonePlacement(source.noteId, parentPlacementId);
-        await client.movePlacement(clone.id, parentPlacementId, position + index);
-      }
-    }
-    if (treeClipboard.mode === "cut") onSetClipboard(null);
-    refreshTree();
-  };
 
   return (
     <>
@@ -544,6 +517,20 @@ export function TreePanel({
             decryptedTitles={decryptedTitles}
             onSelect={(placement, event) => {
               recordTreeOperation(placement.placementId);
+              // Clicking an already-selected branch toggles its children like
+              // the disclosure arrow: expanded collapses, collapsed expands.
+              // Modifier and middle clicks keep their multi-select /
+              // open-in-new-tab meaning, and search results stay force-expanded
+              // regardless of toggle state.
+              const hasChildren = (childrenByParent.get(placement.placementId)?.length ?? 0) > 0;
+              const isPlainClick = event.button === 0 && !event.shiftKey && !event.ctrlKey && !event.metaKey;
+              if (isPlainClick && !isSearching && hasChildren && placement.placementId === selectedPlacementId) {
+                setUserExpanded((current) => {
+                  const next = new Set(current);
+                  next.has(placement.placementId) ? next.delete(placement.placementId) : next.add(placement.placementId);
+                  return next;
+                });
+              }
               onSelectPlacement(placement, event);
             }}
             onToggle={(placementId) => {

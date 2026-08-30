@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, type QueryClient } from "@tanstack/react-query";
 import { History, X, RotateCcw, Search } from "lucide-react";
 import type { YgdriaClient } from "@ygdria/api-client";

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import type { YgdriaClient } from "@ygdria/api-client";
 import type { RemoteProxyClient } from "../../app/RemoteProxyClient";

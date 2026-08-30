@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyMigrations, createDatabase, decodeStoredContent } from "@ygdria/database";
+import { applyMigrations, createDatabase } from "@ygdria/database";
 import { NoteService } from "./index.js";
 
 describe("tags", () => {

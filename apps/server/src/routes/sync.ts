@@ -1,6 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { Buffer } from "node:buffer";
 import {
   getCoalescedChangesSince,

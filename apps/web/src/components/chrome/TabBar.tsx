@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
-import type { TreePlacement, WorkspaceTab } from "../../types/workspace";
+import type { WorkspaceTab } from "../../types/workspace";
 
 type TabBarProps = {
   tabs: WorkspaceTab[];

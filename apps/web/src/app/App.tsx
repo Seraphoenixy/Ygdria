@@ -53,7 +53,6 @@ import type {
   ContextMenuState,
   TabMenuState,
   TreePlacement,
-  WorkspaceTab,
 } from "../types/workspace";
 import { useNotes } from "../hooks/useNotes";
 import { useNoteTransfer } from "../hooks/useNoteTransfer";
@@ -131,12 +130,6 @@ const useUi = create<{
   locale: readSettings().locale,
   set: (x) => set(x),
 }));
-
-/** Subset of YgdriaClient needed for attachment transfer in sync. */
-type AttachmentTransferClient = Pick<
-  YgdriaClient,
-  "hasAttachmentByHash" | "downloadAttachmentByHash" | "uploadAttachmentByHash" | "syncNoteContent"
->;
 
 import { RemoteProxyClient } from "./RemoteProxyClient";
 
@@ -552,7 +545,6 @@ export function App({
     attachments,
     archiveNote,
     createNote,
-    save,
     saveTitle,
     convertNote,
     restoreNote,
@@ -629,8 +621,6 @@ export function App({
     remoteReauthRequired,
     setRemoteReauthRequired,
     remoteReauthInProgressRef,
-    pendingSyncServerUrl,
-    setPendingSyncServerUrl,
     reauthenticateRemote,
     migrateToEmptyServer,
     syncState,
@@ -641,7 +631,6 @@ export function App({
     lastSyncError,
     syncConflicts,
     removeSyncConflict,
-    syncAfterBootstrap,
     setSyncAfterBootstrap,
     syncNow,
   } = useSync({
@@ -827,7 +816,6 @@ export function App({
     openChildNote,
     selectTreePlacement,
     pastePlacements,
-    treeTitleForTab,
     noteTitleForTab,
   } = useWorkspaceSelection({
     client,
@@ -851,7 +839,6 @@ export function App({
     setDeleteConfirmation,
     refreshTree,
     openNote,
-    tabs,
     noteData: note.data,
   });
 
@@ -1341,29 +1328,22 @@ export function App({
         }}
       >
         <TreePanel
-          client={client}
           locale={locale}
           tree={tree.data ?? []}
           tabs={tabs}
           selected={selected}
           selectedPlacementId={selectedPlacementId}
           selectedPlacementIds={selectedPlacementIds}
-          selectionParentId={selectionParentId}
-          selectionAnchorId={selectionAnchorId}
-          treeClipboard={treeClipboard}
           activeTabId={activeTabId}
           settingsOpen={settingsOpen}
           collapsed={treeCollapsed}
-          panelWidth={treePanelWidth}
           creatingNote={createNote.isPending}
           onCreateNote={(parentId, type) => void createNewNote(parentId, type)}
           onSelectPlacement={selectTreePlacement}
-          onToggleExpand={() => {}}
           onContextMenu={(placement, x, y) => {
             setTabMenu(null);
             setContextMenu({ placement, x, y });
           }}
-          onSetClipboard={setTreeClipboard}
           onMovePlacement={(placementIds, parentPlacementId, position) => {
             void client.movePlacements(placementIds, parentPlacementId, position).then(refreshTree);
           }}
@@ -1383,7 +1363,6 @@ export function App({
           onOpenTodayNote={openTodayNote}
           syncing={syncing}
           syncState={syncState}
-          syncProgress={syncProgress}
           lastSyncedAt={lastSyncedAt}
           syncItemCount={syncItemCount}
           lastSyncError={lastSyncError}
@@ -1391,11 +1370,6 @@ export function App({
           onShowSyncConflicts={() => setShowSyncConflicts(true)}
           onSync={syncNow}
           onNavigateHome={openNewTab}
-          refreshTree={refreshTree}
-          importInputRef={importInputRef}
-          openImportDialog={openImportDialog}
-          exportPlacements={exportPlacements}
-          importNotes={importNotes}
           decryptedTitles={decryptedTitles}
         />
         {showInspector && !inspectorCollapsed && (
@@ -1457,7 +1431,6 @@ export function App({
             settingsOpen={settingsOpen}
             onLocaleChange={(nextLocale) => set({ locale: nextLocale })}
             clearUnusedAttachments={clearUnusedAttachments}
-            clearUnusedAttachmentsConfirmation={clearUnusedAttachmentsConfirmation}
             setClearUnusedAttachmentsConfirmation={setClearUnusedAttachmentsConfirmation}
             clearingExcessRevisions={clearingExcessRevisions}
             revisionCleanupMessage={revisionCleanupMessage}
@@ -1551,9 +1524,7 @@ export function App({
           <div ref={contextMenuRef} className="context-menu-layer">
             <TreeContextMenu
               menu={contextMenu}
-              client={client}
               tree={tree.data ?? []}
-              selectedPlacementId={selectedPlacementId}
               selectedPlacementIds={selectedPlacementIds}
               treeClipboard={treeClipboard}
               locale={locale}

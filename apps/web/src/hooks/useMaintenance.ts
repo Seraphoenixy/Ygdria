@@ -91,7 +91,7 @@ export function useMaintenance({
       setDatabaseMaintenanceMessageTarget(rebuildFts ? "fts" : "compact");
       void (async () => {
         try {
-          const { id } = rebuildFts
+          rebuildFts
             ? await client.rebuildSearchIndex()
             : await client.maintainDatabase();
           // Poll until the task completes.

@@ -66,9 +66,9 @@ describe("Devices", () => {
     const { pairingToken: b1 } = devices.createBootstrapPairingToken();
     const { deviceId: d1, deviceToken: t1 } = devices.pair(b1, "桌面端");
     const { pairingToken: p2 } = devices.createPairingToken(d1);
-    const { deviceId: d2, deviceToken: t2 } = devices.pair(p2, "iPhone");
+    const { deviceToken: t2 } = devices.pair(p2, "iPhone");
     const { pairingToken: p3 } = devices.createPairingToken(d1);
-    const { deviceId: d3, deviceToken: t3 } = devices.pair(p3, "iPad");
+    const { deviceToken: t3 } = devices.pair(p3, "iPad");
 
     const revoked = devices.revokeAllExcept(d1);
     expect(revoked).toBe(2);

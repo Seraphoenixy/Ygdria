@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { ListTree } from "lucide-react";
 import type { EtapiScope, EtapiSession, YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
@@ -76,8 +76,9 @@ export function SettingsPage({
     const saved = readSettings();
     return activeServerUrl ? { ...saved, syncServerUrl: activeServerUrl } : saved;
   });
+  const syncUrlEditingRef = useRef(false);
   useEffect(() => {
-    if (!activeServerUrl) return;
+    if (!activeServerUrl || syncUrlEditingRef.current) return;
     setSettings((current) => {
       if (current.syncServerUrl === activeServerUrl) return current;
       const updated = { ...current, syncServerUrl: activeServerUrl };
@@ -146,7 +147,7 @@ export function SettingsPage({
       </section>
       <h2 id="settings-connection" className="settings-category">{t(locale, "settingsConnection")}</h2>
       <SettingsSection id="settings-sync" title={t(locale, "syncServer")} hint={t(locale, "syncServerHint")} rows={[
-        <SettingsTextRow key="sync-server-url" title={t(locale, "syncServerUrl")} description={t(locale, "syncServerUrlHint")} value={settings.syncServerUrl} placeholder="https://notes.example.com" onChange={(value) => updateSettings({ syncServerUrl: value })} onBlur={reconnectMobileEndpoint} />,
+        <SettingsTextRow key="sync-server-url" title={t(locale, "syncServerUrl")} description={t(locale, "syncServerUrlHint")} value={settings.syncServerUrl} placeholder="https://notes.example.com" onChange={(value) => updateSettings({ syncServerUrl: value })} onBlur={reconnectMobileEndpoint} onFocusChange={(focused) => { syncUrlEditingRef.current = focused; }} />,
         <SettingsNumberRow key="sync-timeout" title={t(locale, "syncConnectionTimeout")} description={t(locale, "syncServerHint")} value={settings.syncConnectionTimeoutSeconds} min={1} unit={t(locale, "seconds")} onChange={(event) => updateSettings({ syncConnectionTimeoutSeconds: Math.max(1, Math.floor(Number(event.target.value)) || 1) })} />,
         <SettingsActionRow key="sync-test" title={t(locale, "testConnection")} description={t(locale, "testConnectionHint")} action={t(locale, "testConnection")} disabled={!settings.syncServerUrl.trim() || testingSyncConnection} onClick={() => onTestSyncConnection?.(settings.syncServerUrl, settings.syncConnectionTimeoutSeconds)} status={syncConnectionMessage} />,
         ...(canMigrateToEmptyServer ? [<SettingsActionRow key="sync-migrate-empty" title={t(locale, "migrateLocalVault")} description={t(locale, "migrateLocalVaultDesc")} action={t(locale, "migrateToEmptyServer")} onClick={onMigrateToEmptyServer} />] : []),
@@ -315,8 +316,8 @@ function SettingsNumberRow({ title, description, value, min, unit, onChange, onU
   </label></div>;
 }
 
-function SettingsTextRow({ title, description, value, placeholder, onChange, onBlur }: { title: string; description: string; value: string; placeholder: string; onChange: (value: string) => void; onBlur?: () => void }) {
-  return <div className="settings-row"><div><strong>{title}</strong><p>{description}</p></div><input className="settings-text-control" type="url" inputMode="url" value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} /></div>;
+function SettingsTextRow({ title, description, value, placeholder, onChange, onBlur, onFocus, onFocusChange }: { title: string; description: string; value: string; placeholder: string; onChange: (value: string) => void; onBlur?: () => void; onFocus?: () => void; onFocusChange?: (focused: boolean) => void }) {
+  return <div className="settings-row"><div><strong>{title}</strong><p>{description}</p></div><input className="settings-text-control" type="url" inputMode="url" value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} onBlur={() => { onBlur?.(); onFocusChange?.(false); }} onFocus={() => { onFocus?.(); onFocusChange?.(true); }} /></div>;
 }
 
 function SettingsActionRow({ title, description, action, disabled = false, onClick, status }: {

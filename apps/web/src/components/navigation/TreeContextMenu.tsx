@@ -1,17 +1,13 @@
-import React from "react";
 import {
   FolderPlus, FileCode2, Archive, ArchiveRestore, X, Copy,
   Trash2, FileText, Lock, Unlock,
 } from "lucide-react";
-import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement } from "../../types/workspace";
 
 type TreeContextMenuProps = {
   menu: { placement: TreePlacement; x: number; y: number };
-  client: YgdriaClient;
   tree: TreePlacement[];
-  selectedPlacementId?: string;
   selectedPlacementIds: Set<string>;
   treeClipboard: { placements: TreePlacement[]; mode: "cut" | "copy" } | null;
   locale: Locale;
@@ -28,7 +24,7 @@ type TreeContextMenuProps = {
 };
 
 export function TreeContextMenu({
-  menu, client, tree, selectedPlacementId, selectedPlacementIds,
+  menu, tree, selectedPlacementIds,
   treeClipboard, locale, onClose, onCreateChild, onArchive,
   onSetClipboard, onDelete, onPaste,   onExport, onImport, onOpenInNewTab, onProtectSubtree,
 }: TreeContextMenuProps) {

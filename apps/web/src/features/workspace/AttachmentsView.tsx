@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Image, FileText, File, Music, Video, Paperclip, Trash2, X } from "lucide-react";
+import { Image, FileText, File, Music, Video, Trash2, X } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 
 export interface AttachmentItem {
@@ -81,7 +81,7 @@ export function AttachmentsView({
     setLightboxLabel(attachment.filename);
     setLightboxLoading(true);
     try {
-      const { blob, mimeType } = await onDownloadAttachment(attachment.contentHash);
+      const { blob } = await onDownloadAttachment(attachment.contentHash);
       const url = URL.createObjectURL(blob);
       setLightboxSrc(url);
     } catch {

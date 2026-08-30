@@ -48,7 +48,7 @@ export function NoteTree({
     }
     return true;
   };
-  const dropModeFor = (event: DragEvent<HTMLDivElement>, target: TreePlacement): DropMode => {
+  const dropModeFor = (event: DragEvent<HTMLDivElement>): DropMode => {
     const { top, height } = event.currentTarget.getBoundingClientRect();
     const offset = (event.clientY - top) / height;
     // Keep the outer quarters for sibling reordering. The central half always
@@ -87,7 +87,7 @@ export function NoteTree({
       >
         <div
           className={`tree-item ${placement.placementId === selectedPlacementId ? "active" : ""} ${selectedPlacementIds.has(placement.placementId) ? "multi-selected" : ""} ${placement.isTrashed ? "trashed" : ""} ${placement.isArchived ? "archived" : ""} ${draggingIds?.includes(placement.placementId) ? "dragging" : ""} ${isDropTarget ? `drop-${dropTarget.mode}` : ""}`}
-          style={{ marginLeft: -13 + depth * 10 }}
+          style={{ marginLeft: -13 + depth * 10 - (hasChildren ? 0 : 20) }}
           draggable={isDraggable}
           onDragStart={(event) => {
             const sourceIds = selectedPlacementIds.has(placement.placementId)
@@ -105,7 +105,7 @@ export function NoteTree({
             const sourceIds = draggingIds ?? (() => {
               try { return JSON.parse(event.dataTransfer.getData("text/plain")) as string[]; } catch { return []; }
             })();
-            const mode = dropModeFor(event, placement);
+            const mode = dropModeFor(event);
             const parentId = mode === "inside" ? placement.placementId : placement.parentPlacementId;
             if (!sourceIds.length || !parentId || sourceIds.some((sourceId) => !canMoveTo(sourceId, parentId)) || (placement.isTrash || (placement.isSystem && mode !== "inside"))) return;
             event.preventDefault();
@@ -120,7 +120,7 @@ export function NoteTree({
             const sourceIds = draggingIds ?? (() => {
               try { return JSON.parse(event.dataTransfer.getData("text/plain")) as string[]; } catch { return []; }
             })();
-            const mode = dropModeFor(event, placement);
+            const mode = dropModeFor(event);
             const destination = sourceIds.length ? destinationFor(placement, mode, sourceIds) : undefined;
             if (sourceIds.length && destination) onMove(sourceIds, destination.parentPlacementId, destination.position);
             setDraggingIds(undefined);
@@ -130,7 +130,7 @@ export function NoteTree({
         >
           <button className="tree-select-hit" type="button" aria-label={title} onClick={(event) => onSelect(placement, event)} onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); onSelect(placement, event); } }} />
           {hasChildren ? <button className={`tree-toggle visible ${isExpanded ? "expanded" : ""}`} aria-label={t(locale, isExpanded ? "collapseNote" : "expandNote")} onClick={(event) => { event.stopPropagation(); onToggle(placement.placementId); }}><ChevronRight size={17} /></button> : <span className="tree-toggle" aria-hidden="true" />}
-          {hasChildren || placement.isCalendar ? <Folder className="tree-icon" size={16} /> : placement.type === "code" ? <Code2 className="tree-icon" size={16} /> : <FileText className="tree-icon" size={16} />}
+          {!hasChildren && (placement.isCalendar ? <Folder className="tree-icon" size={16} /> : placement.type === "code" ? <Code2 className="tree-icon" size={16} /> : <FileText className="tree-icon" size={16} />)}
           {Boolean(placement.isProtected) && <Lock className="tree-lock-icon" size={14} aria-label={t(locale, "protectedNote")} />}
           <span className={`tree-label ${isRelatedClone ? "clone-related" : ""}`}>{title}</span>
           {isCloned && <Copy className="tree-clone-mark" size={14} aria-label={t(locale, "cloneMarker")} />}

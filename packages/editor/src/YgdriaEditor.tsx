@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor, type NodeViewProps } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Table } from "@tiptap/extension-table";
@@ -331,7 +331,6 @@ export function YgdriaEditor({
       },
       handleDOMEvents: {
         contextmenu: (view, event) => {
-          if (!view.editable) return false;
           event.preventDefault();
           window.dispatchEvent(new Event("ygdria:editor-context-menu-open"));
           const mouseEvent = event as MouseEvent;
@@ -370,11 +369,16 @@ export function YgdriaEditor({
     return () => document.removeEventListener("pointerdown", hideOnOutsidePointer);
   }, [editor]);
   useEffect(() => {
-    if (!editor || editor.isDestroyed || documentIdRef.current === documentId) return;
-    documentIdRef.current = documentId;
+    if (!editor || editor.isDestroyed) return;
+    const documentChanged = documentIdRef.current !== documentId;
     // `useEditor` treats `content` as initial state. Synchronize explicitly
-    // when an existing editor is retargeted, without emitting a save.
+    // when an existing editor is retargeted or when the same note is refreshed
+    // by an external update (for example, a completed sync), without emitting
+    // a save. Comparing the documents avoids resetting the cursor after the
+    // normal save response republishes content that is already on screen.
+    if (!documentChanged && JSON.stringify(editor.getJSON()) === JSON.stringify(normalizedContent)) return;
     editor.commands.setContent(normalizedContent as any, { emitUpdate: false });
+    documentIdRef.current = documentId;
   }, [normalizedContent, documentId, editor]);
   useEffect(() => () => editor?.destroy(), [editor]);
   useEffect(() => {
@@ -580,7 +584,7 @@ export function YgdriaEditor({
           readOnly={readOnly}
         />
       )}
-      {!readOnly && contextMenu && (
+      {contextMenu && (
         <div
           className="action-menu editor-context-menu"
           role="menu"
@@ -592,7 +596,7 @@ export function YgdriaEditor({
             icon="✂"
             label={labels.cut}
             shortcut="Ctrl+X"
-            disabled={!contextMenu.hasSelection}
+            disabled={readOnly || !contextMenu.hasSelection}
             onClick={() => clipboardCommand("cut")}
           />
           <EditorMenuButton
@@ -617,12 +621,14 @@ export function YgdriaEditor({
             icon="▣"
             label={labels.paste}
             shortcut="Ctrl+V"
+            disabled={readOnly}
             onClick={() => void paste(false)}
           />
           <EditorMenuButton
             icon="▣"
             label={labels.plain}
             shortcut="Ctrl+Shift+V"
+            disabled={readOnly}
             onClick={() => void paste(true)}
           />
           {contextMenu.isInTable && (
@@ -631,32 +637,38 @@ export function YgdriaEditor({
               <EditorMenuButton
                 icon="↑"
                 label={labels.addRowBefore}
+                disabled={readOnly}
                 onClick={() => { editor?.chain().focus().addRowBefore().run(); closeMenu(); }}
               />
               <EditorMenuButton
                 icon="↓"
                 label={labels.addRowAfter}
+                disabled={readOnly}
                 onClick={() => { editor?.chain().focus().addRowAfter().run(); closeMenu(); }}
               />
               <EditorMenuButton
                 icon="🗑"
                 label={labels.deleteRow}
+                disabled={readOnly}
                 onClick={() => { editor?.chain().focus().deleteRow().run(); closeMenu(); }}
               />
               <div className="editor-context-separator" />
               <EditorMenuButton
                 icon="←"
                 label={labels.addColumnBefore}
+                disabled={readOnly}
                 onClick={() => { editor?.chain().focus().addColumnBefore().run(); closeMenu(); }}
               />
               <EditorMenuButton
                 icon="→"
                 label={labels.addColumnAfter}
+                disabled={readOnly}
                 onClick={() => { editor?.chain().focus().addColumnAfter().run(); closeMenu(); }}
               />
               <EditorMenuButton
                 icon="🗑"
                 label={labels.deleteColumn}
+                disabled={readOnly}
                 onClick={() => { editor?.chain().focus().deleteColumn().run(); closeMenu(); }}
               />
               <div className="editor-context-separator" />

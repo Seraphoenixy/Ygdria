@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import { findChildren } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
@@ -68,7 +68,7 @@ function debouncedHighlightPlugin() {
       },
     },
     props: { decorations: (state) => highlightPluginKey.getState(state) },
-    view(view) {
+    view(_view) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       return {
         update(nextView, previousState) {

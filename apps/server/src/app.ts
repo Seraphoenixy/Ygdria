@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify from "fastify";
 
 // Module augmentation: declare the `device` property on FastifyRequest so
 // all route handlers get type-safe access without `as any` casts. This must

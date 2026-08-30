@@ -54,6 +54,10 @@ function isConflictError(error: unknown): boolean {
  * to absorb a 409 silently when only the version diverged while both sides
  * remain textually identical. */
 export function isSameDiffContent(a: unknown, b: unknown): boolean {
+  // Code notes are stored as raw strings while rich-text notes are documents.
+  // Their flattened lines can look identical, but a shape mismatch must not
+  // be treated as a version-only conflict.
+  if ((typeof a === "string") !== (typeof b === "string")) return false;
   const linesA = linesFromContent(a);
   const linesB = linesFromContent(b);
   return linesA.length === linesB.length && linesA.every((line, index) => line === linesB[index]);

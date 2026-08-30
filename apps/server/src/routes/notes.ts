@@ -12,8 +12,7 @@ import {
   SYSTEM_TRASH_PLACEMENT_ID,
 } from "@ygdria/shared";
 import type { SqliteDatabase } from "@ygdria/database";
-import { parse, httpError } from "../http/errors.js";
-import { parseExpectedVersion } from "../sync/helpers.js";
+import { parse } from "../http/errors.js";
 
 export interface NoteRouteDeps {
   notes: NoteService;

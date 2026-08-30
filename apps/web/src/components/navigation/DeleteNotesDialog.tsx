@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import { useEffect } from "react";
 import { AlertTriangle } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement } from "../../types/workspace";

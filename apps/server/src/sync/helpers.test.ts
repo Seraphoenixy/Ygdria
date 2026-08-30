@@ -137,7 +137,6 @@ describe("cross-device purge propagation", () => {
     const peerA = freshDb();
     const peerB = freshDb();
     const notesA = new NoteService(peerA);
-    const notesB = new NoteService(peerB);
     const cursor = { id: 0 };
 
     // Real incremental sync: A creates -> B gets it, A trashes -> B trashes it.
@@ -198,7 +197,6 @@ describe("cross-device purge propagation", () => {
     const peerA = freshDb();
     const peerB = freshDb();
     const notesA = new NoteService(peerA);
-    const notesB = new NoteService(peerB);
     const cursor = { id: 0 };
 
     const note = notesA.create({ title: "Trashed note" });
@@ -240,7 +238,6 @@ describe("cross-device purge propagation", () => {
     const peerA = freshDb();
     const peerB = freshDb();
     const notesA = new NoteService(peerA);
-    const notesB = new NoteService(peerB);
     const cursor = { id: 0 };
 
     const note = notesA.create({ title: "Restore me" });
@@ -466,7 +463,6 @@ describe("cross-device relation sync", () => {
     const peerB = freshDb();
     const { a, b } = createNotesOn(peerA);
     createNotesOn(peerB);
-    const relationsA = new RelationService(peerA);
 
     // Seed an edge with an explicitly old creation timestamp directly so the
     // anti-resurrection guard has a deterministic comparison point.

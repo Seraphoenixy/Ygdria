@@ -26,7 +26,7 @@ export interface WorkspaceContentProps {
   activateTab: (tab: WorkspaceTab) => void;
   closeTab: (tabId: string) => void;
   openNewTab: () => void;
-  openSearch: () => void;
+  openSearch: (options?: { replaceActiveNewTab?: boolean }) => void;
   onTabContextMenu: (tabId: string, x: number, y: number) => void;
   onReorder: (dragId: string, dropId: string) => void;
   onTogglePin?: (tabId: string) => void;
@@ -77,7 +77,6 @@ export interface WorkspaceContentProps {
   settingsOpen: boolean;
   onLocaleChange: (nextLocale: Locale) => void;
   clearUnusedAttachments: { isPending: boolean; mutate: () => void };
-  clearUnusedAttachmentsConfirmation: boolean;
   setClearUnusedAttachmentsConfirmation: (value: boolean) => void;
   clearingExcessRevisions: boolean;
   revisionCleanupMessage: string | undefined;
@@ -167,7 +166,6 @@ export function WorkspaceContent({
   settingsOpen,
   onLocaleChange,
   clearUnusedAttachments,
-  clearUnusedAttachmentsConfirmation,
   setClearUnusedAttachmentsConfirmation,
   clearingExcessRevisions,
   revisionCleanupMessage,
@@ -348,7 +346,7 @@ export function WorkspaceContent({
             createNewNote={createNewNote}
             creatingNote={createNote.isPending}
             client={client}
-            onOpenTagSearch={(tag) => { setSearchInitialTag(tag); openSearch(); }}
+            onOpenTagSearch={(tag) => { setSearchInitialTag(tag); openSearch({ replaceActiveNewTab: true }); }}
           />
         </div>
       ) : noteIsLoading ? (
@@ -387,7 +385,7 @@ export function WorkspaceContent({
             createNewNote={createNewNote}
             creatingNote={createNote.isPending}
             client={client}
-            onOpenTagSearch={(tag) => { setSearchInitialTag(tag); openSearch(); }}
+            onOpenTagSearch={(tag) => { setSearchInitialTag(tag); openSearch({ replaceActiveNewTab: true }); }}
           />
         </div>
       )}

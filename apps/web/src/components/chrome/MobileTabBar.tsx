@@ -1,4 +1,3 @@
-import React from "react";
 import { Archive, FileText, History, Search, Settings as SettingsIcon } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 

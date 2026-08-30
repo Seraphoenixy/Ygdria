@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { useMemo } from "react";
 import { Undo2 } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 
@@ -13,13 +13,11 @@ export function linesFromContent(content: unknown): string[] {
     const value = node as { type?: string; text?: string; content?: unknown[] };
     if (value.type === "text" && value.text) lines.push(value.text);
     if (Array.isArray(value.content)) {
-      const start = lines.length;
       value.content.forEach(visit);
-      if (["paragraph", "heading", "listItem", "blockquote", "codeBlock"].includes(value.type ?? "") && lines.length > start) lines.push("\n");
     }
   };
   visit(content);
-  return lines.join("").split("\n");
+  return lines;
 }
 
 /**

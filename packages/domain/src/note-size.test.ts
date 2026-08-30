@@ -26,7 +26,7 @@ describe("NoteService.sizeForPlacement", () => {
     const parentPlacement = service
       .tree()
       .find((placement: any) => placement.noteId === parent.id) as { placementId: string };
-    const child = service.create({
+    service.create({
       title: "Child",
       content: childContent,
       parentPlacementId: parentPlacement.placementId,

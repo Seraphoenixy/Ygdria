@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import type { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
@@ -49,8 +49,6 @@ export function ConflictDialog({ client, locale, conflict, onResolve, onClose }:
     isCode && conflict.localContent && typeof conflict.localContent !== "string"
       ? conflict.localContent.code
       : conflict.localContent;
-  const canDiff = !conflict.isProtected && serverNote && !loadError;
-
   const keepMine = () => {
     if (!serverNote) return;
     onResolve("keepMine", serverNote.version);

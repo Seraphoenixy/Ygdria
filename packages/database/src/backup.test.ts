@@ -10,7 +10,7 @@ import { createDatabase, applyMigrations } from "./index.js";
 import { createBackup, verifyBackup, restoreBackup, listBackups } from "./backup.js";
 import { writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
