@@ -223,10 +223,15 @@ export function tiptapToMarkdown(document: NoteContent): { markdown: string; war
       case "paragraph":
         return kids + "\n\n";
       case "text": {
-        const text = node.text || "";
-        return node.marks?.some((mark: any) => mark.type === "redacted")
-          ? `<span data-ygdria-redacted>${text}</span>`
-          : text;
+        let text = node.text || "";
+        // Markdown has no standard spoiler mark, so keep Ygdria's private
+        // representation as the innermost wrapper. Applying bold outside it
+        // lets the Markdown parser restore both marks on re-import.
+        if (node.marks?.some((mark: any) => mark.type === "redacted"))
+          text = `<span data-ygdria-redacted>${text}</span>`;
+        if (node.marks?.some((mark: any) => mark.type === "bold"))
+          text = `**${text}**`;
+        return text;
       }
       case "heading":
         return "#".repeat(node.attrs?.level || 1) + " " + kids + "\n\n";

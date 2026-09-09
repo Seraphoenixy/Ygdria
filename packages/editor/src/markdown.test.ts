@@ -31,6 +31,14 @@ describe("Markdown conversion", () => {
     expect(json).toContain('"link"');
     expect(json).toContain('"image"');
   });
+  it("round-trips bold formatting through Markdown", () => {
+    const document = markdownToTiptap("before **bold** after").document;
+    const paragraph = document.content?.[0] as any;
+    const bold = paragraph.content?.find((node: any) => node.text === "bold");
+
+    expect(bold?.marks).toContainEqual({ type: "bold" });
+    expect(tiptapToMarkdown(document).markdown).toBe("before **bold** after\n");
+  });
   it("converts HTML tables and preserves their cell text", () => {
     const document = markdownToTiptap("<table><tr><th>Header</th></tr><tr><td>Value</td></tr></table>").document;
     expect((document.content?.[0] as any)?.type).toBe("table");

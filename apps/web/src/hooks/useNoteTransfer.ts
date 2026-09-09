@@ -47,6 +47,15 @@ function attachmentReferencePattern() {
   return /!?\[[^\]]*\]\(([^\s)]+)[^)]*\)|<img[^>]+src=["']([^"']+)["'][^>]*>|<a[^>]+href=["']([^"']+)["'][^>]*>/gi;
 }
 
+/** Keep note titles as download names without allowing path separators. */
+export function markdownDownloadFilename(title: string) {
+  const safeTitle = title
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
+    .replace(/[. ]+$/, "")
+    .trim();
+  return `${safeTitle || "ygdria-notes"}.md`;
+}
+
 function replaceImportedNoteLinks(
   markdown: string,
   files: Record<string, Uint8Array>,
@@ -126,7 +135,11 @@ export function useNoteTransfer({ client, tree, locale, refreshTree, session, un
     const blob = new Blob([contents], { type: format === "json" ? "application/json" : "text/markdown" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `ygdria-notes.${format === "json" ? "json" : "md"}`;
+    link.download = format === "json"
+      ? "ygdria-notes.json"
+      : placements.length === 1 && exportable.length > 0
+        ? markdownDownloadFilename(placements[0].title)
+        : "ygdria-notes.md";
     link.click();
     URL.revokeObjectURL(link.href);
   };
