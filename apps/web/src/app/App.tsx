@@ -1525,6 +1525,7 @@ export function App({
             <TreeContextMenu
               menu={contextMenu}
               tree={tree.data ?? []}
+              selectedPlacementId={selectedPlacementId}
               selectedPlacementIds={selectedPlacementIds}
               treeClipboard={treeClipboard}
               locale={locale}

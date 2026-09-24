@@ -3,11 +3,13 @@ import {
   Trash2, FileText, Lock, Unlock,
 } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
+import { effectiveSelectedPlacementIds } from "../../lib/tree-selection";
 import type { TreePlacement } from "../../types/workspace";
 
 type TreeContextMenuProps = {
   menu: { placement: TreePlacement; x: number; y: number };
   tree: TreePlacement[];
+  selectedPlacementId?: string;
   selectedPlacementIds: Set<string>;
   treeClipboard: { placements: TreePlacement[]; mode: "cut" | "copy" } | null;
   locale: Locale;
@@ -24,14 +26,15 @@ type TreeContextMenuProps = {
 };
 
 export function TreeContextMenu({
-  menu, tree, selectedPlacementIds,
+  menu, tree, selectedPlacementId, selectedPlacementIds,
   treeClipboard, locale, onClose, onCreateChild, onArchive,
   onSetClipboard, onDelete, onPaste,   onExport, onImport, onOpenInNewTab, onProtectSubtree,
 }: TreeContextMenuProps) {
   const { placement } = menu;
+  const selectionIds = effectiveSelectedPlacementIds(selectedPlacementIds, selectedPlacementId);
   const contextSelection = (target: TreePlacement) => {
-    const selected = tree.filter((item) => selectedPlacementIds.has(item.placementId));
-    return selectedPlacementIds.has(target.placementId) && selected.length ? selected : [target];
+    const selected = tree.filter((item) => selectionIds.has(item.placementId));
+    return selectionIds.has(target.placementId) && selected.length ? selected : [target];
   };
   const items = contextSelection(placement);
   const modifier = navigator.userAgent.includes("Mac") ? "⌘" : "Ctrl";

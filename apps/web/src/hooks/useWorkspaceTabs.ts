@@ -6,6 +6,12 @@ type UseWorkspaceTabsOptions = {
   onActivate: (tab: WorkspaceTab | undefined, editing?: boolean) => void;
 };
 
+/** Keep an already-open note tab tied to the placement that was just opened. */
+export function updateNoteTabPlacement(tab: WorkspaceTab, placementId?: string): WorkspaceTab {
+  if (tab.kind !== "note" || placementId === undefined || tab.placementId === placementId) return tab;
+  return { ...tab, placementId };
+}
+
 function readWindowTab(): WorkspaceTab | undefined {
   try {
     const raw = new URLSearchParams(window.location.search).get("ygdria-tab");
@@ -54,7 +60,11 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
     const tab: WorkspaceTab = { id, kind: "note", noteId, isTrashed, placementId };
     const existing = tabs.find((item) => item.id === id);
     if (existing) {
-      activateTab(existing, editing);
+      const nextExisting = updateNoteTabPlacement(existing, placementId);
+      if (nextExisting !== existing) {
+        setTabs((current) => current.map((item) => (item.id === id ? nextExisting : item)));
+      }
+      activateTab(nextExisting, editing);
       return;
     }
     setTabs((current) => {

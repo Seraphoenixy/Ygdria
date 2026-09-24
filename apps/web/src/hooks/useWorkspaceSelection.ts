@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo } from "react";
 import type { YgdriaClient } from "@ygdria/api-client";
 import type { Locale } from "../lib/i18n";
 import { t } from "../lib/i18n";
+import { effectiveSelectedPlacementIds, toggleSelectedPlacementId } from "../lib/tree-selection";
+import { resolveActivePlacement } from "../lib/tree-paths";
 import type { TreePlacement, WorkspaceTab } from "../types/workspace";
 
 type UseWorkspaceSelectionOptions = {
@@ -76,19 +78,12 @@ export function useWorkspaceSelection({
   // selection even after switching between already-open notes.
   useEffect(() => {
     if (activeTab?.kind !== "note") return;
-    const placements = treeData ?? [];
-    const placement =
-      placements.find(
-        (item) =>
-          item.placementId === activeTab.placementId &&
-          item.noteId === activeTab.noteId,
-      ) ??
-      placements.find(
-        (item) =>
-          item.noteId === activeTab.noteId &&
-          item.isTrashed === activeTab.isTrashed &&
-          !item.isTrash,
-      );
+    const placement = resolveActivePlacement(
+      activeTab.noteId,
+      activeTab.isTrashed,
+      activeTab.placementId,
+      treeData ?? [],
+    );
     if (!placement) return;
 
     setSelectedPlacementIds(new Set());
@@ -200,13 +195,9 @@ export function useWorkspaceSelection({
       }
     }
     if (isToggleSelect && selectionParentId === parentId) {
-      setSelectedPlacementIds((current) => {
-        const next = new Set(current);
-        next.has(placement.placementId)
-          ? next.delete(placement.placementId)
-          : next.add(placement.placementId);
-        return next;
-      });
+      setSelectedPlacementIds(() =>
+        toggleSelectedPlacementId(selectedPlacementIds, selectedPlacementId, placement.placementId),
+      );
     } else {
       setSelectedPlacementIds(new Set([placement.placementId]));
       setSelectionParentId(parentId);
@@ -257,12 +248,9 @@ export function useWorkspaceSelection({
       )
         return;
 
+      const selectionIds = effectiveSelectedPlacementIds(selectedPlacementIds, selectedPlacementId);
       const selectedItems = (treeData ?? [])
-        .filter(
-          (item) =>
-            selectedPlacementIds.has(item.placementId) ||
-            (selectedPlacementIds.size === 0 && item.placementId === selectedPlacementId),
-        )
+        .filter((item) => selectionIds.has(item.placementId))
         .filter((item) => !item.isSystem && !item.isTrashed && !item.isTrash);
 
       if (isDelete) {

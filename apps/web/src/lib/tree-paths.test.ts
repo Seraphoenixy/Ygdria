@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ancestorChain, computeAutoExpansion, resolvePlacementId } from "./tree-paths";
+import {
+  ancestorChain,
+  computeAutoExpansion,
+  resolveActivePlacement,
+  resolvePlacementId,
+} from "./tree-paths";
 import type { TreePlacement } from "../types/workspace";
 
 // ─── Helpers ────────────────────────────────────────────────────────────
@@ -119,6 +124,39 @@ describe("resolvePlacementId", () => {
     const noteMap = byNoteId(items);
 
     expect(resolvePlacementId("note1", "nonexistent", idMap, noteMap)).toBeUndefined();
+  });
+});
+
+// ─── resolveActivePlacement ────────────────────────────────────────────
+
+describe("resolveActivePlacement", () => {
+  it("keeps an active tab on the exact clone placement", () => {
+    const items = [
+      p("clone-a", null, { noteId: "shared-note" }),
+      p("clone-b", null, { noteId: "shared-note" }),
+    ];
+
+    expect(resolveActivePlacement("shared-note", false, "clone-b", items)?.placementId).toBe("clone-b");
+  });
+
+  it("falls back to the matching trash state when the explicit placement is gone", () => {
+    const items = [
+      p("trash-root", null, { noteId: "shared-note", isTrash: true }),
+      p("active", null, { noteId: "shared-note" }),
+      p("deleted", "trash-root", { noteId: "shared-note", isTrashed: true }),
+    ];
+
+    expect(resolveActivePlacement("shared-note", true, "missing", items)?.placementId).toBe("deleted");
+    expect(resolveActivePlacement("shared-note", false, "missing", items)?.placementId).toBe("active");
+  });
+
+  it("does not use an explicit placement belonging to another note", () => {
+    const items = [
+      p("other", null, { noteId: "other-note" }),
+      p("target", null, { noteId: "target-note" }),
+    ];
+
+    expect(resolveActivePlacement("target-note", false, "other", items)?.placementId).toBe("target");
   });
 });
 

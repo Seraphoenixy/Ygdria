@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { unzipSync } from "fflate";
+import { unzipSync, zipSync } from "fflate";
 import type { YgdriaClient } from "@ygdria/api-client";
 import { tiptapToMarkdown } from "@ygdria/editor/markdown";
 import { t, type Locale } from "../lib/i18n";
@@ -54,6 +54,69 @@ export function markdownDownloadFilename(title: string) {
     .replace(/[. ]+$/, "")
     .trim();
   return `${safeTitle || "ygdria-notes"}.md`;
+}
+
+export type MarkdownExportNote = {
+  sourcePlacementId: string;
+  parentSourceId: string | null;
+  title: string;
+  markdown: string;
+};
+
+type MarkdownArchiveNode = {
+  title: string;
+  dataFileName: string;
+  dirFileName?: string;
+  children?: MarkdownArchiveNode[];
+};
+
+function markdownArchiveBaseName(title: string, fallback: string, usedNames: Set<string>) {
+  const baseName = markdownDownloadFilename(title).replace(/\.md$/i, "") || fallback;
+  let candidate = baseName;
+  let suffix = 2;
+  while (usedNames.has(candidate)) candidate = `${baseName}-${suffix++}`;
+  usedNames.add(candidate);
+  return candidate;
+}
+
+/** Build a Markdown ZIP that the existing ZIP importer can restore as a tree. */
+export function buildMarkdownExportArchive(notes: readonly MarkdownExportNote[]) {
+  const encoder = new TextEncoder();
+  const files: Record<string, Uint8Array> = {};
+  const exportedIds = new Set(notes.map((note) => note.sourcePlacementId));
+  const childrenByParent = new Map<string | null, MarkdownExportNote[]>();
+  for (const note of notes) {
+    const parentId = note.parentSourceId && exportedIds.has(note.parentSourceId)
+      ? note.parentSourceId
+      : null;
+    childrenByParent.set(parentId, [...(childrenByParent.get(parentId) ?? []), note]);
+  }
+
+  const buildNode = (
+    note: MarkdownExportNote,
+    basePath: string,
+    siblingNames: Set<string>,
+  ): MarkdownArchiveNode => {
+    const baseName = markdownArchiveBaseName(note.title, `note-${note.sourcePlacementId.slice(0, 8)}`, siblingNames);
+    files[`${basePath}${baseName}.md`] = encoder.encode(note.markdown);
+    const children = childrenByParent.get(note.sourcePlacementId) ?? [];
+    return {
+      title: note.title,
+      dataFileName: `${baseName}.md`,
+      ...(children.length > 0
+        ? {
+            dirFileName: baseName,
+            children: children.map((child) => buildNode(child, `${basePath}${baseName}/`, new Set())),
+          }
+        : {}),
+    };
+  };
+
+  const manifest = {
+    files: (childrenByParent.get(null) ?? []).map((note) => buildNode(note, "", new Set())),
+  };
+  files["!!!meta.json"] = encoder.encode(JSON.stringify(manifest, null, 2));
+  return zipSync(files);
 }
 
 function replaceImportedNoteLinks(
@@ -124,21 +187,33 @@ export function useNoteTransfer({ client, tree, locale, refreshTree, session, un
         note: await client.getNote(placement.noteId),
       };
     }));
+    const markdownNotes = format === "json"
+      ? []
+      : await Promise.all(notes.map(async ({ sourcePlacementId, parentSourceId, note }) => ({
+          sourcePlacementId,
+          parentSourceId,
+          title: note.title,
+          markdown: (note as any).isProtected
+            ? tiptapToMarkdown(note.content).markdown
+            : await client.content(note.id),
+        })));
+    const markdownArchive = format === "markdown" && markdownNotes.length > 1
+      ? buildMarkdownExportArchive(markdownNotes)
+      : undefined;
     const contents = format === "json"
       ? JSON.stringify({ entries: notes.map(({ sourcePlacementId, parentSourceId, note }) => ({ sourcePlacementId, parentSourceId, title: note.title, content: note.content })) }, null, 2)
-      : (await Promise.all(notes.map(async ({ note }) => {
-          // Protected notes are decrypted locally; their content is a TipTap doc
-          // that must be converted to markdown without a server round-trip.
-          if ((note as any).isProtected) return tiptapToMarkdown(note.content).markdown;
-          return client.content(note.id);
-        }))).join("\n\n---\n\n");
-    const blob = new Blob([contents], { type: format === "json" ? "application/json" : "text/markdown" });
+      : markdownArchive ?? markdownNotes[0]?.markdown ?? "";
+    const blob = new Blob([contents], {
+      type: format === "json" ? "application/json" : markdownArchive ? "application/zip" : "text/markdown",
+    });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = format === "json"
       ? "ygdria-notes.json"
-      : placements.length === 1 && exportable.length > 0
-        ? markdownDownloadFilename(placements[0].title)
+      : markdownArchive
+        ? "ygdria-notes.zip"
+        : markdownNotes.length === 1
+          ? markdownDownloadFilename(markdownNotes[0].title)
         : "ygdria-notes.md";
     link.click();
     URL.revokeObjectURL(link.href);

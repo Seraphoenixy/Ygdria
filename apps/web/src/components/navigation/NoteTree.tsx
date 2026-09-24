@@ -2,6 +2,7 @@ import { ChevronRight, Code2, Copy, FileText, Folder, Lock, Plus } from "lucide-
 import { useState, type DragEvent } from "react";
 import type React from "react";
 import { t, type Locale } from "../../lib/i18n";
+import { effectiveSelectedPlacementIds } from "../../lib/tree-selection";
 import type { TreePlacement } from "../../types/workspace";
 
 export function NoteTree({
@@ -29,6 +30,7 @@ export function NoteTree({
   type DropMode = "before" | "inside" | "after";
   const [draggingIds, setDraggingIds] = useState<string[]>();
   const [dropTarget, setDropTarget] = useState<{ placementId: string; mode: DropMode }>();
+  const selectionIds = effectiveSelectedPlacementIds(selectedPlacementIds, selectedPlacementId);
   const childrenByParent = new Map<string | null, TreePlacement[]>();
   for (const placement of placements) {
     const key = placement.parentPlacementId;
@@ -90,9 +92,9 @@ export function NoteTree({
           style={{ marginLeft: -13 + depth * 10 - (hasChildren ? 0 : 20) }}
           draggable={isDraggable}
           onDragStart={(event) => {
-            const sourceIds = selectedPlacementIds.has(placement.placementId)
+            const sourceIds = selectionIds.has(placement.placementId)
               ? placements
-                .filter((item) => selectedPlacementIds.has(item.placementId) && !item.isSystem && !item.isTrash && !item.isTrashed)
+                .filter((item) => selectionIds.has(item.placementId) && !item.isSystem && !item.isTrash && !item.isTrashed)
                 .sort((a, b) => a.position - b.position || a.placementId.localeCompare(b.placementId))
                 .map((item) => item.placementId)
               : [placement.placementId];

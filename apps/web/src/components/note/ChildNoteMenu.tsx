@@ -31,7 +31,7 @@ export function ChildNoteMenu({
       <button
         role="menuitem"
         onClick={() => {
-          const tab: WorkspaceTab = { id: `note:${placement.noteId}:${placement.isTrashed ? "trash" : "active"}`, kind: "note", noteId: placement.noteId, isTrashed: Boolean(placement.isTrashed) };
+          const tab: WorkspaceTab = { id: `note:${placement.noteId}:${placement.isTrashed ? "trash" : "active"}`, kind: "note", noteId: placement.noteId, isTrashed: Boolean(placement.isTrashed), placementId: placement.placementId };
           onOpenInNewWindow(tab);
           onClose();
         }}
