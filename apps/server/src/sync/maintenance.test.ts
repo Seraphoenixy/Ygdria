@@ -343,3 +343,41 @@ describe("peer liveness and the re-baseline gate", () => {
     expect(db.prepare("SELECT COUNT(*) c FROM notes WHERE id=?").get(note.id)).toEqual({ c: 0 });
   });
 });
+
+describe("snapshot content fallback", () => {
+  it("reads the pinned body after the live note is changed or deleted", async () => {
+    const app = buildApp({ databaseUrl: ":memory:" });
+    const session = "11111111-1111-4111-8111-111111111111";
+    try {
+      const note = (
+        await app.inject({
+          method: "POST",
+          url: "/api/v1/notes",
+          payload: { title: "Pinned body" },
+        })
+      ).json();
+      const snapshot = (
+        await app.inject({
+          method: "GET",
+          url: `/api/v1/sync/snapshot?metadataOnly=1&session=${session}&limit=500`,
+        })
+      ).json();
+      const change = snapshot.changes.find(
+        (c: any) => c.entityId === note.id && c.entityType === "note",
+      );
+      const url = `/api/v1/sync/notes/${note.id}/content?hash=${change.data.contentHash}`;
+      const before = (await app.inject({ method: "GET", url })).json();
+      await app.inject({ method: "DELETE", url: `/api/v1/notes/${note.id}` });
+      await app.inject({ method: "DELETE", url: `/api/v1/notes/${note.id}/permanent` });
+      expect((await app.inject({ method: "GET", url })).statusCode).toBe(404);
+      const pinned = await app.inject({ method: "GET", url: `${url}&session=${session}` });
+      expect(pinned.statusCode).toBe(200);
+      expect(pinned.json()).toEqual(before);
+      expect((await app.inject({ method: "GET", url: `${url}&session=missing` })).statusCode).toBe(
+        409,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+});

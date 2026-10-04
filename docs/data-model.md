@@ -311,7 +311,9 @@ clone 模型中，“删除位置”和“删除笔记”是不同动作：
 
 永久删除笔记还会通过 `notes_fts_delete_on_note_delete` 触发器清理 FTS 投影。若附件不再被任何笔记正文引用，服务端会删除该附件元数据并创建 `storage_cleanup_jobs` 任务；仍被其他笔记引用的附件和物理文件会保留。后台任务负责可靠地删除孤立物理文件。系统根和回收站笔记、placement 都不可删除、移动、重命名或作为普通 clone 使用；普通笔记也不能通过移动 placement 的方式直接放入回收站，必须使用“移入回收站”命令。
 
-永久删除笔记（单条 `purge` 或批量 `purgeTrash`）现在也会把被删笔记写入 `sync_change_log`（`changeKind = "deleted"`），使回收站清空能跨设备传播，而不是只在执行那台设备上消失。接收端在 `applySyncChanges` 处理 `note` + `deleted` 时按本地状态分流：若本地该笔记**已在回收站**（`deleted_at` 非空），则直接硬删本地——`placements` / `relations` / `revisions` 都有 `ON DELETE CASCADE`，会一并级联清除——让两台设备数据库尽快一致；若本地该笔记**仍在使用中**（罕见冲突：本端恢复过、对端已清空），则保持软删（移回收站、可恢复），不静默销毁已恢复内容。因此「清空回收站」会在各端一致地清空。
+永久删除笔记（单条 `purge` 或批量 `purgeTrash`）会把被删笔记写入 `sync_change_log`（`changeKind = "deleted"`），使回收站清空能跨设备传播，而不是只在执行那台设备上消失。**只有笔记实体已从发送端数据库清除时**，接收端才会收到无正文的 `note` + `deleted` 墓碑，此时 `applySyncChanges` 按本地状态分流：若本地该笔记**已在回收站**（`deleted_at` 非空），则直接硬删本地——`placements` / `relations` / `revisions` 都有 `ON DELETE CASCADE`，会一并级联清除——让两台设备数据库尽快一致；若本地该笔记**仍在使用中**（罕见冲突：本端恢复过、对端已清空），则保持软删（移回收站、可恢复），不静默销毁已恢复内容。
+
+仍在回收站中、尚未被永久清理的笔记不再以墓碑传输：增量同步与全量快照在输出时都会把软删除日志解析为**当前完整状态**——`note` + `updated`，携带 `deletedAt`、正文与附件引用——走与普通笔记相同的 `updatedAt` last-write-wins 合并路径。接收端接受后移除该笔记的活动树位置（记录 `placement` + `deleted`）并自建本地回收站位置（回收站位置仍不写同步日志）；重复传输不会把软删除误当成永久清理，较新的本地恢复也不会被较旧的软删除覆盖。全量快照包含回收站中的笔记，但不包含各端自行生成的回收站位置。因此「清空回收站」会在各端一致地清空。
 
 「移入回收站」（`remove`）同样会为被删的**原始树 placement** 写入 `sync_change_log`（`entity_type = "placement"`，`changeKind = "deleted"`）——此前只记录了 `note` 的 `deleted`，导致对端收到后只软删笔记并在本地另建回收站 placement，却保留了该笔记原来的树位置行，造成数据库不一致。补录后，接收端 `applySyncChanges` 的 `placement` + `deleted` 分支会把那些原位置一并删除，使两端一致。注意：移入回收站时**新创建的回收站 placement 不写同步日志**——回收站 placement 是各设备各自的本地视图产物（每台设备独立 `INSERT OR IGNORE` 一个自己的回收站 placement），无需跨设备对齐；而原树位置属于内容结构，必须跨设备删除。撤销（`undoPlacementDeletion`）与「恢复笔记」仍走本地的 `placement_deletions` 快照，并通过 `note` + `updated`（`deleted_at` 置空）让对端在恢复时清除其回收站 placement，因此补录 `placement` 删除不会干扰撤销/恢复的对端重建（同实体的「删除 + 创建」会在 `getCoalescedChangesSince` 中收敛为创建）。
 

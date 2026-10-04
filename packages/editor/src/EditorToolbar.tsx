@@ -15,9 +15,11 @@ import {
   BookOpen,
   ChevronDown,
   ClipboardPaste,
+  Camera,
   Code,
   Edit3,
   EyeOff,
+  TextSearch,
   Highlighter,
   Image,
   IndentIncrease,
@@ -44,6 +46,7 @@ import {
   Undo,
 } from "lucide-react";
 import { selectTable, selectTableColumn, selectTableRow, TABLE_ACTION_LABELS } from "./table-actions.js";
+import { EDITOR_OPEN_SEARCH_EVENT } from "./search-events.js";
 import { TableInsertPicker } from "./TableInsertPicker.js";
 
 type Locale = "zh-CN" | "en";
@@ -117,6 +120,8 @@ const EMPTY_EDITOR_STATE = {
 export function EditorToolbar({
   editor,
   locale,
+  onCaptureImage,
+
   onUploadImage,
   editing = true,
   onToggleEditing,
@@ -125,6 +130,8 @@ export function EditorToolbar({
   editor?: Editor | null;
   locale: Locale;
   onUploadImage?: (file: File) => Promise<string>;
+  /** Native-only: capture a photo and hand it to the same insert path. */
+  onCaptureImage?: () => Promise<File | null>;
   editing?: boolean;
   onToggleEditing?: () => void;
   onImportMarkdown?: () => void;
@@ -150,7 +157,7 @@ export function EditorToolbar({
     <div ref={toolbarRef} className={`editor-toolbar overflow-level-${overflowLevel}`} role="toolbar" aria-label="editor-toolbar">
       {/* Formatting tools – only when editing with an editor */}
       {editing && editor && (
-        <EditorTools editor={editor} locale={locale} onUploadImage={onUploadImage} overflowLevel={overflowLevel} />
+        <EditorTools editor={editor} locale={locale} onUploadImage={onUploadImage} onCaptureImage={onCaptureImage} overflowLevel={overflowLevel} />
       )}
 
       {/* Markdown import */}
@@ -198,11 +205,13 @@ function EditorTools({
   editor,
   locale,
   onUploadImage,
+  onCaptureImage,
   overflowLevel,
 }: {
   editor: Editor;
   locale: Locale;
   onUploadImage?: (file: File) => Promise<string>;
+  onCaptureImage?: () => Promise<File | null>;
   overflowLevel: number;
 }) {
   const [openDropdown, setOpenDropdown] = useState<DropdownKey>(null);
@@ -218,6 +227,29 @@ function EditorTools({
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const savedSelectionPos = useRef<number | null>(null);
   const applyingFormatPainter = useRef(false);
+
+  /** Insert an image at the remembered selection, uploading it first when a
+   * handler is wired (otherwise inline as a data URL). Shared by the file
+   * input and the native-camera flow. */
+  const insertImageFile = async (file: File) => {
+    try {
+      const pos = savedSelectionPos.current ?? editor.state.selection.from;
+      if (onUploadImage) {
+        const url = await onUploadImage(file);
+        editor.chain().focus().setTextSelection(pos).setImage({ src: url }).run();
+      } else {
+        const src = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+        editor.chain().focus().setTextSelection(pos).setImage({ src }).run();
+      }
+    } catch {
+      // upload failed – silently ignore
+    }
+  };
 
   const state = useEditorState({
     editor,
@@ -490,23 +522,7 @@ function EditorTools({
           style={{ display: "none" }}
           onChange={async (event) => {
             const file = event.target.files?.[0];
-            if (!file) return;
-            try {
-              const pos = savedSelectionPos.current ?? editor.state.selection.from;
-              if (onUploadImage) {
-                const url = await onUploadImage(file);
-                editor.chain().focus().setTextSelection(pos).setImage({ src: url }).run();
-              } else {
-                const reader = new FileReader();
-                reader.onload = () => {
-                  const src = reader.result as string;
-                  editor.chain().focus().setTextSelection(pos).setImage({ src }).run();
-                };
-                reader.readAsDataURL(file);
-              }
-            } catch {
-              // upload failed – silently ignore
-            }
+            if (file) await insertImageFile(file);
             event.target.value = "";
           }}
         />
@@ -626,6 +642,21 @@ function EditorTools({
             <ToolbarButton active={false} label={labels.indent} onClick={() => run(() => (editor.chain().focus() as any).indent().run())} icon={<IndentIncrease size={16} />} />
             <ToolbarButton active={false} label={labels.outdent} onClick={() => run(() => (editor.chain().focus() as any).outdent().run())} icon={<IndentDecrease size={16} />} />
           </ToolbarGroup>}
+          <ToolbarGroup>
+            <ToolbarButton active={false} label={labels.findReplace} onClick={() => {
+              setShowMore(false);
+              window.dispatchEvent(new CustomEvent(EDITOR_OPEN_SEARCH_EVENT));
+            }} icon={<TextSearch size={16} />} />
+            {onCaptureImage && (
+              <ToolbarButton active={false} label={labels.camera} onClick={() => {
+                setShowMore(false);
+                void onCaptureImage().then((file) => {
+                  if (!file) return;
+                  void insertImageFile(file);
+                });
+              }} icon={<Camera size={16} />} />
+            )}
+          </ToolbarGroup>
         </div>,
         document.body,
       )}
@@ -945,6 +976,8 @@ const TOOLBAR_LABELS = {
     quote: "引用",
     inlineCode: "行内代码",
     moreTools: "更多工具",
+    findReplace: "查找替换",
+    camera: "拍照插图",
     codeBlock: "代码块",
     table: "表格",
     link: "链接",
@@ -984,6 +1017,8 @@ const TOOLBAR_LABELS = {
     quote: "Quote",
     inlineCode: "Inline code",
     moreTools: "More tools",
+    findReplace: "Find & replace",
+    camera: "Take a photo",
     codeBlock: "Code block",
     table: "Table",
     link: "Link",

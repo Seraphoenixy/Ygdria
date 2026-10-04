@@ -253,3 +253,10 @@
   font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
+
+/* Read-only settings fields (e.g. the desktop sync server address). */
+.settings-text-control:read-only {
+  color: var(--color-fg-muted);
+  background: var(--color-surface-2);
+  cursor: default;
+}

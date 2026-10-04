@@ -128,7 +128,7 @@ async function bootstrap() {
     ? (await Preferences.get({ key: MOBILE_API_ENDPOINT_KEY })).value
     : undefined;
   // On mobile the single source of truth for the server address is the
-  // "目标服务器地址" (syncServerUrl) from settings. The legacy ygdria.api
+  // "与 Linux 服务端同步的地址" (syncServerUrl) from settings. The legacy ygdria.api
   // preference is only a fallback for installs that predate the merge.
   const settings = isNativeMobile ? readSettings() : undefined;
   const effectiveMobileEndpoint =

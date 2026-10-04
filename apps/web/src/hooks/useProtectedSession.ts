@@ -191,6 +191,7 @@ export function useProtectedSession({
           for (const placement of treeData ?? []) {
             if (!placement.isProtected || protectedNotes.has(placement.noteId)) continue;
             const protectedNote = await client.getNote(placement.noteId);
+            if (!protectedNote.contentCiphertext) continue;
             protectedNotes.set(placement.noteId, {
               payload: await currentSession.decrypt<ProtectedPayload>(
                 protectedNote.contentCiphertext,

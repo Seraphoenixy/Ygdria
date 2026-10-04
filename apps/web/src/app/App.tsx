@@ -26,6 +26,9 @@ import { MigrationToServerDialog } from "../components/chrome/MigrationToServerD
 import { DeviceAccessGate } from "../components/chrome/DeviceAccessGate";
 import { WindowControls } from "../components/chrome/WindowControls";
 import { MobileTabBar } from "../components/chrome/MobileTabBar";
+import { ConnectionBanner } from "../components/chrome/ConnectionBanner";
+import { useConnectionState } from "../hooks/useConnectionState";
+import { usePullToRefresh, PULL_TRIGGER_PX } from "../hooks/usePullToRefresh";
 import { WorkspaceLayout } from "../components/workspace/WorkspaceLayout";
 import {
   assertAuthConfigSupported,
@@ -55,7 +58,7 @@ import type {
   TreePlacement,
 } from "../types/workspace";
 import { useNotes } from "../hooks/useNotes";
-import { useNoteTransfer } from "../hooks/useNoteTransfer";
+import { useNoteTransfer, type ImportSummary } from "../hooks/useNoteTransfer";
 import { useProtectedSession } from "../hooks/useProtectedSession";
 import { useSync } from "../hooks/useSync";
 import { useWorkspaceSelection } from "../hooks/useWorkspaceSelection";
@@ -456,6 +459,7 @@ export function App({
     openHistory,
     openArchive,
     openAttachments,
+    openGraph,
     openNewTab,
     closeTab,
     closeTabs,
@@ -536,6 +540,21 @@ export function App({
   }, [tabs, activeTabId, activateTab, closeTab]);
 
   const queryClient = useQueryClient();
+
+  // Thin clients (mobile / browser) talk straight to the sync server, so a
+  // transport-level failure is worth surfacing once, globally, instead of as
+  // per-call error toasts. The desktop dual-store form has its own sync UI.
+  const connection = useConnectionState(client, queryClient);
+
+  // Phone-layout pull-to-refresh: refresh every server-backed dataset. The
+  // identity must stay stable between renders or the hook rebinds its
+  // listeners mid-gesture.
+  const refreshAll = useCallback(async () => {
+    await queryClient.invalidateQueries();
+  }, [queryClient]);
+  const { pull: pullDistancePx, refreshing: pullRefreshing } = usePullToRefresh({
+    onRefresh: refreshAll,
+  });
 
   const {
     tree,
@@ -779,14 +798,17 @@ export function App({
   }, [client]);
 
   const showImportComplete = useCallback(
-    (summary: { notes: number; attachments: number; estimatedBytes: number }) => {
+    (summary: ImportSummary) => {
       const size =
         summary.estimatedBytes < 1024 * 1024
           ? `${Math.ceil(summary.estimatedBytes / 1024)} KiB`
           : `${(summary.estimatedBytes / 1024 / 1024).toFixed(1)} MiB`;
+      const failure =
+        summary.failed > 0 ? ` · ${t(locale, "importPartialFailure", { count: String(summary.failed) })}` : "";
       showToast(
-        `${t(locale, "importComplete")} · ${summary.notes} ${t(locale, "noteUnit")} · ${summary.attachments} ${t(locale, "attachmentUnit")} · ${size}`,
+        `${t(locale, "importComplete")} · ${summary.notes} ${t(locale, "noteUnit")} · ${summary.attachments} ${t(locale, "attachmentUnit")} · ${size}${failure}`,
       );
+      for (const error of summary.errors) console.warn("Import item failed", error);
     },
     [locale, showToast],
   );
@@ -859,6 +881,26 @@ export function App({
     deviceAccess,
     isDesktopApp,
   });
+
+  // The desktop remote connection is owned by the main process; its URL is
+  // the one the settings page must display as the sync server address. The
+  // local loopback that `client.getServerUrl()` reports is NOT it.
+  const [desktopRemoteServerUrl, setDesktopRemoteServerUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isDesktopApp) return;
+    let cancelled = false;
+    void window.ygdria?.remote
+      ?.status()
+      .then((status) => {
+        if (!cancelled) setDesktopRemoteServerUrl(status.serverUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setDesktopRemoteServerUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktopApp, bootEpoch, remoteClient, remoteReauthRequired]);
 
   const resizeTreePanel = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1356,6 +1398,8 @@ export function App({
           onCloseSearch={() => closeTab("search")}
           onCloseSettings={() => closeTab("settings")}
           onOpenArchive={openArchive}
+          onOpenGraph={openGraph}
+          onCloseGraph={() => closeTab("graph")}
           onOpenAttachments={openAttachments}
           onCloseAttachments={() => closeTab("attachments")}
           protectedSession={protectedSession}
@@ -1451,7 +1495,8 @@ export function App({
               void window.ygdria?.openDevTools?.();
             }}
             syncRunsAutomatically={isDesktopApp}
-            canEditMobileEndpoint={Capacitor.isNativePlatform()}
+            canEditSyncServerUrl={Capacitor.isNativePlatform()}
+            syncServerDisplayUrl={isDesktopApp ? desktopRemoteServerUrl : undefined}
             etapiTokenManagementAvailable={isDesktopApp}
             onProtectedSessionTimeoutChange={handleProtectedSessionTimeoutChange}
             onMaintainDatabase={maintainDatabase}
@@ -1491,6 +1536,8 @@ export function App({
           onToggleHistory={() => (activeTabId === "history" ? closeTab("history") : openHistory())}
           archiveActive={activeTabId === "archive"}
           onToggleArchive={() => (activeTabId === "archive" ? closeTab("archive") : openArchive())}
+          graphActive={activeTabId === "graph"}
+          onToggleGraph={() => (activeTabId === "graph" ? closeTab("graph") : openGraph())}
           settingsActive={settingsOpen}
           onToggleSettings={() => (settingsOpen ? closeTab("settings") : openSettings())}
         />
@@ -1651,6 +1698,25 @@ export function App({
             onResolve={resolveConflict}
             onClose={() => resolveConflict("dismiss")}
           />
+        )}
+        {!isDesktopApp && deviceAccess === "ready" && connection.state === "offline" && (
+          <ConnectionBanner locale={locale} retry={connection.retry} />
+        )}
+        {pullDistancePx > 0 && (
+          <div
+            className={`pull-refresh-indicator ${pullDistancePx >= PULL_TRIGGER_PX ? "armed" : ""} ${pullRefreshing ? "refreshing" : ""}`}
+            style={{ transform: `translate(-50%, ${Math.max(0, pullDistancePx - 40)}px)` }}
+            aria-hidden={!pullRefreshing}
+          >
+            <span className="pull-refresh-spinner" />
+            <span>
+              {pullRefreshing
+                ? t(locale, "pullToRefreshRefreshing")
+                : pullDistancePx >= PULL_TRIGGER_PX
+                  ? t(locale, "pullToRefreshArmed")
+                  : t(locale, "pullToRefreshHint")}
+            </span>
+          </div>
         )}
         {showSyncConflicts && syncConflicts.length > 0 && remoteClient && (
           <SyncConflictsDialog

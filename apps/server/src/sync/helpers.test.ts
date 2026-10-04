@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { applyMigrations, createDatabase } from "@ygdria/database";
 import { NoteService, RelationService } from "@ygdria/domain";
 import {
@@ -9,6 +9,7 @@ import {
   SYSTEM_TRASH_PLACEMENT_ID,
 } from "@ygdria/shared";
 import {
+  fullSnapshotChanges,
   applySyncChanges,
   attachmentIdsFromStoredContent,
   resolveChangeEntities,
@@ -515,5 +516,90 @@ describe("cross-device relation sync", () => {
       false,
     );
     expect(peerB.sqlite.prepare("SELECT 1 FROM relations WHERE id=?").get(R)).toBeUndefined();
+  });
+});
+
+
+describe("soft-deleted note sync", () => {
+  const read = (peer: ReturnType<typeof freshDb>, id: string) => peer.sqlite.prepare("SELECT title,deleted_at deletedAt,updated_at updatedAt FROM notes WHERE id=?").get(id);
+  const assertTrash = (peer: ReturnType<typeof freshDb>, id: string) => {
+    expect(peer.sqlite.prepare("SELECT id FROM placements WHERE note_id=? AND parent_placement_id=?").all(id, SYSTEM_TRASH_PLACEMENT_ID)).toHaveLength(1);
+    expect(peer.sqlite.prepare("SELECT id FROM placements WHERE note_id=? AND (parent_placement_id IS NULL OR parent_placement_id != ?)").all(id, SYSTEM_TRASH_PLACEMENT_ID)).toHaveLength(0);
+    expect(peer.sqlite.prepare("SELECT rowid FROM notes_fts WHERE notes_fts MATCH 'Recoverable'").all()).toHaveLength(0);
+  };
+
+  it("transfers a note first seen in trash and keeps repeated delivery recoverable", () => {
+    const a = freshDb(); const b = freshDb(); const service = new NoteService(a);
+    const note = service.create({ title: "Recoverable" });
+    service.remove(note.id);
+    sync(a, b, { id: 0 });
+    expect(read(b, note.id)).toEqual(read(a, note.id));
+    assertTrash(b, note.id);
+    sync(a, b, { id: 0 });
+    expect(read(b, note.id)).toEqual(read(a, note.id));
+    assertTrash(b, note.id);
+  });
+
+  it("includes trash in a pruned-log snapshot and reconciles an existing active copy", () => {
+    const a = freshDb(); const b = freshDb(); const empty = freshDb();
+    const service = new NoteService(a); const note = service.create({ title: "Recoverable" });
+    sync(a, b, { id: 0 });
+    service.remove(note.id);
+    a.sqlite.prepare("DELETE FROM sync_change_log").run();
+    const changes = resolveChangeEntities(a.sqlite, "", fullSnapshotChanges(a.sqlite), true);
+    expect(changes.find(c => c.entityId === note.id)?.data?.deletedAt).toBeTypeOf("number");
+    for (const target of [b, empty]) {
+      applySyncChanges(target.sqlite, changes, false);
+      expect(read(target, note.id)).toEqual(read(a, note.id));
+      assertTrash(target, note.id);
+    }
+  });
+
+  it("does not replace a newer local restore with an older trash state", () => {
+    const a = freshDb(); const b = freshDb(); const service = new NoteService(a);
+    const note = service.create({ title: "Recoverable" });
+    sync(a, b, { id: 0 });
+    service.remove(note.id);
+    const changes = resolveChangeEntities(a.sqlite, "", fullSnapshotChanges(a.sqlite), true);
+    b.sqlite.prepare("UPDATE notes SET updated_at=?,deleted_at=NULL WHERE id=?").run(Date.now()+10000, note.id);
+    applySyncChanges(b.sqlite, changes, false);
+    expect((read(b, note.id) as { deletedAt: number | null }).deletedAt).toBeNull();
+  });
+});
+
+describe("LWW clock arbitration", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("caps incoming records that claim to be from the future", () => {
+    const a = freshDb();
+    const b = freshDb();
+    const service = new NoteService(a);
+    const note = service.create({ title: "Time traveller" });
+    // The sending device's clock runs a year ahead.
+    const future = Date.now() + 365 * 24 * 60 * 60 * 1000;
+    a.sqlite.prepare("UPDATE notes SET created_at=?,updated_at=? WHERE id=?").run(future, future, note.id);
+
+    const [change] = resolveChangeEntities(a.sqlite, "", [
+      { id: 1, entityType: "note", entityId: note.id, changeKind: "updated", createdAt: future },
+    ], true);
+    applySyncChanges(b.sqlite, [change], false);
+
+    const stored = b.sqlite.prepare("SELECT updated_at FROM notes WHERE id=?").get(note.id) as { updated_at: number };
+    expect(stored.updated_at).toBeLessThanOrEqual(Date.now() + 6 * 60 * 1000);
+    expect(stored.updated_at).toBeGreaterThan(Date.now());
+
+    // Once the receiver's clock passes the cap, an honest edit outranks the
+    // capped record (before arbitration, the future record won forever).
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 6 * 60 * 1000);
+    service.update(note.id, { title: "Honest edit", expectedVersion: 1 });
+    const [later] = resolveChangeEntities(a.sqlite, "", [
+      { id: 2, entityType: "note", entityId: note.id, changeKind: "updated", createdAt: Date.now() },
+    ], true);
+    applySyncChanges(b.sqlite, [later], false);
+    const title = b.sqlite.prepare("SELECT title FROM notes WHERE id=?").get(note.id) as { title: string };
+    expect(title.title).toBe("Honest edit");
   });
 });

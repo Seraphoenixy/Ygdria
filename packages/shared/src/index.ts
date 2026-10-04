@@ -48,6 +48,62 @@ export function attachmentIdsFromSerializedDocument(serialized: string): Set<str
   }
 }
 
+/**
+ * Returns note IDs referenced by noteReference nodes (internal [[note:...]]
+ * links) in a TipTap document. Only that node type's attrs.noteId counts;
+ * titles and URL-shaped text elsewhere are ignored.
+ */
+export function noteReferenceIdsFromDocument(content: unknown): Set<string> {
+  const ids = new Set<string>();
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    const value = node as { type?: unknown; attrs?: unknown; content?: unknown };
+    if (value.type === "noteReference" && value.attrs && typeof value.attrs === "object") {
+      const noteId = (value.attrs as { noteId?: unknown }).noteId;
+      if (typeof noteId === "string" && noteId) ids.add(noteId);
+    }
+    if (Array.isArray(value.content)) value.content.forEach(visit);
+  };
+  visit(content);
+  return ids;
+}
+
+/** Returns no references when legacy or malformed stored content is not JSON. */
+export function noteReferenceIdsFromSerializedDocument(serialized: string): Set<string> {
+  try {
+    return noteReferenceIdsFromDocument(JSON.parse(serialized));
+  } catch {
+    return new Set<string>();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge graph (read-only projection served by GET /api/v1/graph)
+// ---------------------------------------------------------------------------
+// Response-side schemas exist so the HTTP client can describe payloads with
+// z.infer instead of handwritten duplicates. They are deliberately loose
+// (optional fields + passthrough) and are never parsed at runtime — the
+// server is the same codebase, so strict validation would only add friction.
+export const graphNodeSchema = z.object({
+  id: z.string(),
+  /** Empty for protected notes: their title is only readable client-side. */
+  title: z.string(),
+  isProtected: z.boolean(),
+});
+export const graphEdgeSchema = z.object({
+  source: z.string(),
+  target: z.string(),
+  kind: z.enum(["relation", "link"]),
+});
+export const graphDataSchema = z.object({
+  nodes: z.array(graphNodeSchema),
+  edges: z.array(graphEdgeSchema),
+});
+export type GraphNode = z.infer<typeof graphNodeSchema>;
+export type GraphEdgeKind = GraphEdge["kind"];
+export type GraphEdge = z.infer<typeof graphEdgeSchema>;
+export type GraphData = z.infer<typeof graphDataSchema>;
+
 // ---------------------------------------------------------------------------
 // Note properties (JSON stored in notes.properties_json)
 // ---------------------------------------------------------------------------
@@ -100,6 +156,54 @@ export const movePlacementsSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// API response shapes (z.infer typing aids for @ygdria/api-client)
+// ---------------------------------------------------------------------------
+/** Shape served by GET/POST/PATCH note endpoints (domain `get()` projection).
+ *  Protected notes carry `contentCiphertext` and null `content`; code notes
+ *  carry their raw source as `content`; trashed notes additionally have
+ *  `deletedAt` and may omit tags/codeLanguage. */
+export const noteResponseSchema = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    type: z.enum(["text", "code"]),
+    codeLanguage: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    content: z.union([noteContentSchema, z.string()]).nullable(),
+    contentCiphertext: z.string().optional(),
+    version: z.number(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    archivedAt: z.number().nullable().optional(),
+    deletedAt: z.string().nullable().optional(),
+    isProtected: z.boolean().optional(),
+  })
+  .passthrough();
+export type NoteResponse = z.infer<typeof noteResponseSchema>;
+
+/** One row of GET /api/v1/tree. Boolean flags are asserted server-side; the
+ *  schema describes the contract the client codes against. Protected notes
+ *  carry `contentJson` (the ciphertext payload) instead of a decodable body. */
+export const treePlacementSchema = z
+  .object({
+    placementId: z.string(),
+    noteId: z.string(),
+    parentPlacementId: z.string().nullable(),
+    position: z.number(),
+    title: z.string(),
+    type: z.enum(["text", "code"]),
+    contentJson: z.string().optional(),
+    isProtected: z.boolean().optional(),
+    isTrashed: z.boolean().optional(),
+    isArchived: z.boolean().optional(),
+    isSystem: z.boolean().optional(),
+    isCalendar: z.boolean().optional(),
+    isTrash: z.boolean().optional(),
+  })
+  .passthrough();
+export type TreePlacement = z.infer<typeof treePlacementSchema>;
+
+// ---------------------------------------------------------------------------
 // Note-to-note relations (related / uses / prerequisite)
 // ---------------------------------------------------------------------------
 export const relationTypes = ["related", "uses", "prerequisite"] as const;
@@ -118,6 +222,11 @@ export const relationSchema = z.object({
   createdAt: z.number(),
 });
 export type Relation = z.infer<typeof relationSchema>;
+/** A relation plus the display title of the peer note (source or target). */
+export const relationWithPeerSchema = relationSchema.extend({
+  peerTitle: z.string(),
+});
+export type RelationWithPeer = z.infer<typeof relationWithPeerSchema>;
 export type ApiError = { error: { code: string; message: string } };
 export const emptyDocument: NoteContent = { type: "doc", content: [{ type: "paragraph" }] };
 
@@ -164,16 +273,17 @@ export const MAX_MASTER_PASSWORD_LENGTH = 64;
 export const AUTH_PROTOCOL_VERSION = "srp6a-v1";
 export const KDF_VERSION = "pbkdf2-sha256-v1";
 
-export type SearchResult = {
-  noteId: string;
-  title: string;
-  snippet: string;
-  matchedField: "title" | "content" | "property";
-  updatedAt: string;
-  tags: string[];
+export const searchResultSchema = z.object({
+  noteId: z.string(),
+  title: z.string(),
+  snippet: z.string(),
+  matchedField: z.enum(["title", "content", "property"]),
+  updatedAt: z.string(),
+  tags: z.array(z.string()),
   /** Placements inside an ETAPI subtree that contain this note. */
-  matchedPlacementIds?: string[];
-};
+  matchedPlacementIds: z.array(z.string()).optional(),
+});
+export type SearchResult = z.infer<typeof searchResultSchema>;
 
 export type TagStats = {
   tag: string;
@@ -238,6 +348,13 @@ export const STORAGE_CLEANUP_JOB_FAILURE_ATTEMPTS = 3;
  * resuming incremental pull/push; it must not surface it as a normal sync error.
  */
 export const SYNC_REBASELINE_REQUIRED = "SYNC_REBASELINE_REQUIRED";
+
+/** How far a synced record may claim to be from the future before the
+ * receiving server caps it to its own clock. Honest clocks stay untouched;
+ * a run-ahead device cannot mint records that outrank every later, honest
+ * edit under last-write-wins. */
+export const SYNC_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+export const SYNC_SNAPSHOT_EXPIRED = "SYNC_SNAPSHOT_EXPIRED";
 
 /** Machine-readable capacity signals. An empty list means "healthy". */
 export type SyncMaintenanceWarning =

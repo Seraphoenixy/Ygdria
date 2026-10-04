@@ -71,7 +71,7 @@ export function ChildNoteList({
         </div>
         {expanded && (
           <div className="child-note-preview">
-            {previews.isLoading ? <p>{t(locale, "loading")}</p> : preview ? <StaticDocument document={preview.content} /> : null}
+            {previews.isLoading ? <p>{t(locale, "loading")}</p> : preview && preview.content && typeof preview.content === "object" ? <StaticDocument document={preview.content} /> : null}
             {nested.length > 0 && <ul className="child-note-nested">{nested.map(renderItem)}</ul>}
           </div>
         )}

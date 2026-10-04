@@ -1,3 +1,4 @@
+import { pushSyncBatches } from "@ygdria/api-client";
 import { t, type Locale } from "../lib/i18n";
 import type { RejectedSyncChange } from "@ygdria/api-client";
 
@@ -184,20 +185,25 @@ export class RemoteProxyClient {
     }>,
     _syncOrigin?: "remote",
     peerId?: string,
+    onRejected?: (rejected: RejectedSyncChange[]) => Promise<void>,
   ) {
-    const json = JSON.stringify(peerId ? { changes, peerId } : { changes });
-    let body: string | ArrayBuffer = json;
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (typeof CompressionStream !== "undefined" && json.length >= 1024) {
-      body = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
-      headers["Content-Type"] = "application/vnd.ygdria.sync+json";
-      headers["Content-Encoding"] = "gzip";
-    }
-    return this.request("/api/v1/sync/push", {
-      method: "POST",
-      headers,
-      body,
-    }) as Promise<{ applied: number; rejected: RejectedSyncChange[] }>;
+    return pushSyncBatches(changes, async (batch) => {
+      // JSON.stringify drops an undefined peerId, so the envelope matches the
+      // peerless shape exactly when no peer id is given.
+      const json = JSON.stringify({ changes: batch, peerId });
+      let body: string | ArrayBuffer = json;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (typeof CompressionStream !== "undefined" && json.length >= 1024) {
+        body = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+        headers["Content-Type"] = "application/vnd.ygdria.sync+json";
+        headers["Content-Encoding"] = "gzip";
+      }
+      return this.request("/api/v1/sync/push", {
+        method: "POST",
+        headers,
+        body,
+      }) as Promise<{ applied: number; rejected: RejectedSyncChange[] }>;
+    }, peerId, async (response) => { await onRejected?.(response.rejected); });
   }
   getNote(id: string) {
     return this.request(`/api/v1/notes/${encodeURIComponent(id)}`) as Promise<any>;
@@ -217,8 +223,8 @@ export class RemoteProxyClient {
       body: JSON.stringify({ salt, verifier, timeoutMs }),
     }) as Promise<{ configured: boolean }>;
   }
-  syncNoteContent(noteId: string, contentHash: string) {
-    return this.request(`/api/v1/sync/notes/${encodeURIComponent(noteId)}/content?hash=${encodeURIComponent(contentHash)}`) as Promise<{ contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string }>;
+  syncNoteContent(noteId: string, contentHash: string, session?: string) {
+    return this.request(`/api/v1/sync/notes/${encodeURIComponent(noteId)}/content?hash=${encodeURIComponent(contentHash)}${session ? `&session=${encodeURIComponent(session)}` : ""}`) as Promise<{ contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string }>;
   }
   syncNoteContentBatch(ids: string[], hashes: string[], session?: string) {
     return this.request("/api/v1/sync/notes/content/batch", {
@@ -230,11 +236,11 @@ export class RemoteProxyClient {
       truncated: boolean;
     }>;
   }
-  advanceSyncCursor(peerId: string, cursor: number) {
+  advanceSyncCursor(peerId: string, cursor: number, snapshotSession?: string) {
     return this.request("/api/v1/sync/advance", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ peerId, cursor }),
+      body: JSON.stringify({ peerId, cursor, snapshotSession }),
     }) as Promise<{ peerId: string; lastAdvanceId: number; advancedAt: number }>;
   }
   getSyncCursor(peerId: string) {

@@ -8,7 +8,7 @@ import type { Locale } from "../lib/i18n";
 import { t } from "../lib/i18n";
 import { loadRemoteCredential, saveRemoteCredential } from "../lib/credentialStorage";
 import { readSettings } from "../features/settings/settingsStore";
-import { SYNC_REBASELINE_REQUIRED } from "@ygdria/shared";
+import { SYNC_REBASELINE_REQUIRED, SYNC_SNAPSHOT_EXPIRED } from "@ygdria/shared";
 import { localSyncPeerId, isRebaselineRequiredError } from "../lib/syncIdentity";
 import {
   assertAuthConfigSupported,
@@ -236,6 +236,8 @@ export function useSync({
   // would re-run the effect and add extra checks beyond the 15 s tick).
   const syncingRef = useRef(syncing);
   syncingRef.current = syncing;
+  const syncConflictsByPeerRef = useRef(syncConflictsByPeer);
+  syncConflictsByPeerRef.current = syncConflictsByPeer;
   const syncConflictsRef = useRef(syncConflicts);
   syncConflictsRef.current = syncConflicts;
   const remoteReauthRequiredRef = useRef(remoteReauthRequired);
@@ -267,7 +269,7 @@ export function useSync({
       try {
         const credential = await loadRemoteCredential();
         const isNative = Capacitor.isNativePlatform();
-        // On mobile the authoritative server address is the "目标服务器地址"
+        // On mobile the authoritative server address is the "与 Linux 服务端同步的地址"
         // (syncServerUrl) from settings — not the address auto-saved alongside
         // the device credential. Other platforms keep using the credential's
         // server URL. Fall back to the credential's serverUrl for legacy mobile
@@ -421,7 +423,7 @@ export function useSync({
               result[entry.index] = { ...result[entry.index], data: { ...result[entry.index].data!, ...content } } as T;
             } else if (batch.truncated) {
               // Fall back to individual fetch for truncated entries
-              const fallback = await source.syncNoteContent(entry.id, entry.hash);
+              const fallback = await source.syncNoteContent(entry.id, entry.hash, snapshotSession);
               result[entry.index] = { ...result[entry.index], data: { ...result[entry.index].data!, ...fallback } } as T;
             }
           }
@@ -500,7 +502,20 @@ export function useSync({
       // Notes whose local edit the remote rejected via last-write-wins during
       // this sync. Captured here (before the download phase can overwrite the
       // losing local edit) so the panel can show exactly what was discarded.
-      const builtConflicts: SyncConflict[] = [];
+      const persistConflict = async (rejected: RejectedSyncChange[]) => {
+        for (const change of rejected) {
+          if (change.entityType !== "note") continue;
+          const conflict = await buildConflict(change, peer);
+          const current = syncConflictsByPeerRef.current;
+          const byId = new Map((current[peer] ?? []).map((item) => [item.noteId, item]));
+          byId.set(conflict.noteId, conflict);
+          const next = { ...current, [peer]: Array.from(byId.values()) };
+          // Persist before cursor advancement or any operation that can fail.
+          window.localStorage.setItem("ygdria.sync.conflicts", JSON.stringify(next));
+          syncConflictsByPeerRef.current = next;
+          setSyncConflictsByPeer(next);
+        }
+      };
       const buildConflict = async (
         rejected: RejectedSyncChange,
         peerId: string,
@@ -556,7 +571,7 @@ export function useSync({
        * cursor confirmation is what lifts that gate and re-registers this
        * device, so it must run even when the snapshot came back empty.
        */
-      const rebaselineFromSnapshot = async () => {
+      const rebaselineFromSnapshotAttempt = async () => {
         const sessionId = crypto.randomUUID();
         let snapshot = await remoteClient.syncSnapshot(0, 500, true, selfPeer, sessionId);
         while (snapshot.changes.length) {
@@ -568,7 +583,17 @@ export function useSync({
           snapshot = await remoteClient.syncSnapshot(snapshot.cursor, 500, true, selfPeer, sessionId);
         }
         await client.advanceSyncCursor(`in:${peer}`, snapshot.maxChangeId);
-        await remoteClient.advanceSyncCursor(selfPeer, snapshot.maxChangeId);
+        await remoteClient.advanceSyncCursor(selfPeer, snapshot.maxChangeId, sessionId);
+      };
+      const rebaselineFromSnapshot = async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            await rebaselineFromSnapshotAttempt();
+            return;
+          } catch (error) {
+            if ((error as { code?: string } | null)?.code !== SYNC_SNAPSHOT_EXPIRED || attempt >= 2) throw error;
+          }
+        }
       };
       const runSyncPass = async () => {
         let incomingCursor = await client.getSyncCursor(`in:${peer}`);
@@ -576,6 +601,8 @@ export function useSync({
           await rebaselineFromSnapshot();
           incomingCursor = await client.getSyncCursor(`in:${peer}`);
         }
+        // Repair an interrupted remote acknowledgement, even on an empty pull.
+        await remoteClient.advanceSyncCursor(selfPeer, incomingCursor.lastAdvanceId);
         const outgoingCursor = await client.getSyncCursor(`out:${peer}`);
         let outgoing = await client.syncChanges(outgoingCursor.lastAdvanceId, 500, undefined, true);
         while (outgoing.changes.length) {
@@ -584,11 +611,7 @@ export function useSync({
           );
           setSyncItemCount((current) => ({ out: outgoing.changes.length, in: current.in }));
           const hydrated = await hydrateNoteContents(outgoing.changes, client);
-          const pushResult = await remoteClient.pushSyncChanges(hydrated, undefined, selfPeer);
-          for (const rejected of pushResult.rejected) {
-            if (rejected.entityType === "note")
-              builtConflicts.push(await buildConflict(rejected, peer));
-          }
+          await remoteClient.pushSyncChanges(hydrated, undefined, selfPeer, persistConflict);
           await copyAttachments(outgoing.changes, client, remoteClient);
           await client.advanceSyncCursor(`out:${peer}`, outgoing.cursor);
           if (!outgoing.hasMore) break;
@@ -628,13 +651,6 @@ export function useSync({
         setSyncProgress(t(locale, "syncRebaselining"));
         await rebaselineFromSnapshot();
         await runSyncPass();
-      }
-      if (builtConflicts.length && syncEpoch === syncEpochRef.current) {
-        setSyncConflictsByPeer((current) => {
-          const byId = new Map((current[peer] ?? []).map((c) => [c.noteId, c]));
-          for (const conflict of builtConflicts) byId.set(conflict.noteId, conflict);
-          return { ...current, [peer]: Array.from(byId.values()) };
-        });
       }
       await refreshTree();
       // Sync writes remote changes directly into the local database. Refresh

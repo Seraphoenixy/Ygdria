@@ -78,7 +78,7 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
     activateTab(tab, editing);
   };
 
-  const openSingletonTab = (tab: Extract<WorkspaceTab, { kind: "settings" | "search" | "history" | "archive" | "attachments" }>) => {
+  const openSingletonTab = (tab: Extract<WorkspaceTab, { kind: "settings" | "search" | "history" | "archive" | "attachments" | "graph" }>) => {
     setTabs((current) => (current.some((item) => item.id === tab.id) ? current : [...current, tab]));
     activateTab(tab);
   };
@@ -105,6 +105,7 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
   const openHistory = () => openSingletonTab({ id: "history", kind: "history" });
   const openArchive = () => openSingletonTab({ id: "archive", kind: "archive" });
   const openAttachments = () => openSingletonTab({ id: "attachments", kind: "attachments" });
+  const openGraph = () => openSingletonTab({ id: "graph", kind: "graph" });
   const openNewTab = () => {
     newTabSequence.current += 1;
     const tab: WorkspaceTab = { id: `new:${Date.now()}:${newTabSequence.current}`, kind: "new" };
@@ -168,7 +169,7 @@ export function useWorkspaceTabs({ onActivate }: UseWorkspaceTabsOptions) {
 
   return {
     tabs, activeTab, activeTabId, settingsOpen, pinnedTabIds, closedTabs,
-    activateTab, openNote, openSettings, openSearch, openHistory, openArchive, openAttachments, openNewTab,
+    activateTab, openNote, openSettings, openSearch, openHistory, openArchive, openAttachments, openGraph, openNewTab,
     closeTab, closeTabs, togglePin, reopenClosedTab, openTabInNewWindow, clearTabs, moveTab,
   };
 }

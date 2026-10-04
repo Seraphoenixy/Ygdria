@@ -31,6 +31,7 @@ export type WorkspaceTab =
   | { id: "history"; kind: "history" }
   | { id: "archive"; kind: "archive" }
   | { id: "attachments"; kind: "attachments" }
+  | { id: "graph"; kind: "graph" }
   | { id: string; kind: "new" }
   | { id: string; kind: "note"; noteId: string; isTrashed: boolean; placementId?: string };
 

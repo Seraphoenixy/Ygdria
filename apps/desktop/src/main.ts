@@ -1,3 +1,4 @@
+import { readRemoteResponse } from "./remote-request.js";
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, type IpcMainInvokeEvent } from "electron";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -397,80 +398,118 @@ app
         clearTimeout(timeout);
       }
     });
-    ipcMain.handle("ygdria:remote:request", async (event, init: {
-      method: string;
-      path: string;
-      body?: string | ArrayBuffer;
-      headers?: Record<string, string>;
-    }) => {
-      assertTrustedIpcSender(event);
-      const targetServerUrl = pendingRemoteServerUrl || remoteServerUrl;
-      if (!targetServerUrl) throw new Error("Remote server is not configured");
-      if (!init.path.startsWith("/")) throw new Error("Request path must start with /");
-      if (!isAllowedRemotePath(init.method, init.path)) throw new Error("Request path is not allowed by the remote proxy");
-      // String concatenation (not URL resolution) preserves subpath bases and
-      // keeps the allowlist check meaningful.
-      const fullUrl = targetServerUrl + init.path;
-      let parsedFull: URL;
-      try { parsedFull = new URL(fullUrl); } catch { throw new Error("Invalid request URL"); }
-      // SSRF guard: the resolved URL must stay on the configured origin.
-      if (parsedFull.origin !== new URL(targetServerUrl).origin) {
-        throw new Error("Request resolves outside the configured server origin");
-      }
-      const headers: Record<string, string> = { ...(init.headers ?? {}) };
-      if (remoteToken && targetServerUrl === remoteServerUrl) headers["Authorization"] = `Bearer ${remoteToken}`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), REMOTE_REQUEST_TIMEOUT_MS);
-      let response: Response;
-      try {
-        response = await fetch(fullUrl, {
-          method: init.method,
-          headers,
-          body: init.body as BodyInit | undefined,
-          redirect: "error", // no redirects — prevents origin hopping
-          signal: controller.signal,
-        });
-      } catch (error) {
-        const cause = error instanceof Error ? error.cause : undefined;
-        const code =
-          cause && typeof cause === "object" && "code" in cause
-            ? String((cause as { code?: unknown }).code ?? "")
-            : "";
-        const message = controller.signal.aborted
-          ? `Remote request timed out after ${REMOTE_REQUEST_TIMEOUT_MS / 1000}s`
-          : `Remote request failed${code ? ` (${code})` : ""}`;
-        console.warn(message, { method: init.method, path: parsedFull.pathname });
-        throw new Error(message);
-      } finally {
-        clearTimeout(timeout);
-      }
-      const responseHeaders: Record<string, string> = {};
-      response.headers.forEach((value, key) => { responseHeaders[key] = value; });
-      const cleanPath = init.path.split("?")[0];
-      const contentType = responseHeaders["content-type"] ?? "";
-      if (contentType.includes("application/json")) {
-        const text = await response.text();
-        let parsed: unknown = null;
-        if (text) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
-        // Intercept deviceToken from successful init/verify responses.
-        if (response.ok && REMOTE_TOKEN_INTERCEPT_PATHS.has(cleanPath) &&
-            typeof parsed === "object" && parsed !== null && "deviceToken" in parsed) {
-          const obj = parsed as { deviceToken?: string; [k: string]: unknown };
-          if (obj.deviceToken) {
-            remoteServerUrl = targetServerUrl;
-            pendingRemoteServerUrl = "";
-            remoteToken = obj.deviceToken;
-            try { writeRemoteCredential({ serverUrl: remoteServerUrl, deviceToken: remoteToken }); } catch { /* in-memory only */ }
-          }
-          const { deviceToken: _stripped, ...sanitized } = obj;
-          return { status: response.status, body: sanitized, headers: responseHeaders, isBinary: false };
+    ipcMain.handle(
+      "ygdria:remote:request",
+      async (
+        event,
+        init: {
+          method: string;
+          path: string;
+          body?: string | ArrayBuffer;
+          headers?: Record<string, string>;
+        },
+      ) => {
+        assertTrustedIpcSender(event);
+        const targetServerUrl = pendingRemoteServerUrl || remoteServerUrl;
+        if (!targetServerUrl) throw new Error("Remote server is not configured");
+        if (!init.path.startsWith("/")) throw new Error("Request path must start with /");
+        if (!isAllowedRemotePath(init.method, init.path))
+          throw new Error("Request path is not allowed by the remote proxy");
+        // String concatenation (not URL resolution) preserves subpath bases and
+        // keeps the allowlist check meaningful.
+        const fullUrl = targetServerUrl + init.path;
+        let parsedFull: URL;
+        try {
+          parsedFull = new URL(fullUrl);
+        } catch {
+          throw new Error("Invalid request URL");
         }
-        return { status: response.status, body: parsed, headers: responseHeaders, isBinary: false };
-      }
-      // Binary response (attachment download)
-      const buffer = await response.arrayBuffer();
-      return { status: response.status, body: buffer, headers: responseHeaders, isBinary: true };
-    });
+        // SSRF guard: the resolved URL must stay on the configured origin.
+        if (parsedFull.origin !== new URL(targetServerUrl).origin) {
+          throw new Error("Request resolves outside the configured server origin");
+        }
+        const headers: Record<string, string> = { ...(init.headers ?? {}) };
+        if (remoteToken && targetServerUrl === remoteServerUrl)
+          headers["Authorization"] = `Bearer ${remoteToken}`;
+        let remoteResponse: Awaited<ReturnType<typeof readRemoteResponse>>;
+        try {
+          remoteResponse = await readRemoteResponse(
+            fullUrl,
+            {
+              method: init.method,
+              headers,
+              body: init.body as BodyInit | undefined,
+              redirect: "error",
+            },
+            REMOTE_REQUEST_TIMEOUT_MS,
+          );
+        } catch (error) {
+          const cause = error instanceof Error ? error.cause : undefined;
+          const code =
+            cause && typeof cause === "object" && "code" in cause ? String(cause.code) : "";
+          const message =
+            error instanceof Error && error.message.startsWith("Remote request timed out")
+              ? error.message
+              : `Remote request failed${code ? ` (${code})` : ""}`;
+          console.warn(message, { method: init.method, path: parsedFull.pathname });
+          throw new Error(message);
+        }
+        const { response, body: responseBody } = remoteResponse;
+        const responseHeaders: Record<string, string> = {};
+        response.headers.forEach((value, key) => {
+          responseHeaders[key] = value;
+        });
+        const cleanPath = init.path.split("?")[0];
+        const contentType = responseHeaders["content-type"] ?? "";
+        if (contentType.includes("application/json")) {
+          const text = responseBody as string;
+          let parsed: unknown = null;
+          if (text) {
+            try {
+              parsed = JSON.parse(text);
+            } catch {
+              parsed = text;
+            }
+          }
+          // Intercept deviceToken from successful init/verify responses.
+          if (
+            response.ok &&
+            REMOTE_TOKEN_INTERCEPT_PATHS.has(cleanPath) &&
+            typeof parsed === "object" &&
+            parsed !== null &&
+            "deviceToken" in parsed
+          ) {
+            const obj = parsed as { deviceToken?: string; [k: string]: unknown };
+            if (obj.deviceToken) {
+              remoteServerUrl = targetServerUrl;
+              pendingRemoteServerUrl = "";
+              remoteToken = obj.deviceToken;
+              try {
+                writeRemoteCredential({ serverUrl: remoteServerUrl, deviceToken: remoteToken });
+              } catch {
+                /* in-memory only */
+              }
+            }
+            const { deviceToken: _stripped, ...sanitized } = obj;
+            return {
+              status: response.status,
+              body: sanitized,
+              headers: responseHeaders,
+              isBinary: false,
+            };
+          }
+          return {
+            status: response.status,
+            body: parsed,
+            headers: responseHeaders,
+            isBinary: false,
+          };
+        }
+        // Binary response (attachment download)
+        const buffer = responseBody as ArrayBuffer;
+        return { status: response.status, body: buffer, headers: responseHeaders, isBinary: true };
+      },
+    );
     ipcMain.handle(
       "ygdria:window-control",
       (event, action: "minimize" | "toggle-maximize" | "close") => {

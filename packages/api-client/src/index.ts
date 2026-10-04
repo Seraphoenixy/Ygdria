@@ -1,4 +1,14 @@
-import type { NoteContent, SyncMaintenanceStats } from "@ygdria/shared";
+import { pushSyncBatches } from "./sync-batches.js";
+export { pushSyncBatches } from "./sync-batches.js";
+import type {
+  GraphData,
+  NoteContent,
+  NoteResponse,
+  RelationWithPeer,
+  SearchResult,
+  SyncMaintenanceStats,
+  TreePlacement,
+} from "@ygdria/shared";
 
 export type EtapiScope = "notes:read" | "notes:write";
 export type EtapiSession = {
@@ -36,12 +46,37 @@ function createTimeoutSignal(timeoutMs?: number): AbortSignal | undefined {
   return AbortSignal.timeout(timeoutMs);
 }
 
+export type RequestObservation = { ok: boolean };
+export type RequestObserver = (observation: RequestObservation) => void;
+
 export class YgdriaClient {
+  private requestObserver?: RequestObserver;
+  private lastRequestFailed = false;
   constructor(
     private baseUrl = "http://127.0.0.1:4318",
     private token?: string,
     private deviceToken?: string,
   ) {}
+  /**
+   * Observe network-level connectivity transitions (not HTTP status codes):
+   * `{ok:false}` on transport failure/timeout, `{ok:true}` on the first
+   * successful request afterwards. Thin clients use this to surface an
+   * honest connection banner instead of per-call error toasts.
+   */
+  setRequestObserver(observer: RequestObserver | undefined) {
+    this.requestObserver = observer;
+    this.lastRequestFailed = false;
+  }
+  private observe(ok: boolean) {
+    // Only report transitions so a burst of failing requests stays one event.
+    if (ok === !this.lastRequestFailed) return;
+    this.lastRequestFailed = !ok;
+    try {
+      this.requestObserver?.({ ok });
+    } catch {
+      /* observer errors must never break requests */
+    }
+  }
   setDeviceToken(deviceToken?: string) {
     this.deviceToken = deviceToken;
   }
@@ -69,7 +104,10 @@ export class YgdriaClient {
     let r: Response;
     try {
       r = await fetch(this.baseUrl + path, { ...init, headers, ...(signal ? { signal } : {}) });
+      // Any response — even 4xx/5xx — proves the server is reachable.
+      this.observe(true);
     } catch (error) {
+      this.observe(false);
       const reason = error instanceof Error ? error.message : String(error);
       const requestError = new Error(
         `HTTP 请求失败（${init?.method ?? "GET"} ${this.baseUrl}${path}）：${reason}`,
@@ -104,27 +142,11 @@ export class YgdriaClient {
     if (this.deviceToken) headers["Authorization"] = `Bearer ${this.deviceToken}`;
     return fetch(this.baseUrl + path, { headers });
   }
-  private async requestText(path: string): Promise<string> {
-    const headers: Record<string, string> = {};
-    if (this.token) headers["X-Ygdria-Local-Token"] = this.token;
-    if (this.deviceToken) headers["Authorization"] = `Bearer ${this.deviceToken}`;
-    const response = await fetch(this.baseUrl + path, { headers });
-    if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as
-        | { error?: { code?: string; message?: string } }
-        | null;
-      const error = new Error(body?.error?.message ?? response.statusText);
-      (error as Error & { statusCode?: number; code?: string }).statusCode = response.status;
-      (error as Error & { statusCode?: number; code?: string }).code = body?.error?.code;
-      throw error;
-    }
-    return response.text();
-  }
   tree() {
-    return this.request<any[]>("/api/v1/tree");
+    return this.request<TreePlacement[]>("/api/v1/tree");
   }
   getNote(id: string) {
-    return this.request<any>(`/api/v1/notes/${id}`);
+    return this.request<NoteResponse>(`/api/v1/notes/${id}`);
   }
   placementSize(id: string) {
     return this.request<{
@@ -145,6 +167,11 @@ export class YgdriaClient {
       };
     }>(`/api/v1/placements/${id}/size`);
   }
+  placementChildren(id: string) {
+    return this.request<
+      Array<{ placementId: string; noteId: string; title: string; isTrashed: boolean; isArchived: boolean; isSystem: boolean; isTrash: boolean }>
+    >(`/api/v1/placements/${encodeURIComponent(id)}/children`);
+  }
   createNote(body: {
     title: string;
     parentPlacementId?: string | null;
@@ -153,14 +180,14 @@ export class YgdriaClient {
     code?: string;
     tags?: string[];
   }) {
-    return this.request<any>("/api/v1/notes", {
+    return this.request<NoteResponse>("/api/v1/notes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
   }
   createTodayNote(body: { title: string; content?: NoteContent }) {
-    return this.request<any>("/api/v1/notes/today", {
+    return this.request<NoteResponse>("/api/v1/notes/today", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -199,23 +226,28 @@ export class YgdriaClient {
     }>,
     syncOrigin?: "remote",
     peerId?: string,
+    onRejected?: (rejected: RejectedSyncChange[]) => Promise<void>,
   ) {
-    const json = JSON.stringify(peerId ? { changes, peerId } : { changes });
-    let body: BodyInit = json;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...(syncOrigin ? { "X-Ygdria-Sync-Origin": syncOrigin } : {}),
-    };
-    if (typeof CompressionStream !== "undefined" && json.length >= 1024) {
-      body = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
-      headers["Content-Type"] = "application/vnd.ygdria.sync+json";
-      headers["Content-Encoding"] = "gzip";
-    }
-    return this.request<{ applied: number; rejected: RejectedSyncChange[] }>("/api/v1/sync/push", {
-      method: "POST",
-      headers,
-      body,
-    });
+    return pushSyncBatches(changes, async (batch) => {
+      // JSON.stringify drops an undefined peerId, so the envelope matches the
+      // peerless shape exactly when no peer id is given.
+      const json = JSON.stringify({ changes: batch, peerId });
+      let body: BodyInit = json;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(syncOrigin ? { "X-Ygdria-Sync-Origin": syncOrigin } : {}),
+      };
+      if (typeof CompressionStream !== "undefined" && json.length >= 1024) {
+        body = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+        headers["Content-Type"] = "application/vnd.ygdria.sync+json";
+        headers["Content-Encoding"] = "gzip";
+      }
+      return this.request<{ applied: number; rejected: RejectedSyncChange[] }>("/api/v1/sync/push", {
+        method: "POST",
+        headers,
+        body,
+      });
+    }, peerId, async (response) => { await onRejected?.(response.rejected); });
   }
   /**
    * Advance a peer's sync cursor. After the client has confirmed it has
@@ -223,13 +255,13 @@ export class YgdriaClient {
    * calls this to advance the cursor. On interruption, the client can
    * restart from the last advanced cursor.
    */
-  advanceSyncCursor(peerId: string, cursor: number) {
+  advanceSyncCursor(peerId: string, cursor: number, snapshotSession?: string) {
     return this.request<{ peerId: string; lastAdvanceId: number; advancedAt: number }>(
       "/api/v1/sync/advance",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ peerId, cursor }),
+        body: JSON.stringify({ peerId, cursor, snapshotSession }),
       },
     );
   }
@@ -274,9 +306,9 @@ export class YgdriaClient {
       size: Number(response.headers.get("content-length") ?? blob.size),
     };
   }
-  syncNoteContent(noteId: string, contentHash: string) {
+  syncNoteContent(noteId: string, contentHash: string, session?: string) {
     return this.request<{ contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string }>(
-      `/api/v1/sync/notes/${encodeURIComponent(noteId)}/content?hash=${encodeURIComponent(contentHash)}`,
+      `/api/v1/sync/notes/${encodeURIComponent(noteId)}/content?hash=${encodeURIComponent(contentHash)}${session ? `&session=${encodeURIComponent(session)}` : ""}`,
     );
   }
   syncNoteContentBatch(ids: string[], hashes: string[], session?: string) {
@@ -327,7 +359,7 @@ export class YgdriaClient {
     );
   }
   ensureTodayNote() {
-    return this.request<any>("/api/v1/notes/today/ensure", { method: "POST" });
+    return this.request<NoteResponse>("/api/v1/notes/today/ensure", { method: "POST" });
   }
   updateNote(
     id: string,
@@ -343,7 +375,7 @@ export class YgdriaClient {
       expectedVersion: number;
     },
   ) {
-    return this.request<any>(`/api/v1/notes/${id}`, {
+    return this.request<NoteResponse>(`/api/v1/notes/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -367,7 +399,7 @@ export class YgdriaClient {
     );
   }
   restoreRevision(id: string, revisionId: string, expectedVersion: number) {
-    return this.request<any>(`/api/v1/notes/${id}/revisions/${revisionId}/restore`, {
+    return this.request<NoteResponse>(`/api/v1/notes/${id}/revisions/${revisionId}/restore`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expectedVersion }),
@@ -377,7 +409,7 @@ export class YgdriaClient {
     return this.request<{ undoId: string }>(`/api/v1/notes/${id}`, { method: "DELETE" });
   }
   getTrashedNote(id: string) {
-    return this.request<any>(`/api/v1/trash/${id}`);
+    return this.request<NoteResponse>(`/api/v1/trash/${id}`);
   }
   restoreNote(id: string) {
     return this.request<{ undoId: string }>(`/api/v1/notes/${id}/restore`, { method: "POST" });
@@ -416,11 +448,6 @@ export class YgdriaClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ placementIds, parentPlacementId, position }),
     });
-  }
-  content(id: string, format: "markdown" | "json" = "markdown") {
-    return format === "json"
-      ? this.request<any>(`/etapi/notes/${id}/content?format=json`)
-      : this.requestText(`/etapi/notes/${id}/content?format=markdown`);
   }
   etapiTreeRoots(input: { includeArchived?: boolean; limit?: number; cursor?: string } = {}) {
     return this.request<{ items: any[]; nextCursor: string | null }>(`/etapi/tree/roots?${this.etapiTreeParams(input)}`);
@@ -490,13 +517,6 @@ export class YgdriaClient {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ parentPlacementId, position }),
-    });
-  }
-  putMarkdown(id: string, markdown: string, expectedVersion: number, importMode = false) {
-    return this.request<any>(`/etapi/notes/${id}/content`, {
-      method: "PUT",
-      headers: { "Content-Type": "text/markdown", "If-Match": String(expectedVersion), ...(importMode ? { "X-Ygdria-Import": "1" } : {}) },
-      body: markdown,
     });
   }
   patchEtapiContent(
@@ -610,22 +630,8 @@ export class YgdriaClient {
   }
   listRelations(noteId: string) {
     return this.request<{
-      outgoing: Array<{
-        id: string;
-        sourceNoteId: string;
-        targetNoteId: string;
-        relationType: string;
-        createdAt: number;
-        peerTitle: string;
-      }>;
-      incoming: Array<{
-        id: string;
-        sourceNoteId: string;
-        targetNoteId: string;
-        relationType: string;
-        createdAt: number;
-        peerTitle: string;
-      }>;
+      outgoing: RelationWithPeer[];
+      incoming: RelationWithPeer[];
     }>("/api/v1/relations?noteId=" + encodeURIComponent(noteId), { method: "GET" });
   }
   createRelation(sourceNoteId: string, targetNoteId: string, relationType: string) {
@@ -647,6 +653,9 @@ export class YgdriaClient {
       "/api/v1/relations/" + encodeURIComponent(id),
       { method: "DELETE" },
     );
+  }
+  graph() {
+    return this.request<GraphData>("/api/v1/graph");
   }
   /** Start a maintenance task with optional FTS rebuild. */
   maintainDatabaseWithFts(rebuildFts = false) {
@@ -709,7 +718,7 @@ export class YgdriaClient {
     });
   }
   search(q: string, includeArchived = false) {
-    return this.request<any[]>(
+    return this.request<SearchResult[]>(
       `/api/v1/search?q=${encodeURIComponent(q)}&includeArchived=${includeArchived}`,
     );
   }

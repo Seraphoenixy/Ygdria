@@ -62,7 +62,9 @@ export function RelationsPanel({ noteId, client, locale, openNote }: RelationsPa
     onSuccess: invalidate,
   });
 
-  const candidates = (search.data ?? []).filter((n) => n.id !== noteId && !n.isTrashed);
+  // SearchResult carries noteId (never uid=197609(Xuan) gid=197121 groups=197121), and has no isTrashed flag:
+  // the search endpoint already excludes deleted notes.
+  const candidates = (search.data ?? []).filter((n) => n.noteId !== noteId);
 
   return (
     <section className="inspector-section relations-panel">
@@ -147,9 +149,9 @@ export function RelationsPanel({ noteId, client, locale, openNote }: RelationsPa
             <ul className="relation-search-results">
               {candidates.length ? (
                 candidates.map((n) => (
-                  <li key={n.id}>
-                    <button type="button" onClick={() => addMutation.mutate(n.id)}>
-                      {n.title || n.path.join(" / ")}
+                  <li key={n.noteId}>
+                    <button type="button" onClick={() => addMutation.mutate(n.noteId)}>
+                      {n.title || n.noteId}
                     </button>
                   </li>
                 ))

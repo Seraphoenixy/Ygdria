@@ -16,7 +16,7 @@ export type NoteContentData = {
   codeLanguage?: string;
   content: any;
   contentCiphertext?: string;
-  archivedAt?: string | null;
+  archivedAt?: number | null;
   isProtected?: boolean;
   tags?: string[];
 };

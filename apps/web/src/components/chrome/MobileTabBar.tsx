@@ -1,4 +1,4 @@
-import { Archive, FileText, History, Search, Settings as SettingsIcon } from "lucide-react";
+import { Archive, FileText, History, Network, Search, Settings as SettingsIcon } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 
 type MobileTabBarProps = {
@@ -12,6 +12,8 @@ type MobileTabBarProps = {
   onToggleHistory: () => void;
   archiveActive: boolean;
   onToggleArchive: () => void;
+  graphActive: boolean;
+  onToggleGraph: () => void;
   settingsActive: boolean;
   onToggleSettings: () => void;
 };
@@ -33,6 +35,8 @@ export function MobileTabBar({
   onToggleHistory,
   archiveActive,
   onToggleArchive,
+  graphActive,
+  onToggleGraph,
   settingsActive,
   onToggleSettings,
 }: MobileTabBarProps) {
@@ -79,6 +83,16 @@ export function MobileTabBar({
       >
         <Archive />
         <span>{t(locale, "archivedNotes")}</span>
+      </button>
+      <button
+        type="button"
+        className={`mobile-tab${graphActive ? " active" : ""}`}
+        aria-label={t(locale, "graphView")}
+        aria-current={graphActive ? "page" : undefined}
+        onClick={onToggleGraph}
+      >
+        <Network />
+        <span>{t(locale, "graphView")}</span>
       </button>
       <button
         type="button"

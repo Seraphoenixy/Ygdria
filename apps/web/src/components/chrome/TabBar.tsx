@@ -7,6 +7,7 @@ import {
   Archive,
   FileText,
   Paperclip,
+  Network,
   PinOff,
   X,
 } from "lucide-react";
@@ -66,6 +67,8 @@ export function TabBar({
                 ? t(locale, "archivedNotes")
                 : tab.kind === "attachments"
                   ? t(locale, "attachments")
+                : tab.kind === "graph"
+                  ? t(locale, "graphView")
           : tab.kind === "new"
             ? t(locale, "newTab")
             : noteTitleForTab(tab) ?? t(locale, "newTab");
@@ -105,7 +108,7 @@ export function TabBar({
                 setOverId(undefined);
               }}
             >
-              {tab.kind === "settings" ? <Settings size={16} /> : tab.kind === "search" ? <Search size={16} /> : tab.kind === "history" ? <History size={16} /> : tab.kind === "archive" ? <Archive size={16} /> : tab.kind === "attachments" ? <Paperclip size={16} /> : <FileText size={16} />}
+              {tab.kind === "settings" ? <Settings size={16} /> : tab.kind === "search" ? <Search size={16} /> : tab.kind === "history" ? <History size={16} /> : tab.kind === "archive" ? <Archive size={16} /> : tab.kind === "attachments" ? <Paperclip size={16} /> : tab.kind === "graph" ? <Network size={16} /> : <FileText size={16} />}
               <span>{tabTitle}</span>
               {pinnedTabIds.has(tab.id) ? (
                 <button

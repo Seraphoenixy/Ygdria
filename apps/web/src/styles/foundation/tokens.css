@@ -186,6 +186,20 @@
   --blockquote-border: #d9d9df;
   --blockquote-fg: #606068;
 
+  /* ---- Knowledge graph tokens ---- */
+  --graph-node: var(--color-accent-strong);
+  --graph-node-stroke: #ffffff;
+  --graph-node-protected: #8b949e;
+  --graph-edge-relation: rgba(15, 108, 189, 0.55);
+  --graph-edge-link: rgba(120, 120, 135, 0.4);
+  --graph-edge-dim: rgba(120, 120, 135, 0.12);
+  --graph-label: #34353a;
+  --graph-label-halo: rgba(255, 255, 255, 0.85);
+  --graph-highlight-ring: #0f6cbd;
+  --graph-header-bg: rgba(248, 249, 250, 0.96);
+  --graph-header-border: #d9d9de;
+  --graph-hint-bg: rgba(248, 249, 250, 0.92);
+
   /* ---- Task list / note reference tokens ---- */
   --task-done-fg: #7a7a84;
   --note-reference-bg: #efedff;
@@ -223,6 +237,18 @@
   --color-success-soft: #033a16;
   --color-warning: #d29922;
   --color-warning-soft: #4d3800;
+
+  /* ---- Knowledge graph tokens ---- */
+  --graph-node-stroke: #0d1117;
+  --graph-edge-relation: rgba(47, 129, 247, 0.55);
+  --graph-edge-link: rgba(139, 148, 158, 0.35);
+  --graph-edge-dim: rgba(139, 148, 158, 0.1);
+  --graph-label: #e6edf3;
+  --graph-label-halo: rgba(13, 17, 23, 0.85);
+  --graph-highlight-ring: #2f81f7;
+  --graph-header-bg: rgba(22, 27, 34, 0.96);
+  --graph-header-border: #30363d;
+  --graph-hint-bg: rgba(22, 27, 34, 0.92);
 
   /* ---- Document content tokens ---- */
   --doc-text: #e6edf3;

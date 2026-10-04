@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Search, ChevronsLeft, FilePlus2, History, Settings, Archive, Calendar, Lock, Unlock, RefreshCw, CloudCheck, CloudUpload, CloudAlert, AlertTriangle, Paperclip, Home } from "lucide-react";
+import { Search, ChevronsLeft, FilePlus2, History, Settings, Archive, Calendar, Lock, Unlock, RefreshCw, CloudCheck, CloudUpload, CloudAlert, AlertTriangle, Paperclip, Home, Network } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 import type { TreePlacement, WorkspaceTab } from "../../types/workspace";
 import { NoteTree } from "./NoteTree";
@@ -56,6 +56,8 @@ type TreePanelProps = {
   onCloseSearch: () => void;
   onCloseSettings: () => void;
   onOpenArchive: () => void;
+  onOpenGraph: () => void;
+  onCloseGraph: () => void;
   onOpenAttachments: () => void;
   onCloseAttachments: () => void;
   protectedSession: { configured: boolean; unlocked: boolean };
@@ -80,6 +82,7 @@ export function TreePanel({
   collapsed, creatingNote, onCreateNote, onSelectPlacement,
   onContextMenu, onMovePlacement, onResizePanel, onToggleCollapse,
   onOpenHistory, onCloseHistory, onOpenSettings, onOpenSearch, onCloseSearch, onCloseSettings, onOpenArchive,
+  onOpenGraph, onCloseGraph,
   onOpenAttachments, onCloseAttachments,
   protectedSession, onProtectedSessionToggle,
   onOpenTodayNote, syncing, syncState, lastSyncedAt, syncItemCount, lastSyncError, syncConflictCount, onShowSyncConflicts, onSync, onNavigateHome,
@@ -340,6 +343,16 @@ export function TreePanel({
             else onOpenSearch();
           }}>
             <Search />
+          </QuickButton>
+          <QuickButton
+            label={t(locale, "graphView")}
+            active={activeTabId === "graph"}
+            onClick={() => {
+              if (activeTabId === "graph") onCloseGraph();
+              else onOpenGraph();
+            }}
+          >
+            <Network />
           </QuickButton>
         </div>
         <div className="quickbar-bottom">

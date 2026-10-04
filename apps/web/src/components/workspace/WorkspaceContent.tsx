@@ -1,4 +1,5 @@
-import React, { type RefObject } from "react";
+import React, { Suspense, lazy, useCallback, type RefObject } from "react";
+import { Capacitor } from "@capacitor/core";
 import type { YgdriaClient } from "@ygdria/api-client";
 import type { Locale } from "../../lib/i18n";
 import type { TreePlacement, WorkspaceTab } from "../../types/workspace";
@@ -6,14 +7,31 @@ import type { BreadcrumbSegment } from "../chrome/Toolbar";
 import { TabBar } from "../chrome/TabBar";
 import { Toolbar } from "../chrome/Toolbar";
 import { EditorToolbar } from "@ygdria/editor";
-import { SearchPage } from "../../features/workspace/SearchPage";
 import { NewTabSearch } from "../../features/workspace/NewTabSearch";
-import { ArchivedNotesPage, RecentHistory } from "../../features/workspace/pages";
-import { AttachmentsView } from "../../features/workspace/AttachmentsView";
 import { NoteContent } from "../../features/note/NoteContent";
 import type { NoteContentData } from "../../features/note/NoteContent";
-import { SettingsPage } from "../../features/settings/SettingsPage";
 import type { ProtectedClientSession } from "../../lib/client-crypto";
+
+// Feature pages are code-split: they are large, rarely on the critical path,
+// and mobile clients pay for every byte over the network.
+const SearchPage = lazy(() =>
+  import("../../features/workspace/SearchPage").then((m) => ({ default: m.SearchPage })),
+);
+const ArchivedNotesPage = lazy(() =>
+  import("../../features/workspace/pages").then((m) => ({ default: m.ArchivedNotesPage })),
+);
+const RecentHistory = lazy(() =>
+  import("../../features/workspace/pages").then((m) => ({ default: m.RecentHistory })),
+);
+const AttachmentsView = lazy(() =>
+  import("../../features/workspace/AttachmentsView").then((m) => ({ default: m.AttachmentsView })),
+);
+const GraphView = lazy(() =>
+  import("../graph/GraphView").then((m) => ({ default: m.GraphView })),
+);
+const SettingsPage = lazy(() =>
+  import("../../features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
 
 export interface WorkspaceContentProps {
   // Tab management
@@ -94,7 +112,9 @@ export interface WorkspaceContentProps {
   onMigrateToEmptyServer: () => void;
   canOpenFrontendConsole: boolean;
   syncRunsAutomatically?: boolean;
-  canEditMobileEndpoint?: boolean;
+  canEditSyncServerUrl?: boolean;
+  /** Desktop only: remote URL tracked by the main process, shown read-only. */
+  syncServerDisplayUrl?: string | null;
   etapiTokenManagementAvailable?: boolean;
   onOpenFrontendConsole: () => void;
   onProtectedSessionTimeoutChange: (minutes: number) => void;
@@ -183,7 +203,8 @@ export function WorkspaceContent({
   onMigrateToEmptyServer,
   canOpenFrontendConsole,
   syncRunsAutomatically,
-  canEditMobileEndpoint,
+  canEditSyncServerUrl,
+  syncServerDisplayUrl,
   etapiTokenManagementAvailable,
   onOpenFrontendConsole,
   onProtectedSessionTimeoutChange,
@@ -205,6 +226,33 @@ export function WorkspaceContent({
   decryptedTitles,
 }: WorkspaceContentProps) {
   const [searchInitialTag, setSearchInitialTag] = React.useState<string | undefined>();
+  // Toolbar image insertion: upload through the by-hash endpoint so images
+  // stay attachments instead of inline base64 blobs. Camera capture reuses
+  // the same path on the native shell; protected notes never accept inserts.
+  const toolbarUploadImage = useCallback(
+    async (file: File) => {
+      if (!noteData || noteData.isProtected) throw new Error("no target note");
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
+      const hash = `sha256:${Array.from(digest, (part) => part.toString(16).padStart(2, "0")).join("")}`;
+      const result = await client.uploadAttachmentByHash(hash, noteData.id, file.name, file);
+      return result.url;
+    },
+    [client, noteData],
+  );
+  const toolbarCaptureImage = useCallback(async (): Promise<File | null> => {
+    if (!Capacitor.isNativePlatform()) return null;
+    const { Camera, CameraResultType, CameraSource } = await import("@capacitor/camera");
+    const photo = await Camera.getPhoto({
+      resultType: CameraResultType.Uri,
+      source: CameraSource.Prompt,
+      quality: 85,
+    });
+    if (!photo.webPath) return null;
+    const response = await fetch(photo.webPath);
+    const blob = await response.blob();
+    return new File([blob], `photo-${Date.now()}.jpg`, { type: blob.type || "image/jpeg" });
+  }, []);
+
   return (
     <section className="content">
       <TabBar
@@ -260,51 +308,72 @@ export function WorkspaceContent({
           editing={editing}
           onToggleEditing={onToggleEditing}
           onImportMarkdown={noteData.type === "text" ? importMarkdown : undefined}
+          onUploadImage={noteData.isProtected ? undefined : toolbarUploadImage}
+          onCaptureImage={noteData.isProtected ? undefined : toolbarCaptureImage}
         />
       )}
       {tabs.some((tab) => tab.id === "search") && (
         <div className="document-scroll" data-tab-id="search" hidden={activeTabId !== "search"}>
-          <SearchPage client={client} locale={locale} isActive={activeTabId === "search"} onOpenNote={(noteId, openInNewTab) => openNote(noteId, false, false, openInNewTab)} initialTag={searchInitialTag} />
+          <Suspense fallback={<PageSuspenseFallback />}>
+            <SearchPage client={client} locale={locale} isActive={activeTabId === "search"} onOpenNote={(noteId, openInNewTab) => openNote(noteId, false, false, openInNewTab)} initialTag={searchInitialTag} />
+          </Suspense>
         </div>
       )}
       {activeTabId === "search" ? null : activeTabId === "archive" ? (
         <div className="document-scroll" data-tab-id="archive">
-          <ArchivedNotesPage
-            items={archivedNotes.data ?? []}
-            placements={treeData ?? []}
-            loading={archivedNotes.isLoading}
-            locale={locale}
-            onOpen={(id) => openNote(id)}
-            onUnarchive={(id) => archiveNote.mutate({ noteId: id, archived: false })}
-          />
+          <Suspense fallback={<PageSuspenseFallback />}>
+            <ArchivedNotesPage
+              items={archivedNotes.data ?? []}
+              placements={treeData ?? []}
+              loading={archivedNotes.isLoading}
+              locale={locale}
+              onOpen={(id) => openNote(id)}
+              onUnarchive={(id) => archiveNote.mutate({ noteId: id, archived: false })}
+            />
+          </Suspense>
         </div>
       ) : activeTabId === "history" ? (
         <div className="document-scroll" data-tab-id="history">
-          <RecentHistory
-            items={history.data ?? []}
-            loading={history.isLoading}
-            locale={locale}
-            restoringNoteId={restoreNote.isPending ? (restoreNote as any).variables : undefined}
-            purgingTrash={purgeTrash.isPending}
-            onOpen={openNote as any}
-            onRestore={(noteId) => restoreNote.mutate(noteId)}
-            onPurgeTrash={() => setPurgeTrashConfirmation(true)}
-          />
+          <Suspense fallback={<PageSuspenseFallback />}>
+            <RecentHistory
+              items={history.data ?? []}
+              loading={history.isLoading}
+              locale={locale}
+              restoringNoteId={restoreNote.isPending ? (restoreNote as any).variables : undefined}
+              purgingTrash={purgeTrash.isPending}
+              onOpen={openNote as any}
+              onRestore={(noteId) => restoreNote.mutate(noteId)}
+              onPurgeTrash={() => setPurgeTrashConfirmation(true)}
+            />
+          </Suspense>
         </div>
       ) : activeTabId === "attachments" ? (
         <div className="document-scroll" data-tab-id="attachments">
-          <AttachmentsView
-            data={attachments.data}
-            isLoading={attachments.isLoading}
-            locale={locale}
-            onOpenNote={(noteId) => openNote(noteId)}
-            onClearUnusedAttachments={() => setClearUnusedAttachmentsConfirmation(true)}
-            clearingUnusedAttachments={clearUnusedAttachments.isPending}
-            onDownloadAttachment={(hash) => client.downloadAttachmentByHash(hash)}
-          />
+          <Suspense fallback={<PageSuspenseFallback />}>
+            <AttachmentsView
+              data={attachments.data}
+              isLoading={attachments.isLoading}
+              locale={locale}
+              onOpenNote={(noteId) => openNote(noteId)}
+              onClearUnusedAttachments={() => setClearUnusedAttachmentsConfirmation(true)}
+              clearingUnusedAttachments={clearUnusedAttachments.isPending}
+              onDownloadAttachment={(hash) => client.downloadAttachmentByHash(hash)}
+            />
+          </Suspense>
+        </div>
+      ) : activeTabId === "graph" ? (
+        <div className="document-scroll graph-scroll" data-tab-id="graph">
+          <Suspense fallback={<PageSuspenseFallback />}>
+            <GraphView
+              client={client}
+              locale={locale}
+              onOpenNote={(noteId) => openNote(noteId)}
+            />
+          </Suspense>
         </div>
       ) : settingsOpen ? (
         <div className="document-scroll" data-tab-id="settings">
+          <Suspense fallback={<PageSuspenseFallback />}>
           <SettingsPage
             locale={locale}
             onLocaleChange={onLocaleChange}
@@ -329,12 +398,14 @@ export function WorkspaceContent({
             canOpenFrontendConsole={canOpenFrontendConsole}
             onOpenFrontendConsole={onOpenFrontendConsole}
             syncRunsAutomatically={syncRunsAutomatically}
-            canEditMobileEndpoint={canEditMobileEndpoint}
+            canEditSyncServerUrl={canEditSyncServerUrl}
+            syncServerDisplayUrl={syncServerDisplayUrl}
             etapiTokenManagementAvailable={etapiTokenManagementAvailable}
             client={client}
             onProtectedSessionTimeoutChange={onProtectedSessionTimeoutChange}
             onMaintainDatabase={onMaintainDatabase}
           />
+          </Suspense>
         </div>
       ) : activeTab?.kind === "new" ? (
         <div className="document-scroll" data-tab-id={activeTab.id}>
@@ -391,4 +462,9 @@ export function WorkspaceContent({
       )}
     </section>
   );
+}
+
+/** Keeps the scrolling tab container sized while a split page chunk loads. */
+function PageSuspenseFallback() {
+  return <div className="empty" />;
 }

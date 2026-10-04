@@ -336,7 +336,9 @@ describe("device auth (SRP-6a)", () => {
     expect(() => srpClient.verifySession(clientEphemeral.public, clientSession, forgedProof)).toThrow();
   });
 
-  it("temporarily rate-limits repeated failed logins", async () => {
+  // Five SRP rounds are CPU-bound; under a full parallel workspace run the
+  // default 5s budget has been observed to flake. Give it explicit headroom.
+  it("temporarily rate-limits repeated failed logins", { timeout: 30_000 }, async () => {
     const localApp = buildDeviceApp();
     await initialize(localApp);
     const config = (await localApp.inject({ method: "GET", url: "/api/v1/auth/config" })).json();

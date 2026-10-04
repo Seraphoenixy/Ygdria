@@ -17,6 +17,9 @@ export function registerRelationRoutes(app: FastifyInstance, deps: RelationRoute
     return relations.listRelations(noteId);
   });
 
+  /** Whole-base projection for the knowledge graph view. */
+  app.get("/api/v1/graph", async () => relations.graph());
+
   app.post("/api/v1/relations", async (req) => {
     const parsed = createRelationSchema.safeParse(req.body);
     if (!parsed.success) throw httpError(400, "Invalid relation payload");

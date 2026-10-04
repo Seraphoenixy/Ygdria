@@ -34,7 +34,9 @@ export function SettingsPage({
   canOpenFrontendConsole = false,
   onOpenFrontendConsole,
   syncRunsAutomatically = false,
-  canEditMobileEndpoint = false,
+  canEditSyncServerUrl = false,
+  /** Desktop: the remote URL held by the main process (source of truth). */
+  syncServerDisplayUrl,
   etapiTokenManagementAvailable = false,
   client,
 }: {
@@ -63,7 +65,11 @@ export function SettingsPage({
   canOpenFrontendConsole?: boolean;
   onOpenFrontendConsole?: () => void;
   syncRunsAutomatically?: boolean;
-  canEditMobileEndpoint?: boolean;
+  canEditSyncServerUrl?: boolean;
+  /** Desktop only: the sync server address tracked by the Electron main
+   * process. When provided it is displayed read-only instead of the editable
+   * settings value, because the main process owns the desktop connection. */
+  syncServerDisplayUrl?: string | null;
   /** True when this is the desktop app's local ETAPI server. */
   etapiTokenManagementAvailable?: boolean;
   client: YgdriaClient;
@@ -72,27 +78,37 @@ export function SettingsPage({
   // the settings page could show a stale address even after the client had
   // connected to another server. The active client's endpoint is authoritative.
   const activeServerUrl = displayServerUrl(client.getServerUrl());
+  // On the desktop the main process owns the remote URL; never fold the local
+  // loopback endpoint into the stored settings as if it were the sync server.
+  const desktopManaged = syncServerDisplayUrl !== undefined;
   const [settings, setSettings] = useState<StoredSettings>(() => {
     const saved = readSettings();
-    return activeServerUrl ? { ...saved, syncServerUrl: activeServerUrl } : saved;
+    return !desktopManaged && activeServerUrl ? { ...saved, syncServerUrl: activeServerUrl } : saved;
   });
   const syncUrlEditingRef = useRef(false);
   useEffect(() => {
-    if (!activeServerUrl || syncUrlEditingRef.current) return;
+    if (desktopManaged || !activeServerUrl || syncUrlEditingRef.current) return;
     setSettings((current) => {
       if (current.syncServerUrl === activeServerUrl) return current;
       const updated = { ...current, syncServerUrl: activeServerUrl };
       writeSettings(updated);
       return updated;
     });
-  }, [activeServerUrl]);
+  }, [activeServerUrl, desktopManaged]);
+  // What the UI shows and what "test connection" probes: the editable stored
+  // value on mobile, otherwise the address the current connection actually uses.
+  const displayedSyncServerUrl = canEditSyncServerUrl
+    ? settings.syncServerUrl
+    : desktopManaged
+      ? syncServerDisplayUrl ?? ""
+      : activeServerUrl;
   const updateSettings = (next: Partial<StoredSettings>) => {
     const updated = { ...settings, ...next };
     setSettings(updated);
     writeSettings(updated);
   };
   const reconnectMobileEndpoint = () => {
-    if (!canEditMobileEndpoint) return;
+    if (!canEditSyncServerUrl) return;
     try {
       const url = new URL(settings.syncServerUrl.trim());
       if (url.protocol === "http:" || url.protocol === "https:") window.location.reload();
@@ -147,9 +163,9 @@ export function SettingsPage({
       </section>
       <h2 id="settings-connection" className="settings-category">{t(locale, "settingsConnection")}</h2>
       <SettingsSection id="settings-sync" title={t(locale, "syncServer")} hint={t(locale, "syncServerHint")} rows={[
-        <SettingsTextRow key="sync-server-url" title={t(locale, "syncServerUrl")} description={t(locale, "syncServerUrlHint")} value={settings.syncServerUrl} placeholder="https://notes.example.com" onChange={(value) => updateSettings({ syncServerUrl: value })} onBlur={reconnectMobileEndpoint} onFocusChange={(focused) => { syncUrlEditingRef.current = focused; }} />,
+        <SettingsTextRow key="sync-server-url" title={t(locale, "syncServerUrl")} description={canEditSyncServerUrl ? t(locale, "syncServerUrlHint") : t(locale, "syncServerUrlReadonly")} value={displayedSyncServerUrl} placeholder="https://notes.example.com" readOnly={!canEditSyncServerUrl} onChange={canEditSyncServerUrl ? (value) => updateSettings({ syncServerUrl: value }) : undefined} onBlur={canEditSyncServerUrl ? reconnectMobileEndpoint : undefined} onFocusChange={(focused) => { syncUrlEditingRef.current = focused; }} />,
         <SettingsNumberRow key="sync-timeout" title={t(locale, "syncConnectionTimeout")} description={t(locale, "syncServerHint")} value={settings.syncConnectionTimeoutSeconds} min={1} unit={t(locale, "seconds")} onChange={(event) => updateSettings({ syncConnectionTimeoutSeconds: Math.max(1, Math.floor(Number(event.target.value)) || 1) })} />,
-        <SettingsActionRow key="sync-test" title={t(locale, "testConnection")} description={t(locale, "testConnectionHint")} action={t(locale, "testConnection")} disabled={!settings.syncServerUrl.trim() || testingSyncConnection} onClick={() => onTestSyncConnection?.(settings.syncServerUrl, settings.syncConnectionTimeoutSeconds)} status={syncConnectionMessage} />,
+        <SettingsActionRow key="sync-test" title={t(locale, "testConnection")} description={t(locale, "testConnectionHint")} action={t(locale, "testConnection")} disabled={!displayedSyncServerUrl.trim() || testingSyncConnection} onClick={() => onTestSyncConnection?.(displayedSyncServerUrl, settings.syncConnectionTimeoutSeconds)} status={syncConnectionMessage} />,
         ...(canMigrateToEmptyServer ? [<SettingsActionRow key="sync-migrate-empty" title={t(locale, "migrateLocalVault")} description={t(locale, "migrateLocalVaultDesc")} action={t(locale, "migrateToEmptyServer")} onClick={onMigrateToEmptyServer} />] : []),
         ...(canOpenFrontendConsole ? [<SettingsActionRow key="open-frontend-console" title={t(locale, "openFrontendConsole")} description={t(locale, "openFrontendConsoleDesc")} action={t(locale, "openConsole")} onClick={onOpenFrontendConsole} />] : []),
         ...(syncRunsAutomatically ? [<div key="sync-auto-hint" className="settings-row settings-info"><p>{t(locale, "syncAutoHint")}</p></div>] : []),
@@ -316,8 +332,8 @@ function SettingsNumberRow({ title, description, value, min, unit, onChange, onU
   </label></div>;
 }
 
-function SettingsTextRow({ title, description, value, placeholder, onChange, onBlur, onFocus, onFocusChange }: { title: string; description: string; value: string; placeholder: string; onChange: (value: string) => void; onBlur?: () => void; onFocus?: () => void; onFocusChange?: (focused: boolean) => void }) {
-  return <div className="settings-row"><div><strong>{title}</strong><p>{description}</p></div><input className="settings-text-control" type="url" inputMode="url" value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} onBlur={() => { onBlur?.(); onFocusChange?.(false); }} onFocus={() => { onFocus?.(); onFocusChange?.(true); }} /></div>;
+function SettingsTextRow({ title, description, value, placeholder, onChange, onBlur, onFocus, onFocusChange, readOnly = false }: { title: string; description: string; value: string; placeholder: string; onChange?: (value: string) => void; onBlur?: () => void; onFocus?: () => void; onFocusChange?: (focused: boolean) => void; readOnly?: boolean }) {
+  return <div className="settings-row"><div><strong>{title}</strong><p>{description}</p></div><input className="settings-text-control" type="url" inputMode="url" value={value} placeholder={placeholder} readOnly={readOnly} onChange={(event) => onChange?.(event.target.value)} onBlur={() => { onBlur?.(); onFocusChange?.(false); }} onFocus={() => { onFocus?.(); onFocusChange?.(true); }} /></div>;
 }
 
 function SettingsActionRow({ title, description, action, disabled = false, onClick, status }: {

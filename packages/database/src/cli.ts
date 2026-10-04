@@ -1,4 +1,5 @@
 import { applyMigrations, createDatabase } from "./index.js";
+import { rebuildNoteLinks } from "./note-links.js";
 import { inspectSearchIndex, rebuildSearchIndex } from "./search-index.js";
 import { fixDatabase, inspectDatabase } from "./doctor.js";
 
@@ -15,6 +16,7 @@ try {
       ? inspectSearchIndex(sqlite)
       : rebuildSearchIndex(sqlite);
     console.log(JSON.stringify(diagnostics, null, 2));
+    console.log(`note_links rebuilt: ${rebuildNoteLinks(sqlite)} links`);
   } else if (command === "doctor") {
     const fix = process.argv.includes("--fix");
     const fixes = fix ? fixDatabase(sqlite) : undefined;

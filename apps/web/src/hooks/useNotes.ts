@@ -112,6 +112,9 @@ export function useNotes({
     queryFn: () => client.tree(),
     retry: 1,
     enabled: dataAccessReady,
+    // Every mutation already invalidates ["tree"]; a short staleTime just
+    // spares thin mobile clients a redundant refetch on refocus.
+    staleTime: 30_000,
   });
 
   const note = useQuery({
@@ -409,7 +412,7 @@ export function useNotes({
     mutationFn: (nextTitle: string) => {
       const noteId = selected!;
       const expectedVersion = Math.max(
-        note.data.version,
+        note.data?.version ?? 0,
         autoSaveVersionRef.current,
         noteVersionRef.current.get(noteId) ?? 0,
       );
@@ -485,8 +488,12 @@ export function useNotes({
   });
 
   const convertNote = useMutation({
-    mutationFn: (type: "text" | "code") =>
-      client.updateNote(selected!, { type, expectedVersion: note.data.version }),
+    mutationFn: (type: "text" | "code") => {
+      const expectedVersion = note.data?.version;
+      if (expectedVersion === undefined)
+        throw new Error("Note not loaded; cannot convert without a version.");
+      return client.updateNote(selected!, { type, expectedVersion });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["note", selected] });
       qc.invalidateQueries({ queryKey: ["tree"] });

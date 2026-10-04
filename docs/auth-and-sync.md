@@ -219,13 +219,15 @@ Ygdria 提供**基于游标的增量同步**，不是 CRDT，也不做细粒度�
 
 ### 5.2 合并语义（LWW + 墓碑）
 
+- **时钟仲裁**：LWW 依据各设备本地时钟，存在偏移风险。接收端在应用变更时，把声称比本机时间超前超过 `SYNC_MAX_CLOCK_SKEW_MS`（5 分钟）的时间戳钳制到「本机时间 + 容忍值」。正常设备不受影响；时钟跑快的设备无法铸出永久压制后续正常编辑的时间戳。钳制是确定性的，被钳制记录的重放仍然幂等。
+
 - `push` 对每类实体按主键合并：保留 `updatedAt`（或 `createdAt`）更大者；时间戳相同时用确定性 JSON 序列化顺序打破平局。
 - 删除由 `sync_tombstones` 表记录：数据库触发器在 `placements`/`notes`/`relations`/`attachments` 删除时写墓碑，插入时清除对应墓碑（撤销/恢复借此表达）。
 - `push` 在应用变更前先用墓碑过滤掉已删除的活实体；变更应用后也会更新对应的墓碑或清除被复活实体的墓碑。
 - **`relations` 已接入同步**（2026-08-02 实现）：创建/删除关系会在 `sync_change_log` 写 `entity_type='relation'` 变更；`applySyncChanges` 对 `relation` 分支使用 `INSERT OR IGNORE` 幂等写入，并以 `NOT EXISTS sync_tombstones(entity_type='relation' AND deleted_at >= created_at)` 拒绝已被对端删除的关系“复活”（与 `setting` 分支同构）。快照与基线重建均包含 relations。关系无 `updated_at`，语义不可变。
 - **敏感设置不参与同步**：`auth_*`、`protected_session_*`、`server_access_password_*` 前缀的 settings 键在 `writeSetting` / `deleteSetting` 时不写入变更日志；`/sync/changes` 不返回其值或墓碑；`/sync/push` 拒绝修改这些键。这避免任何已认证设备通过同步通道覆盖认证材料（否则可导致账户接管）。
 - 附件文件二进制内容**不进变更日志**：变更日志只携带 `attachment` 的元数据（`contentHash` / `filename`）。客户端在同步时根据 `contentHash` 调用 `GET /api/v1/attachments/by-hash/:hash` 下载、`POST /api/v1/attachments/by-hash/:hash` 上传，按哈希去重。
-- **永久删除（清空回收站）也会同步**：`purge` / `purgeTrash` 把被删笔记写入 `sync_change_log`（`deleted`）。接收端收到 `note` + `deleted` 时分流：本地该笔记已在回收站则硬删本地（依赖 `ON DELETE CASCADE` 级联）让两端库一致；本地仍在使用则软删（移回收站、可恢复），避免静默销毁已恢复内容。详见 [数据模型 §5](data-model.md#5-删除回收站与永久删除)。
+- **永久删除（清空回收站）也会同步**：`purge` / `purgeTrash` 把被删笔记写入 `sync_change_log`（`deleted`）。只有笔记已从发送端数据库永久清理时，接收端才收到无正文的 `note` + `deleted` 并分流：本地该笔记已在回收站则硬删本地（依赖 `ON DELETE CASCADE` 级联）让两端库一致；本地仍在使用则软删（移回收站、可恢复），避免静默销毁已恢复内容。详见 [数据模型 §5](data-model.md#5-删除回收站与永久删除)。
 - **移入回收站也会同步原树位置**：`remove`（移入回收站）除了记录 `note` 的 `deleted`，现在还会为被删的**原始树 placement** 记录 `placement` / `deleted`。此前只记了 `note`，对端收到后只软删笔记并自建回收站 placement，却保留了该笔记原来的树位置行，两端数据库不一致。补录后接收端会把原位置一并删除。新创建的回收站 placement 仍**不**写同步日志（各设备各自的本地视图产物），撤销/恢复走本地 `placement_deletions` 快照并通过 `note` + `updated` 让对端清除其回收站 placement，故补录不会干扰撤销/恢复。详见 [数据模型 §5](data-model.md#5-删除回收站与永久删除)。
 - **清理未使用的附件也会同步**：`clearUnusedAttachments`（UI 的「清理未使用的附件」按钮及维护任务）为每个被删附件写入 `sync_change_log`（`attachment` / `deleted`）。接收端 `applySyncChanges` 没有独立的 `attachment` 分支，显式 `attachment` 删除变更会被并入 `attachmentCleanupCandidates`，在批次末尾由引用感知清理函数统一处理——仅当本地无任何笔记正文仍引用该附件时才删除元数据行。这样附件的删除也能确定性收敛，而不会因变更被静默丢弃而让对端长期残留过期附件行。
 
@@ -237,7 +239,7 @@ Ygdria 提供**基于游标的增量同步**，不是 CRDT，也不做细粒度�
 - **受保护笔记天然可迁移**：密文随变更日志原样传输，新库用原主密码即可解锁。
 - **不要双写**：不要把同一份 SQLite 文件同时挂到多个服务器进程，WAL 不跨进程协调，会导致写冲突或损坏。需要迁移时停服后整体搬运数据库文件与 `attachments/` 目录。
 - **维护任务冷却**：`POST /api/v1/maintenance/database` 有 15 分钟冷却（`MAINTENANCE_COOLDOWN_MS`），冷却期内返回 `429`；同时只允许一个任务排队或运行，第二个请求返回 `409`。这防止维护接口被滥用为 DoS。
-- **移动端目标服务器地址**：移动端的唯一服务地址来自设置中的「目标服务器地址」（`settings.syncServerUrl`）；启动时把遗留的 `ygdria.api`（Capacitor Preferences）一次性并入 `syncServerUrl`，之后重连一律使用该地址。移动端的 `deviceToken` 经 `capacitor-secure-storage-plugin` 安全存储，与桌面端 `safeStorage` 等价。
+- **移动端同步服务端地址**：移动端的唯一服务地址来自设置中的「与 Linux 服务端同步的地址」（`settings.syncServerUrl`）；启动时把遗留的 `ygdria.api`（Capacitor Preferences）一次性并入 `syncServerUrl`，之后重连一律使用该地址。移动端的 `deviceToken` 经 `capacitor-secure-storage-plugin` 安全存储，与桌面端 `safeStorage` 等价。
 
 ### 5.4 同步环预防（`X-Ygdria-Sync-Origin`）
 
@@ -249,3 +251,22 @@ Ygdria 提供**基于游标的增量同步**，不是 CRDT，也不做细粒度�
 2. **`POST /api/v1/attachments/by-hash/:hash`**：同步附件上传时，`recordSyncChange` 参数设为 `false`，避免附件元数据的同步变更再次被记录。
 
 `isPulledRemoteWrite` 的实现要求 `localToken` 已配置（形态 A 本地 API 的安全标志），且请求头 `x-ygdria-sync-origin` 精确等于 `"remote"`。形态 B（独立服务器）忽略此头部，因为其所有客户端都是直接写入的，必须始终产生同步记录。
+### 5.5 大批次同步与快照正文
+
+- 客户端在补齐正文后按完整请求的 UTF-8 JSON 字节数拆批，目标为 4 MiB，每批最多 500 条；接收端仍限制解压后请求为 16 MiB。收到 413 时按原顺序递归减半重试；单条实体超过 16 MiB 时明确报错，不能靠拆批恢复。
+- 只有整页所有子批次应用成功且附件传输完成后才推进游标。中断后从已确认游标重试，已应用的数据依靠现有幂等合并处理。
+- 单条正文接口支持可选 `session` 参数。快照批量正文超限时，客户端使用同一会话读取单条正文；会话失效返回 `409 SYNC_SNAPSHOT_EXPIRED`；会话内版本缺失返回 404，不回退读取实时数据库。
+
+### 5.6 回收站状态同步
+
+- 尚未永久清理的笔记在增量同步和全量快照中都传输完整笔记状态（包括 `deletedAt`、正文和附件引用），使用普通笔记状态合并路径。软删除日志在输出时解析为当前状态，不能与永久清理的无正文删除事件混用。
+- 接收端保留回收站中的笔记、移除旧的活动树位置并创建本地回收站位置；重复传输不会把软删除误当成永久清理。全量快照包含回收站笔记，但不复制各端自行生成的回收站位置。
+- 状态仍按 `updatedAt` 合并，较新的本地恢复不会被较旧的软删除覆盖；数据库中已不存在的笔记仍传输删除事件，保留既有永久清理和墓碑规则。
+
+### 5.7 故障恢复与快照资源
+
+- 快照续页必须命中原会话；被淘汰、过期或服务重启后返回 `409 SYNC_SNAPSHOT_EXPIRED`，客户端最多重新从第一页尝试两次，每次使用新会话，不沿用旧分页位置。
+- 快照缓存最多两个会话，共用 256 MiB 的序列化字节预算；超预算的单个快照返回 413。正文索引在会话创建时构建一次；空闲五分钟的会话在访问时清理。此预算限制缓存留存数据，不等于进程峰值内存上限。
+- 最后一页返回后会话仍保留，以供正文和附件同步。客户端应用完成后通过 `/sync/advance` 的 `snapshotSession` 字段确认并释放；确认游标必须匹配已完整交付的快照。
+- 上传冲突在每个实际请求返回后立即持久化，早于后续子批次、附件传输及游标推进。持久化失败中止同步，避免无记录地跳过冲突。
+- 每次同步开始时补发本地已应用游标的远端确认，即使本轮没有新数据。桌面远端请求的超时覆盖响应头和完整正文接收。

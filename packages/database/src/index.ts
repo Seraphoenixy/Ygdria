@@ -4,6 +4,7 @@ export * from "./content-codec.js";
 export * from "./migrations.js";
 export * from "./sync-change-log.js";
 export * from "./sync-maintenance.js";
+export * from "./note-links.js";
 /** The better-sqlite3 Database instance type, re-exported so consumers don't need a direct better-sqlite3 dependency. */
 export type SqliteDatabase = Database.Database;
 export type DatabaseStore = { sqlite: Database.Database };

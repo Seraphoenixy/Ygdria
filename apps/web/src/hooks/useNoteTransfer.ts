@@ -1,11 +1,22 @@
 import { useRef, useState } from "react";
 import { unzipSync, zipSync } from "fflate";
 import type { YgdriaClient } from "@ygdria/api-client";
-import { tiptapToMarkdown } from "@ygdria/editor/markdown";
+import { SYSTEM_ROOT_PLACEMENT_ID, type NoteContent } from "@ygdria/shared";
+import { markdownToTiptap, tiptapToMarkdown } from "@ygdria/editor/markdown";
 import { t, type Locale } from "../lib/i18n";
 import { readSettings } from "../features/settings/settingsStore";
+import { parseFrontMatter } from "../lib/frontMatter";
 import type { TreePlacement } from "../types/workspace";
 import type { ProtectedClientSession, ProtectedPayload } from "../lib/client-crypto";
+
+export type ImportSummary = {
+  notes: number;
+  attachments: number;
+  failed: number;
+  /** One line per failed item, prefixed with its archive path or file name. */
+  errors: string[];
+  estimatedBytes: number;
+};
 
 type UseNoteTransferOptions = {
   client: YgdriaClient;
@@ -16,7 +27,7 @@ type UseNoteTransferOptions = {
   session: ProtectedClientSession;
   /** Whether the protected session is currently unlocked. */
   unlocked: boolean;
-  onImportComplete: (summary: { notes: number; attachments: number; estimatedBytes: number }) => void;
+  onImportComplete: (summary: ImportSummary) => void;
 };
 
 async function sha256(bytes: Uint8Array) {
@@ -47,13 +58,28 @@ function attachmentReferencePattern() {
   return /!?\[[^\]]*\]\(([^\s)]+)[^)]*\)|<img[^>]+src=["']([^"']+)["'][^>]*>|<a[^>]+href=["']([^"']+)["'][^>]*>/gi;
 }
 
-/** Keep note titles as download names without allowing path separators. */
-export function markdownDownloadFilename(title: string) {
-  const safeTitle = title
+/** Sanitize a note title into a download base name without path separators. */
+function safeDownloadBaseName(title: string) {
+  return title
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
     .replace(/[. ]+$/, "")
     .trim();
-  return `${safeTitle || "ygdria-notes"}.md`;
+}
+
+/** Keep note titles as download names without allowing path separators. */
+export function markdownDownloadFilename(title: string) {
+  return `${safeDownloadBaseName(title) || "ygdria-notes"}.md`;
+}
+
+/**
+ * Download name for a multi-note ZIP export. Named after the exported
+ * top-level note; only unambiguous when exactly one root exists (the usual
+ * "one note with children" export), otherwise the generic name stays. Roots
+ * are derived here so callers cannot accidentally name a child note.
+ */
+export function markdownArchiveFilename(notes: Array<{ parentSourceId: string | null; title: string }>) {
+  const roots = notes.filter((n) => n.parentSourceId === null);
+  return `${safeDownloadBaseName(roots.length === 1 ? roots[0].title : "") || "ygdria-notes"}.zip`;
 }
 
 export type MarkdownExportNote = {
@@ -178,7 +204,15 @@ export function useNoteTransfer({ client, tree, locale, refreshTree, session, un
         return {
           sourcePlacementId: placement.placementId,
           parentSourceId: rootIds.has(placement.placementId) ? null : placement.parentPlacementId,
-          note: { id: placement.noteId, title: payload.title, content: payload.content, isProtected: true },
+          // Protected notes are always rich-text notes; their plaintext body
+          // only exists client-side after decryption.
+          note: {
+            id: placement.noteId,
+            title: payload.title,
+            type: "text" as const,
+            content: payload.content,
+            isProtected: true as const,
+          },
         };
       }
       return {
@@ -193,13 +227,18 @@ export function useNoteTransfer({ client, tree, locale, refreshTree, session, un
           sourcePlacementId,
           parentSourceId,
           title: note.title,
-          markdown: (note as any).isProtected
-            ? tiptapToMarkdown(note.content).markdown
-            : await client.content(note.id),
+          // Markdown is produced locally from the already-fetched note so
+          // export works against servers without ETAPI (standalone/mobile).
+          markdown:
+            note.type === "code"
+              ? String(note.content ?? "")
+              : tiptapToMarkdown(note.content as NoteContent).markdown,
         })));
     const markdownArchive = format === "markdown" && markdownNotes.length > 1
       ? buildMarkdownExportArchive(markdownNotes)
       : undefined;
+    // Name the zip after the exported top-level note (see markdownArchiveFilename).
+    const archiveFilename = markdownArchiveFilename(markdownNotes);
     const contents = format === "json"
       ? JSON.stringify({ entries: notes.map(({ sourcePlacementId, parentSourceId, note }) => ({ sourcePlacementId, parentSourceId, title: note.title, content: note.content })) }, null, 2)
       : markdownArchive ?? markdownNotes[0]?.markdown ?? "";
@@ -211,7 +250,7 @@ export function useNoteTransfer({ client, tree, locale, refreshTree, session, un
     link.download = format === "json"
       ? "ygdria-notes.json"
       : markdownArchive
-        ? "ygdria-notes.zip"
+        ? archiveFilename
         : markdownNotes.length === 1
           ? markdownDownloadFilename(markdownNotes[0].title)
         : "ygdria-notes.md";
@@ -222,11 +261,36 @@ export function useNoteTransfer({ client, tree, locale, refreshTree, session, un
   const importNotes = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const summary = { notes: 0, attachments: 0, estimatedBytes: file.size };
+    const summary: ImportSummary = { notes: 0, attachments: 0, failed: 0, errors: [], estimatedBytes: file.size };
+    // One child-list fetch per created note instead of one whole-tree fetch
+    // (the old approach was O(n²) in payload size for large archives).
+    const childrenCache = new Map<string, Map<string, string>>();
+    const placementOf = async (noteId: string, parentPlacementId: string | null | undefined) => {
+      const parentKey = parentPlacementId ?? SYSTEM_ROOT_PLACEMENT_ID;
+      let byNote = childrenCache.get(parentKey);
+      if (!byNote?.has(noteId)) {
+        const items = await client.placementChildren(parentKey);
+        byNote = new Map(items.map((item) => [item.noteId, item.placementId]));
+        childrenCache.set(parentKey, byNote);
+      }
+      return byNote.get(noteId);
+    };
     const createImportedNote = async (input: Parameters<YgdriaClient["createNote"]>[0]) => {
       const note = await client.createNote(input);
       summary.notes += 1;
+      childrenCache.delete(input.parentPlacementId ?? SYSTEM_ROOT_PLACEMENT_ID);
       return note;
+    };
+    /** Isolate one import unit: a failure is reported and the batch continues. */
+    const attempt = async (label: string, unit: () => Promise<void>) => {
+      try {
+        await unit();
+      } catch (error) {
+        summary.failed += 1;
+        const reason = error instanceof Error ? error.message : String(error);
+        summary.errors.push(`${label}: ${reason}`);
+        console.error(`Import failed for ${label}`, error);
+      }
     };
     const text = await file.text();
     if (file.name.toLowerCase().endsWith(".zip")) {
@@ -236,17 +300,31 @@ export function useNoteTransfer({ client, tree, locale, refreshTree, session, un
       if (triliumMeta) {
         const meta = JSON.parse(decoder.decode(triliumMeta)) as { files?: any[] };
         const importedNotes = new Map<string, { id: string; title: string }>();
-        const pendingContent: Array<{ source: any; note: any; basePath: string }> = [];
+        const pendingContent: Array<{ source: any; note: any; basePath: string; body: string }> = [];
         const importNode = async (source: any, parentPlacementId: string | undefined, basePath: string) => {
-          const note = await createImportedNote({ title: source.title || t(locale, "untitledNote"), parentPlacementId });
-          const placement = (await client.tree()).find((item) => item.noteId === note.id);
+          const label = `${basePath}${source.dataFileName || source.title || "node"}`;
+          let tags: string[] = [];
+          let body = "";
+          if (typeof source.dataFileName === "string" && files[`${basePath}${source.dataFileName}`]) {
+            // Strip the fence here (CRLF-safe) so only the body flows through
+            // link rewriting and the content upload below.
+            const parsed = parseFrontMatter(decoder.decode(files[`${basePath}${source.dataFileName}`]));
+            tags = parsed.data.tags;
+            body = parsed.body.replace(/^\s*#\s+[^\r\n]+\r?\n+/, "");
+          }
+          const note = await createImportedNote({
+            title: source.title || t(locale, "untitledNote"),
+            parentPlacementId,
+            ...(tags.length ? { tags } : {}),
+          });
+          const placement = await placementOf(note.id, parentPlacementId);
           if (typeof source.dataFileName === "string" && files[`${basePath}${source.dataFileName}`])
             importedNotes.set(`${basePath}${source.dataFileName}`, { id: note.id, title: source.title || t(locale, "untitledNote") });
-          pendingContent.push({ source, note, basePath });
+          pendingContent.push({ source, note, basePath, body });
           const childBase = source.dirFileName ? `${basePath}${source.dirFileName}/` : basePath;
-          for (const child of source.children ?? []) await importNode(child, placement?.placementId, childBase);
+          for (const child of source.children ?? []) await importNode(child, placement, childBase);
         };
-        const importContent = async ({ source, note, basePath }: { source: any; note: any; basePath: string }) => {
+        const importContent = async ({ source, note, basePath, body: fencedBody }: { source: any; note: any; basePath: string; body: string }) => {
           const attachmentUrls = new Map<string, string>();
           const upload = async (archivePath: string, filename = archivePath.split("/").at(-1)!) => {
             if (attachmentUrls.has(archivePath)) return attachmentUrls.get(archivePath)!;
@@ -265,10 +343,8 @@ export function useNoteTransfer({ client, tree, locale, refreshTree, session, un
             const archivePath = archiveAssetPath(files, basePath, dataFileName);
             if (archivePath) await upload(archivePath, dataFileName);
           }
-          let markdown = "";
-          if (source.dataFileName && files[`${basePath}${source.dataFileName}`]) {
-            markdown = decoder.decode(files[`${basePath}${source.dataFileName}`]);
-            markdown = markdown.replace(/^\uFEFF?\s*#\s+[^\r\n]+\r?\n+/, "");
+          let markdown = fencedBody;
+          if (markdown) {
             markdown = replaceImportedNoteLinks(markdown, files, basePath, importedNotes);
             const attachmentRefs = [...markdown.matchAll(attachmentReferencePattern())];
             const replacementUrls = new Map<string, string>();
@@ -288,50 +364,84 @@ export function useNoteTransfer({ client, tree, locale, refreshTree, session, un
               return url ? matched.replace(reference, url) : matched;
             });
           }
-          if (markdown.trim()) await client.putMarkdown(note.id, markdown, note.version, true);
+          if (markdown.trim())
+            await client.updateNote(note.id, {
+              content: markdownToTiptap(markdown).document,
+              expectedVersion: note.version,
+            });
         };
-        for (const root of meta.files ?? []) await importNode(root, importTargetPlacementId, "");
-        for (const pending of pendingContent) await importContent(pending);
-        event.target.value = "";
-        refreshTree();
-        onImportComplete(summary);
-        return;
+        for (const root of meta.files ?? [])
+          await attempt(`${root.title || root.dataFileName || "node"}`, () => importNode(root, importTargetPlacementId, ""));
+        for (const pending of pendingContent)
+          await attempt(`${pending.note.title ?? pending.note.id}`, () => importContent(pending));
       }
       const directories = [...new Set(Object.keys(files).flatMap((path) => path.split("/").slice(0, -1).map((_part, index, all) => all.slice(0, index + 1).join("/"))))].filter(Boolean);
       const folderParents = new Map<string, string | undefined>([["", importTargetPlacementId]]);
       for (const directory of directories) {
-        const parentPath = directory.includes("/") ? directory.slice(0, directory.lastIndexOf("/")) : "";
-        const folder = await createImportedNote({ title: directory.split("/").at(-1)!, parentPlacementId: folderParents.get(parentPath) });
-        const placement = (await client.tree()).find((item) => item.noteId === folder.id);
-        if (placement) folderParents.set(directory, placement.placementId);
+        await attempt(directory, async () => {
+          const parentPath = directory.includes("/") ? directory.slice(0, directory.lastIndexOf("/")) : "";
+          const parent = folderParents.get(parentPath);
+          const folder = await createImportedNote({ title: directory.split("/").at(-1)!, parentPlacementId: parent });
+          const placement = await placementOf(folder.id, parent);
+          if (placement) folderParents.set(directory, placement);
+        });
       }
       for (const [path, data] of Object.entries(files).filter(([path]) => /\.(md|markdown)$/i.test(path))) {
-        const directory = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-        const note = await createImportedNote({ title: path.split("/").at(-1)!.replace(/\.(md|markdown)$/i, ""), parentPlacementId: folderParents.get(directory) });
-        let markdown = decoder.decode(data);
-        const imagePattern = /!\[([^\]]*)\]\(([^\s)]+)(?:\s+[^)]*)?\)/g;
-        for (const match of [...markdown.matchAll(imagePattern)]) {
-          const imagePath = match[2].replace(/^\.\//, "");
-          const source = files[`${directory ? `${directory}/` : ""}${imagePath}`];
-          if (!source) continue;
-          const upload = await client.uploadAttachmentByHash(await sha256(source), note.id, imagePath.split("/").at(-1)!, new Blob([source]));
-          summary.attachments += 1;
-          markdown = markdown.replace(match[0], `![${match[1]}](${upload.url})`);
-        }
-        await client.putMarkdown(note.id, markdown, note.version, true);
+        await attempt(path, async () => {
+          const directory = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+          const parsed = parseFrontMatter(decoder.decode(data));
+          const note = await createImportedNote({
+            title: parsed.data.title || path.split("/").at(-1)!.replace(/\.(md|markdown)$/i, ""),
+            parentPlacementId: folderParents.get(directory),
+            ...(parsed.data.tags.length ? { tags: parsed.data.tags } : {}),
+          });
+          let markdown = parsed.body;
+          const imagePattern = /!\[([^\]]*)\]\(([^\s)]+)(?:\s+[^)]*)?\)/g;
+          for (const match of [...markdown.matchAll(imagePattern)]) {
+            const imagePath = match[2].replace(/^\.\//, "");
+            const source = files[`${directory ? `${directory}/` : ""}${imagePath}`];
+            if (!source) continue;
+            const upload = await client.uploadAttachmentByHash(await sha256(source), note.id, imagePath.split("/").at(-1)!, new Blob([source]));
+            summary.attachments += 1;
+            markdown = markdown.replace(match[0], `![${match[1]}](${upload.url})`);
+          }
+          if (markdown.trim())
+            await client.updateNote(note.id, {
+              content: markdownToTiptap(markdown).document,
+              expectedVersion: note.version,
+            });
+        });
       }
     } else if (file.name.toLowerCase().endsWith(".json")) {
       const parsed = JSON.parse(text) as { notes?: Array<{ title: string; content?: any }>; entries?: Array<{ sourcePlacementId: string; parentSourceId: string | null; title: string; content?: any }> };
       const importedParents = new Map<string, string | undefined>();
       for (const item of parsed.entries ?? []) {
-        const note = await createImportedNote({ title: item.title || t(locale, "untitledNote"), content: item.content, parentPlacementId: item.parentSourceId ? importedParents.get(item.parentSourceId) : importTargetPlacementId });
-        const placement = (await client.tree()).find((entry) => entry.noteId === note.id);
-        if (placement) importedParents.set(item.sourcePlacementId, placement.placementId);
+        await attempt(item.title || item.sourcePlacementId, async () => {
+          const parent = item.parentSourceId ? importedParents.get(item.parentSourceId) : importTargetPlacementId;
+          const note = await createImportedNote({ title: item.title || t(locale, "untitledNote"), content: item.content, parentPlacementId: parent });
+          const placement = await placementOf(note.id, parent);
+          if (placement) importedParents.set(item.sourcePlacementId, placement);
+        });
       }
-      for (const item of parsed.notes ?? []) await createImportedNote({ title: item.title || t(locale, "untitledNote"), content: item.content, parentPlacementId: importTargetPlacementId });
+      for (const item of parsed.notes ?? []) {
+        await attempt(item.title || "note", () =>
+          createImportedNote({ title: item.title || t(locale, "untitledNote"), content: item.content, parentPlacementId: importTargetPlacementId }).then(() => undefined),
+        );
+      }
     } else {
-      const note = await createImportedNote({ title: file.name.replace(/\.[^.]+$/, "") || t(locale, "untitledNote"), parentPlacementId: importTargetPlacementId });
-      await client.putMarkdown(note.id, text, note.version, true);
+      await attempt(file.name, async () => {
+        const parsed = parseFrontMatter(text);
+        const note = await createImportedNote({
+          title: parsed.data.title || file.name.replace(/\.[^.]+$/, "") || t(locale, "untitledNote"),
+          parentPlacementId: importTargetPlacementId,
+          ...(parsed.data.tags.length ? { tags: parsed.data.tags } : {}),
+        });
+        if (parsed.body.trim())
+          await client.updateNote(note.id, {
+            content: markdownToTiptap(parsed.body).document,
+            expectedVersion: note.version,
+          });
+      });
     }
     event.target.value = "";
     refreshTree();

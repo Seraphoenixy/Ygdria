@@ -630,21 +630,27 @@ describe("collectSyncMaintenanceStats", () => {
     expect(listPeerCursors(sqlite)).toHaveLength(2);
   });
 
-  it("warns about an unacknowledged backlog instead of deleting it", () => {
-    const sqlite = freshDb();
-    seedChanges(sqlite, SYNC_CHANGE_LOG_WARN_ROWS);
-    // The peer exists but has barely consumed anything, so the entire backlog
-    // is still required for it to catch up.
-    syncTo(sqlite, "slow", 1);
+  // Seeding 50k rows (the warn threshold itself) is CPU-bound and legitimately
+  // slower than the default 5s budget when the whole workspace tests in parallel.
+  it(
+    "warns about an unacknowledged backlog instead of deleting it",
+    () => {
+      const sqlite = freshDb();
+      seedChanges(sqlite, SYNC_CHANGE_LOG_WARN_ROWS);
+      // The peer exists but has barely consumed anything, so the entire backlog
+      // is still required for it to catch up.
+      syncTo(sqlite, "slow", 1);
 
-    const stats = collectSyncMaintenanceStats(sqlite, { now: NOW });
+      const stats = collectSyncMaintenanceStats(sqlite, { now: NOW });
 
-    expect(stats.warnings).toContain("change-log-backlog");
-    expect(stats.warnings).toContain("change-log-blocked-by-idle-peer");
-    // Capacity protection reports; it never drops unconsumed history.
-    expect(stats.changeLog.rows).toBe(SYNC_CHANGE_LOG_WARN_ROWS + BASELINE_CHANGE_ROWS);
-    expect(stats.changeLog.prunableRows).toBe(1);
-  });
+      expect(stats.warnings).toContain("change-log-backlog");
+      expect(stats.warnings).toContain("change-log-blocked-by-idle-peer");
+      // Capacity protection reports; it never drops unconsumed history.
+      expect(stats.changeLog.rows).toBe(SYNC_CHANGE_LOG_WARN_ROWS + BASELINE_CHANGE_ROWS);
+      expect(stats.changeLog.prunableRows).toBe(1);
+    },
+    30_000,
+  );
 
   it("flags a pending cleanup backlog", () => {
     const sqlite = freshDb();
@@ -820,6 +826,6 @@ describe("upgrading a v11 database", () => {
     expect(getCursor(sqlite, "desktop")).toMatchObject({ lastAdvanceId: 3 });
     expect(
       sqlite.prepare("SELECT COUNT(*) c FROM schema_migrations").get(),
-    ).toEqual({ c: 4 });
+    ).toEqual({ c: 5 });
   });
 });

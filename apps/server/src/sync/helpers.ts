@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import {
   decodeStoredContent,
   recordChange,
+  replaceNoteLinks,
   NEXT_CHANGE_LOG_ID_SQL,
   type ChangeKind,
   type ContentCodec,
   type SqliteDatabase,
 } from "@ygdria/database";
-import { attachmentIdsFromSerializedDocument, CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
+import { SYNC_MAX_CLOCK_SKEW_MS, SYNC_SNAPSHOT_EXPIRED, attachmentIdsFromSerializedDocument, CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
 import { isSensitiveSettingKey } from "../http/settings.js";
 
 export type SyncSqlite = SqliteDatabase;
@@ -126,7 +127,7 @@ export function resolveChangeEntities(
   // Batch query notes: gather all non-deleted note IDs, fetch rows, then batch-fetch attachments
   const noteBucket = byType.get("note");
   if (noteBucket) {
-    const liveIds = noteBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
+    const liveIds = noteBucket.map((e) => e.entityId);
     const noteMap = new Map<string, NoteRow>();
     if (liveIds.length > 0) {
       const rows = selectInChunks<NoteRow>(sqlite, liveIds, "notes", NOTE_COLS);
@@ -149,13 +150,6 @@ export function resolveChangeEntities(
 
     for (const entry of noteBucket) {
       const change = filtered[entry.index];
-      if (entry.changeKind === "deleted") {
-        result[entry.index] = {
-          changeId: change.id, entityType: "note", entityId: entry.entityId,
-          changeKind: "deleted", createdAt: change.createdAt, data: null,
-        };
-        continue;
-      }
       const row = noteMap.get(entry.entityId);
       let data: Record<string, unknown> | null = null;
       if (row) {
@@ -176,7 +170,7 @@ export function resolveChangeEntities(
       }
       result[entry.index] = {
         changeId: change.id, entityType: "note", entityId: entry.entityId,
-        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+        changeKind: data ? (change.changeKind === "deleted" ? "updated" : change.changeKind) : "deleted", createdAt: change.createdAt, data,
       };
     }
   }
@@ -360,9 +354,9 @@ export function attachmentIdsFromStoredContent(data: Buffer, codec: ContentCodec
 export function fullSnapshotChanges(sqlite: SyncSqlite) {
   const changes: Array<{ id: number; entityType: string; entityId: string; changeKind: string; createdAt: number }> = [];
   let id = 0;
-  for (const row of sqlite.prepare("SELECT id,updated_at updatedAt FROM notes WHERE deleted_at IS NULL ORDER BY created_at,id").all() as Array<{ id: string; updatedAt: number }>)
+  for (const row of sqlite.prepare("SELECT id,updated_at updatedAt FROM notes ORDER BY created_at,id").all() as Array<{ id: string; updatedAt: number }>)
     changes.push({ id: ++id, entityType: "note", entityId: row.id, changeKind: "updated", createdAt: row.updatedAt });
-  const pending = new Map((sqlite.prepare("SELECT id,parent_placement_id parentPlacementId,updated_at updatedAt FROM placements").all() as Array<{ id: string; parentPlacementId: string | null; updatedAt: number }>).map((row) => [row.id, row]));
+  const pending = new Map((sqlite.prepare("SELECT id,parent_placement_id parentPlacementId,updated_at updatedAt FROM placements WHERE parent_placement_id IS NULL OR parent_placement_id != ?").all(SYSTEM_TRASH_PLACEMENT_ID) as Array<{ id: string; parentPlacementId: string | null; updatedAt: number }>).map((row) => [row.id, row]));
   while (pending.size) {
     let progressed = false;
     for (const [placementId, row] of pending) {
@@ -382,48 +376,134 @@ export function fullSnapshotChanges(sqlite: SyncSqlite) {
 }
 
 type SnapshotEntity = ReturnType<typeof resolveChangeEntities>[number];
-type SnapshotSession = { changes: SnapshotEntity[]; maxChangeId: number; accessedAt: number };
+type SnapshotSession = {
+  changes: SnapshotEntity[];
+  notesById: Map<string, Record<string, unknown>>;
+  maxChangeId: number;
+  accessedAt: number;
+  serializedBytes: number;
+  delivered: boolean;
+};
+function expiredSnapshot() {
+  return Object.assign(new Error("Sync snapshot expired; restart from the first page"), {
+    statusCode: 409,
+    code: SYNC_SNAPSHOT_EXPIRED,
+  });
+}
 
 /**
  * Session-scoped snapshot cache. A snapshot session is anchored to a single
- * fullSnapshotChanges() result and is valid only for the duration of one
- * complete cursor traversal (cursor=0 → hasMore=false). If the client
- * restarts from cursor=0, a fresh session is created so it never sees stale
- * data from a concurrent write during the previous session.
+ * fullSnapshotChanges() result. The session outlives the cursor traversal
+ * (cursor=0 → hasMore=false) so note bodies can still be served from the same
+ * point-in-time; it is released when the client confirms the final cursor via
+ * /sync/advance's snapshotSession, and otherwise expires after the idle TTL or
+ * when the session-count or byte budget forces an eviction. Requesting
+ * cursor=0 with the same session id therefore reuses the pinned snapshot
+ * instead of observing a newer database state.
  */
-class SnapshotCache {
+export class SnapshotCache {
   private sessions = new Map<string, SnapshotSession>();
   private static SESSION_TTL_MS = 5 * 60 * 1000;
   private static MAX_SESSIONS = 2;
+  constructor(private readonly options: { maxBytes?: number } = {}) {}
+
+  get(sessionId: string) {
+    this.evictStale();
+    const session = this.sessions.get(sessionId);
+    if (session) session.accessedAt = Date.now();
+    return session;
+  }
+
+  confirm(sessionId: string, cursor: number) {
+    const session = this.get(sessionId);
+    // Repeated acknowledgements remain idempotent after release.
+    if (!session) return;
+    if (!session.delivered || session.maxChangeId !== cursor)
+      throw Object.assign(new Error("Snapshot cursor has not been fully delivered"), {
+        statusCode: 400,
+      });
+    this.release(sessionId);
+  }
 
   /** Capture the resolved entities, including note bodies, at session start.
    * Keeping only entity IDs is not sufficient: a later page could otherwise
    * observe a newer edit or a deletion made after the first page. */
-  getOrCreate(sessionId: string, sqlite: SyncSqlite, attachmentRoot: string): SnapshotSession {
-    const existing = this.sessions.get(sessionId);
+  getOrCreate(
+    sessionId: string,
+    sqlite: SyncSqlite,
+    attachmentRoot: string,
+    allowCreate = true,
+  ): SnapshotSession {
+    const existing = this.get(sessionId);
     if (existing) {
       existing.accessedAt = Date.now();
       return existing;
     }
+    if (!allowCreate) throw expiredSnapshot();
     this.evictStale();
     if (this.sessions.size >= SnapshotCache.MAX_SESSIONS) {
-      const oldest = [...this.sessions.entries()].sort((a, b) => a[1].accessedAt - b[1].accessedAt)[0]?.[0];
+      const oldest = [...this.sessions.entries()].sort(
+        (a, b) => a[1].accessedAt - b[1].accessedAt,
+      )[0]?.[0];
       if (oldest) this.sessions.delete(oldest);
     }
-    const changes = resolveChangeEntities(sqlite, attachmentRoot, fullSnapshotChanges(sqlite), true);
-    const maxChangeId = (sqlite.prepare("SELECT COALESCE(MAX(id),0) id FROM sync_change_log").get() as { id: number }).id;
-    const session = { changes, maxChangeId, accessedAt: Date.now() };
+    const changes = resolveChangeEntities(
+      sqlite,
+      attachmentRoot,
+      fullSnapshotChanges(sqlite),
+      true,
+    );
+    const maxChangeId = (
+      sqlite.prepare("SELECT COALESCE(MAX(id),0) id FROM sync_change_log").get() as { id: number }
+    ).id;
+    const serializedBytes = Buffer.byteLength(JSON.stringify(changes));
+    const maxBytes = this.options.maxBytes ?? 256 * 1024 * 1024;
+    if (serializedBytes > maxBytes)
+      throw Object.assign(new Error("Sync snapshot exceeds cache byte budget"), {
+        statusCode: 413,
+      });
+    while (
+      [...this.sessions.values()].reduce((total, item) => total + item.serializedBytes, 0) +
+        serializedBytes >
+      maxBytes
+    ) {
+      const oldest = [...this.sessions.entries()].sort(
+        (a, b) => a[1].accessedAt - b[1].accessedAt,
+      )[0];
+      if (!oldest) break;
+      this.sessions.delete(oldest[0]);
+    }
+    const notesById = new Map(
+      changes
+        .filter((change) => change.entityType === "note" && change.data)
+        .map((change) => [change.entityId, change.data!]),
+    );
+    const session = {
+      changes,
+      notesById,
+      maxChangeId,
+      accessedAt: Date.now(),
+      serializedBytes,
+      delivered: false,
+    };
     this.sessions.set(sessionId, session);
     return session;
   }
 
   getNoteContents(sessionId: string, ids: readonly string[], hashes: readonly string[]) {
-    const session = this.sessions.get(sessionId);
-    if (!session) return undefined;
-    session.accessedAt = Date.now();
-    const byId = new Map(session.changes.filter((change) => change.entityType === "note" && change.data)
-      .map((change) => [change.entityId, change.data!]));
-    const contents: Record<string, { contentData: string; contentCodec: string; contentSize: number; contentHash: string; plainText: string } | null> = {};
+    const session = this.get(sessionId);
+    if (!session) throw expiredSnapshot();
+    const byId = session.notesById;
+    const contents: Record<
+      string,
+      {
+        contentData: string;
+        contentCodec: string;
+        contentSize: number;
+        contentHash: string;
+        plainText: string;
+      } | null
+    > = {};
     for (let index = 0; index < ids.length; index += 1) {
       const data = byId.get(ids[index]);
       if (!data || data.contentHash !== hashes[index] || typeof data.contentData !== "string") {
@@ -625,11 +705,27 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
     const rank = (type: string) => type === "note" ? 0 : type === "placement" ? 1 : type === "placement-order" ? 2 : 3;
     return rank(a.entityType) - rank(b.entityType);
   });
+  // Clock arbitration: a record claiming to be from further in the future than
+  // the skew tolerance is capped to the receiver's clock. Honest devices are
+  // untouched; a run-ahead device can no longer mint timestamps that outrank
+  // every later, honest edit under last-write-wins. The cap is deterministic,
+  // so capped replays stay idempotent.
+  const receiveCap = Date.now() + SYNC_MAX_CLOCK_SKEW_MS;
+  const capped = (value: number) => Math.min(value, receiveCap);
+  const capRecord = (data: Record<string, unknown> | null) => {
+    if (!data) return data;
+    const clamped = { ...data };
+    for (const key of ["updatedAt", "createdAt"] as const)
+      if (typeof clamped[key] === "number") clamped[key] = capped(clamped[key] as number);
+    return clamped;
+  };
   sqlite.transaction(() => {
     for (const change of ordered) {
       if (change.entityType === "setting" && isSensitiveSettingKey(change.entityId)) continue;
-      const timestamp = Number(
-        change.createdAt ?? (change.data as { updatedAt?: number } | null)?.updatedAt ?? 0,
+      const timestamp = capped(
+        Number(
+          change.createdAt ?? (change.data as { updatedAt?: number } | null)?.updatedAt ?? 0,
+        ),
       );
       if (!Number.isSafeInteger(timestamp) || timestamp < 0) continue;
       if (change.entityType === "attachment" && change.changeKind === "deleted") {
@@ -687,7 +783,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           }
           continue;
         }
-        const d = change.data as Record<string, unknown> | null;
+        const d = capRecord(change.data as Record<string, unknown> | null);
         if (!d || typeof d.contentData !== "string" || typeof d.updatedAt !== "number") continue;
         const acceptsUpdate = noteWouldAcceptSyncUpdate(sqlite, String(d.id), d.updatedAt);
         if (!acceptsUpdate) {
@@ -747,6 +843,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
             d.updatedAt,
           );
         if (result.changes) {
+          replaceNoteLinks(sqlite, String(d.id), Buffer.from(d.contentData, "base64"), d.contentCodec as ContentCodec);
           if (d.deletedAt === null) {
             const trashPlacements = sqlite
               .prepare("SELECT id FROM placements WHERE note_id=? AND parent_placement_id=?")
@@ -757,12 +854,30 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
               logChange("placement", placement.id, "deleted");
             }
           }
+          if (typeof d.deletedAt === "number") {
+            // Trash placements are local views. Reconcile stale active clones
+            // even when a snapshot arrives after their deletion logs were pruned.
+            const placements = sqlite.prepare("SELECT id FROM placements WHERE note_id=? AND (parent_placement_id IS NULL OR parent_placement_id != ?)")
+              .all(String(d.id), SYSTEM_TRASH_PLACEMENT_ID) as Array<{ id: string }>;
+            for (const placement of placements) {
+              sqlite.prepare("DELETE FROM placements WHERE id=?").run(placement.id);
+              logChange("placement", placement.id, "deleted");
+            }
+            const hasTrashPlacement = sqlite.prepare("SELECT 1 FROM placements WHERE note_id=? AND parent_placement_id=?")
+              .get(String(d.id), SYSTEM_TRASH_PLACEMENT_ID);
+            if (!hasTrashPlacement) {
+              const position = (sqlite.prepare("SELECT COALESCE(MAX(position),-1)+1 p FROM placements WHERE parent_placement_id=?")
+                .get(SYSTEM_TRASH_PLACEMENT_ID) as { p: number }).p;
+              sqlite.prepare("INSERT INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+                .run(randomUUID(), String(d.id), SYSTEM_TRASH_PLACEMENT_ID, position, d.deletedAt, d.updatedAt);
+            }
+          }
           addNoteToSearchIndex(sqlite, String(d.id));
           logChange("note", String(d.id), "updated");
           applied += 1;
         }
       } else if (change.entityType === "placement-order") {
-        const d = change.data as Record<string, unknown> | null;
+        const d = capRecord(change.data as Record<string, unknown> | null);
         if (!d || typeof d.parentPlacementId !== "string" || !Array.isArray(d.placementIds) || !d.placementIds.every((id) => typeof id === "string") || typeof d.updatedAt !== "number") continue;
         const accepted = sqlite.prepare(
           "INSERT INTO placement_order_versions(parent_placement_id,updated_at) VALUES (?,?) ON CONFLICT(parent_placement_id) DO UPDATE SET updated_at=excluded.updated_at WHERE excluded.updated_at > placement_order_versions.updated_at",
@@ -789,7 +904,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           }
           continue;
         }
-        const d = change.data as Record<string, unknown> | null;
+        const d = capRecord(change.data as Record<string, unknown> | null);
         if (!d || typeof d.noteId !== "string" || typeof d.updatedAt !== "number") continue;
         const result = sqlite
           .prepare(
@@ -819,7 +934,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           }
           continue;
         }
-        const d = change.data as Record<string, unknown> | null;
+        const d = capRecord(change.data as Record<string, unknown> | null);
         if (
           !d ||
           typeof d.id !== "string" ||
@@ -857,7 +972,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           }
           continue;
         }
-        const d = change.data as Record<string, unknown> | null;
+        const d = capRecord(change.data as Record<string, unknown> | null);
         if (
           !d ||
           typeof d.id !== "string" ||
@@ -908,7 +1023,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           }
           continue;
         }
-        const d = change.data as Record<string, unknown> | null;
+        const d = capRecord(change.data as Record<string, unknown> | null);
         if (
           !d ||
           typeof d.key !== "string" ||

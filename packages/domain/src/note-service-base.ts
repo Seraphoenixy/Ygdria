@@ -5,6 +5,7 @@ import {
   encodeDocumentContent,
   recordChange,
   recordChanges,
+  replaceNoteLinks,
   type ContentCodec,
   type createDatabase,
 } from "@ygdria/database";
@@ -166,6 +167,7 @@ export class NoteServiceBase {
       this.store.sqlite
         .prepare("INSERT INTO placements VALUES (?,?,?,?,?,?)")
         .run(placementId, noteId, parentPlacementId, p.p, t, t);
+      replaceNoteLinks(this.store.sqlite, noteId, stored.data, stored.codec);
       this.index(noteId);
       recordChange(this.store.sqlite, "note", noteId, "created");
       recordChange(this.store.sqlite, "placement", placementId, "created");
@@ -626,6 +628,7 @@ export class NoteServiceBase {
             input.expectedVersion,
           );
         if (!updated.changes) throw new ConflictError();
+        replaceNoteLinks(this.store.sqlite, noteId, stored.data, stored.codec);
       } else {
         const oldRow = this.store.sqlite
           .prepare("SELECT properties_json FROM notes WHERE id=?")

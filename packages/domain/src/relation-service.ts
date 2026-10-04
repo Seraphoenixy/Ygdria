@@ -4,6 +4,9 @@ import {
   CALENDAR_NOTE_ID,
   SYSTEM_ROOT_NOTE_ID,
   SYSTEM_TRASH_NOTE_ID,
+  type GraphData,
+  type GraphEdge,
+  type GraphEdgeKind,
   type RelationType,
 } from "@ygdria/shared";
 import { NotFoundError } from "./note-service-base.js";
@@ -119,5 +122,47 @@ export class RelationService {
       outgoing: outgoingRows.map((row) => peer(row, true)),
       incoming: incomingRows.map((row) => peer(row, false)),
     };
+  }
+
+  /**
+   * Read-only projection for the knowledge graph view: every non-deleted,
+   * non-system note as a node, explicit relations and internal body links
+   * (noteReference nodes) as edges. Protected notes appear as title-less
+   * nodes — their stored content is ciphertext only the holding client can
+   * decrypt, so their body links are invisible here.
+   */
+  graph(): GraphData {
+    const nodes = (
+      this.store.sqlite
+        .prepare(
+          "SELECT id,CASE WHEN is_protected=1 THEN '' ELSE title END title,is_protected isProtected FROM notes WHERE deleted_at IS NULL AND id NOT IN (?,?,?) ORDER BY title,id",
+        )
+        .all(SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID) as Array<{
+        id: string;
+        title: string;
+        isProtected: number;
+      }>
+    ).map((row) => ({ id: row.id, title: row.title, isProtected: Boolean(row.isProtected) }));
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    const edges = new Map<string, GraphEdge>();
+    const addEdge = (source: string, target: string, kind: GraphEdgeKind) => {
+      if (source === target || !nodeIds.has(source) || !nodeIds.has(target)) return;
+      edges.set(`${kind}:${source}:${target}`, { source, target, kind });
+    };
+    for (const row of this.store.sqlite
+      .prepare("SELECT source_note_id sourceNoteId,target_note_id targetNoteId FROM relations")
+      .all() as Array<{ sourceNoteId: string; targetNoteId: string }>)
+      addEdge(row.sourceNoteId, row.targetNoteId, "relation");
+    // Body links come from the note_links projection (kept in step with every
+    // content write), so this read never decodes stored documents. The join
+    // drops links whose source note is deleted; dangling targets are filtered
+    // by addEdge's node-membership check.
+    for (const row of this.store.sqlite
+      .prepare(
+        "SELECT l.note_id sourceNoteId, l.target_note_id targetNoteId FROM note_links l JOIN notes n ON n.id = l.note_id WHERE n.deleted_at IS NULL AND n.is_protected = 0",
+      )
+      .all() as Array<{ sourceNoteId: string; targetNoteId: string }>)
+      addEdge(row.sourceNoteId, row.targetNoteId, "link");
+    return { nodes, edges: [...edges.values()] };
   }
 }

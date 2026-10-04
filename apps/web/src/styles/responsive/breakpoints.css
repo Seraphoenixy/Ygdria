@@ -495,3 +495,61 @@
     }
   }
 }
+
+/* --- Pull-to-refresh indicator (phone layout) --- */
+.pull-refresh-indicator {
+  position: fixed;
+  top: calc(10px + var(--sat, 0px));
+  left: 50%;
+  z-index: 95;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-fg-muted);
+  font-size: var(--text-sm);
+  box-shadow: var(--elevation-2);
+}
+
+.pull-refresh-indicator.armed {
+  color: var(--color-fg);
+  border-color: var(--color-accent);
+}
+
+.pull-refresh-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+}
+
+.pull-refresh-indicator.refreshing .pull-refresh-spinner {
+  animation: pull-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes pull-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Editor toolbar: on phones the nowrap toolbar is clipped (overflow hidden).
+ * Turn it into a scrollable strip with hidden scrollbars instead. */
+.phone .editor-toolbar {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.phone .editor-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Find/replace bar: the match-count label overflows a 420px row; let the
+ * controls wrap instead of clipping on phones. */
+.phone .ygdria-search-row {
+  flex-wrap: wrap;
+}

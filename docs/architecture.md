@@ -94,7 +94,7 @@ packages/shared  Zod 契约、跨端类型、系统常量（含 SRP_USERNAME / A
 packages/api-client 浏览器与移动端共用的 HTTP 请求封装（携带本地令牌与设备令牌、authConfig / SRP challenge / verify 调用）
 apps/web         React 用户界面、ProtectedClientSession（端到端加密）、客户端主密码派生与 SRP 客户端逻辑、RemoteProxyClient（桌面端 IPC 代理）
 apps/desktop     Electron 主进程：本地 Fastify 内嵌、远端代理 IPC、safeStorage 凭据存储、路径白名单与 SSRF 防护
-apps/mobile      Capacitor 壳（Android/iOS）：复用 apps/web 的 SPA（webDir: ../web/dist），集成原生状态栏/深色、键盘 resize、Android 返回键、安全凭据存储（capacitor-secure-storage-plugin）与移动端笔记树抽屉；原生工程经 cap sync 纳入。移动端的唯一服务地址统一为设置中的「目标服务器地址」`settings.syncServerUrl`（启动时把遗留的 `ygdria.api` 一次性并入），deviceToken 经 capacitor-secure-storage-plugin 安全存储。
+apps/mobile      Capacitor 壳（Android/iOS）：复用 apps/web 的 SPA（webDir: ../web/dist），集成原生状态栏/深色、键盘 resize、Android 返回键、安全凭据存储（capacitor-secure-storage-plugin）与移动端笔记树抽屉；原生工程经 cap sync 纳入。移动端的唯一服务地址统一为设置中的「与 Linux 服务端同步的地址」`settings.syncServerUrl`（启动时把遗留的 `ygdria.api` 一次性并入），deviceToken 经 capacitor-secure-storage-plugin 安全存储。
 ```
 
 依赖方向必须保持为：

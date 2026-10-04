@@ -2,6 +2,7 @@ import { Capacitor } from "@capacitor/core";
 import { CapacitorShareTarget } from "@capgo/capacitor-share-target";
 import { Filesystem } from "@capacitor/filesystem";
 import type { YgdriaClient } from "@ygdria/api-client";
+import { markdownToTiptap } from "@ygdria/editor/markdown";
 import { t, type Locale } from "./i18n";
 
 interface SharedImage {
@@ -13,6 +14,7 @@ interface SharedImage {
 let clientRef: YgdriaClient | null = null;
 let localeRef: Locale = "zh-CN";
 const pending: SharedImage[] = [];
+const pendingTexts: string[] = [];
 let registered = false;
 
 /**
@@ -32,8 +34,10 @@ export function initShareReceiver(): void {
     for (const file of images) {
       pending.push({ name: file.name, mimeType: file.mimeType, uri: file.uri });
     }
-    if (clientRef) {
-      void flushPending().catch((error) => console.error("Failed to save shared images", error));
+    const sharedText = extractSharedText(event);
+    if (sharedText) pendingTexts.push(sharedText);
+    if (clientRef && (images.length > 0 || pendingTexts.length > 0)) {
+      void flushPending().catch((error) => console.error("Failed to save shared content", error));
     }
   });
 }
@@ -52,9 +56,15 @@ export function configureShareReceiver(client: YgdriaClient, locale: Locale): vo
 }
 
 async function flushPending(): Promise<void> {
-  if (!clientRef || pending.length === 0) return;
-  const images = pending.splice(0, pending.length);
-  await saveImagesAsNote(clientRef, images, localeRef);
+  if (!clientRef) return;
+  if (pending.length > 0) {
+    const images = pending.splice(0, pending.length);
+    await saveImagesAsNote(clientRef, images, localeRef);
+  }
+  if (pendingTexts.length > 0) {
+    const texts = pendingTexts.splice(0, pendingTexts.length);
+    for (const text of texts) await saveTextAsNote(clientRef, text, localeRef);
+  }
 }
 
 /** Reads a shared file URI into raw bytes using the most reliable method
@@ -95,6 +105,54 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return `sha256:${Array.from(digest, (part) => part.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/** Normalize a share-target event into shared text, if it carries any. */
+export function extractSharedText(event: unknown): string | null {
+  const source = event as { text?: unknown; url?: unknown };
+  for (const key of ["text", "url"] as const) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+/** Derive a note title and Markdown body from shared text. A bare URL
+ *  becomes a titled link; anything else keeps its lines with a truncated
+ *  first-line title. Returns null for effectively empty input. */
+export function sharedTextToNote(text: string): { title: string; markdown: string } | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const firstLine = trimmed.split(/\r?\n/, 1)[0].trim();
+  const title = (firstLine || trimmed).slice(0, 80);
+  if (/^https?:\/\/\S+$/i.test(trimmed)) {
+    return { title: title || "link", markdown: `[${title}](${trimmed})` };
+  }
+  return { title, markdown: trimmed };
+}
+
+/** Persists shared text / a URL as its own note under today's calendar day. */
+async function saveTextAsNote(client: YgdriaClient, text: string, locale: Locale): Promise<void> {
+  const note = sharedTextToNote(text);
+  if (!note) return;
+  const isLink = /^https?:\/\//i.test(text.trim());
+  const created = await client.createTodayNote({
+    title: isLink ? t(locale, "sharedLinkNote") : t(locale, "sharedTextNote"),
+  });
+  // A meaningful title beats the generic label when one is derivable.
+  const title = note.title || created.title;
+  if (title !== created.title) {
+    const renamed = await client.updateNote(created.id, { title, expectedVersion: created.version });
+    await client.updateNote(created.id, {
+      content: markdownToTiptap(note.markdown).document,
+      expectedVersion: renamed.version,
+    });
+    return;
+  }
+  await client.updateNote(created.id, {
+    content: markdownToTiptap(note.markdown).document,
+    expectedVersion: created.version,
+  });
+}
+
 /** Creates a single new note containing every shared image embedded via its
  *  uploaded attachment URL. */
 async function saveImagesAsNote(client: YgdriaClient, images: SharedImage[], locale: Locale): Promise<void> {
@@ -120,5 +178,8 @@ async function saveImagesAsNote(client: YgdriaClient, images: SharedImage[], loc
     );
     markdown.push(`![](${uploaded.url})`);
   }
-  await client.putMarkdown(note.id, markdown.join("\n\n"), note.version, true);
+  await client.updateNote(note.id, {
+    content: markdownToTiptap(markdown.join("\n\n")).document,
+    expectedVersion: note.version,
+  });
 }

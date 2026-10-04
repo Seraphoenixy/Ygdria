@@ -19,6 +19,7 @@ import { normalizePastedHtml } from "./clipboard.js";
 import { markdownToTiptap, tiptapToMarkdown } from "./markdown.js";
 import { YgdriaCodeBlock } from "./CodeBlock.js";
 import { SearchReplace, SearchReplaceBar } from "./SearchReplaceBar.js";
+import { EDITOR_OPEN_SEARCH_EVENT } from "./search-events.js";
 import { Redacted } from "./Redacted.js";
 import { selectTable, selectTableColumn, selectTableRow, TABLE_ACTION_LABELS } from "./table-actions.js";
 import katex from "katex";
@@ -414,18 +415,45 @@ export function YgdriaEditor({
     if (editor) onEditorReady?.(editor);
   }, [editor]);
 
+  // The toolbar's overflow menu requests the bar through a custom event:
+  // touch devices have no Ctrl+F, so this is their only entry point.
+  useEffect(() => {
+    const onOpenSearch = () => {
+      if (searchOpen) {
+        const input = document.querySelector<HTMLInputElement>(".ygdria-search-input");
+        if (input) {
+          input.focus();
+          input.select();
+        }
+        return;
+      }
+      setSearchOpen(true);
+    };
+    window.addEventListener(EDITOR_OPEN_SEARCH_EVENT, onOpenSearch);
+    return () => window.removeEventListener(EDITOR_OPEN_SEARCH_EVENT, onOpenSearch);
+  }, [searchOpen]);
+
   // Open the find/replace bottom bar with Ctrl/Cmd+F, overriding the browser's
-  // native page search while the note body is focused.
+  // native page search while the note body is focused. When the bar is already
+  // open, re-select its query so typing replaces it.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && (event.key === "f" || event.key === "F")) {
         event.preventDefault();
+        if (searchOpen) {
+          const input = document.querySelector<HTMLInputElement>(".ygdria-search-input");
+          if (input) {
+            input.focus();
+            input.select();
+          }
+          return;
+        }
         setSearchOpen(true);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [searchOpen]);
 
   const closeSearch = () => {
     setSearchOpen(false);

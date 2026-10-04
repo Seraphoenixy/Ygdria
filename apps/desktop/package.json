@@ -21,6 +21,7 @@
     "appId": "com.ygdria.app",
     "productName": "Ygdria",
     "asar": true,
+    "npmRebuild": false,
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**"
     ],

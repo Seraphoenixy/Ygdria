@@ -12,3 +12,5 @@ coverage
 
 .trae/
 .workbuddy/
+
+*.log

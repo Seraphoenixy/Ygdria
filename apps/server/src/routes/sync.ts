@@ -132,11 +132,11 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     // Use session-scoped cache: the client provides a session id that pins
     // the full snapshot to a single point-in-time. On the first page
     // (cursor=0, no session) a new session is created; subsequent pages
-    // reuse the cached result. When hasMore=false, the session is released.
+    // reuse the cached result. Release only after the client applies the last page.
     const sessionId = query.session;
     if (sessionId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId))
       throw httpError(400, "session must be a UUID");
-    const session = sessionId ? snapshotCache.getOrCreate(sessionId, sqlite, attachmentRoot) : undefined;
+    const session = sessionId ? snapshotCache.getOrCreate(sessionId, sqlite, attachmentRoot, cursor === 0) : undefined;
     const all = session ? session.changes : fullSnapshotChanges(sqlite);
     const page = all.slice(cursor, cursor + limit);
     // The session stores the fully resolved state at its start. Metadata-only
@@ -152,6 +152,7 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     const hasMore = nextCursor < all.length;
     const maxChangeId = session?.maxChangeId ?? getMaxChangeId(sqlite);
     if (!hasMore) {
+      if (session) session.delivered = true;
       if (validPeerId(query.peerId))
         markPeerSnapshotCompleted(sqlite, cursorKey(req.device?.id, query.peerId), maxChangeId);
     }
@@ -160,7 +161,12 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
 
   app.get("/api/v1/sync/notes/:id/content", async (req) => {
     const { id } = req.params as { id: string };
-    const hash = (req.query as { hash?: string }).hash;
+    const { hash, session } = req.query as { hash?: string; session?: string };
+    if (session) {
+      const content = snapshotCache.getNoteContents(session, [id], [hash ?? ""]);
+      if (!content?.[id]) throw new NotFoundError("Snapshot note content version not found");
+      return content[id];
+    }
     const row = sqlite.prepare("SELECT content_data contentData,content_codec contentCodec,content_size contentSize,content_hash contentHash,plain_text plainText FROM notes WHERE id=?").get(id) as { contentData: Buffer; contentCodec: string; contentSize: number; contentHash: string; plainText: string } | undefined;
     if (!row || (hash && row.contentHash !== hash)) throw new NotFoundError("Note content version not found");
     return { ...row, contentData: Buffer.from(row.contentData).toString("base64") };
@@ -257,13 +263,14 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
    * restart from the last advanced cursor.
    */
   app.post("/api/v1/sync/advance", async (req) => {
-    const body = req.body as { peerId?: string; cursor?: number };
+    const body = req.body as { peerId?: string; cursor?: number; snapshotSession?: string };
     const cursor = Number(body.cursor ?? NaN);
     if (!validPeerId(body.peerId) || !Number.isSafeInteger(cursor) || cursor < 0)
       throw httpError(400, "peerId and cursor (non-negative integer) are required");
     const key = cursorKey(req.device?.id, body.peerId);
     if (isPeerRebaselineRequired(sqlite, key) && !canCompletePeerRebaseline(sqlite, key, cursor))
       throw new SyncRebaselineRequiredError(key);
+    if (body.snapshotSession) snapshotCache.confirm(body.snapshotSession, cursor);
     const result = advanceCursor(sqlite, key, cursor);
     clearPeerRebaseline(sqlite, key);
     pruneChangeLog(sqlite);

@@ -13,7 +13,8 @@
 
 import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
-import { encodeDocumentContent } from "./content-codec.js";
+import { encodeDocumentContent, type ContentCodec } from "./content-codec.js";
+import { readNoteLinkTargets } from "./note-links.js";
 import {
   SYSTEM_ROOT_NOTE_ID,
   SYSTEM_ROOT_PLACEMENT_ID,
@@ -46,6 +47,7 @@ const STABLE_CHECKSUMS = {
   12: "3c7a91be40d2f815",
   13: "f0a1b2c3d4e5f607",
   14: "9a8b7c6d5e4f3210",
+  15: "c3f8a91d7e2645b0",
 } as const;
 
 /**
@@ -189,6 +191,33 @@ const MIGRATIONS: Migration[] = [
         sqlite.exec("ALTER TABLE sync_rebaseline_required ADD COLUMN snapshot_max_change_id integer");
     },
   },
+  // Version 15: project internal body links (noteReference nodes) into a
+  // note_links table so graph/backlink reads stop decoding every stored
+  // document. Targets have no foreign key: links may dangle, readers join
+  // notes when they need only live ones. Rows are backfilled here once; the
+  // domain and sync write paths maintain the table transactionally.
+  {
+    version: 15,
+    description: "Project internal note links into a note_links table",
+    checksum: STABLE_CHECKSUMS[15],
+    up(sqlite) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS note_links (
+          note_id text not null references notes(id) on delete cascade,
+          target_note_id text not null,
+          primary key (note_id, target_note_id)
+        );
+        CREATE INDEX IF NOT EXISTS note_links_target_idx ON note_links(target_note_id);
+      `);
+      const rows = sqlite
+        .prepare("SELECT id, content_data contentData, content_codec contentCodec FROM notes WHERE is_protected=0 AND type<>'code'")
+        .all() as Array<{ id: string; contentData: Buffer; contentCodec: ContentCodec }>;
+      const insert = sqlite.prepare("INSERT OR IGNORE INTO note_links (note_id,target_note_id) VALUES (?,?)");
+      for (const row of rows)
+        for (const target of readNoteLinkTargets(row.contentData, row.contentCodec))
+          insert.run(row.id, target);
+    },
+  },
 ];
 
 /** The supported migration history begins at v11. Older migration records are
@@ -277,8 +306,10 @@ function bootstrapV11(sqlite: Database.Database) {
     CREATE INDEX notes_protected_updated_idx ON notes(is_protected,updated_at DESC);
     CREATE INDEX notes_protected_archived_idx ON notes(is_protected,archived_at);
     CREATE INDEX notes_deleted_at_idx ON notes(deleted_at);
+    CREATE TABLE note_links (note_id text not null references notes(id) on delete cascade, target_note_id text not null, primary key (note_id, target_note_id));
     CREATE INDEX relations_target_idx ON relations(target_note_id);
     CREATE UNIQUE INDEX relations_unique ON relations(source_note_id,relation_type,target_note_id);
+    CREATE INDEX note_links_target_idx ON note_links(target_note_id);
     CREATE INDEX revisions_note_idx ON revisions(note_id,created_at);
     CREATE INDEX attachments_content_hash_idx ON attachments(content_hash);
     CREATE INDEX storage_cleanup_jobs_pending_idx ON storage_cleanup_jobs(completed_at,created_at);
