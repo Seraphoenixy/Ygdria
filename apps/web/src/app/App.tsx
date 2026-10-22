@@ -27,6 +27,7 @@ import { DeviceAccessGate } from "../components/chrome/DeviceAccessGate";
 import { WindowControls } from "../components/chrome/WindowControls";
 import { MobileTabBar } from "../components/chrome/MobileTabBar";
 import { ConnectionBanner } from "../components/chrome/ConnectionBanner";
+import { CommandPalette } from "../components/chrome/CommandPalette";
 import { useConnectionState } from "../hooks/useConnectionState";
 import { usePullToRefresh, PULL_TRIGGER_PX } from "../hooks/usePullToRefresh";
 import { WorkspaceLayout } from "../components/workspace/WorkspaceLayout";
@@ -166,6 +167,10 @@ export function App({
   useEffect(() => {
     document.body.classList.toggle("reading-mode", readingMode);
   }, [readingMode]);
+  // Tree hoisting: when set, the tree panel shows only this subtree.
+  const [focusedPlacementId, setFocusedPlacementId] = useState<string>();
+  // Quick-jump command palette (Ctrl/Cmd+K).
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   // Keep the active theme in sync with the user's preference. The attribute is
   // set once before first paint (main.tsx); here we re-apply whenever the OS
@@ -495,6 +500,19 @@ export function App({
       if (!tabIds.has(id)) tabScrollPositionsRef.current.delete(id);
     }
   }, [tabs]);
+
+  // Quick-jump palette: Ctrl/Cmd+K toggles. Runs even while typing — the
+  // palette is exactly the tool for jumping out of the middle of a note.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && (event.key === "k" || event.key === "K")) {
+        event.preventDefault();
+        setCommandPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Keyboard navigation for tabs: Ctrl/Cmd+1..9 jump, Ctrl/Cmd+Tab cycles,
   // Ctrl/Cmd+W closes the active tab. Suppressed while typing in a field.
@@ -1414,6 +1432,8 @@ export function App({
           onShowSyncConflicts={() => setShowSyncConflicts(true)}
           onSync={syncNow}
           onNavigateHome={openNewTab}
+          focusedPlacementId={focusedPlacementId}
+          onFocusPlacement={setFocusedPlacementId}
           decryptedTitles={decryptedTitles}
         />
         {showInspector && !inspectorCollapsed && (
@@ -1594,6 +1614,7 @@ export function App({
                 )
               }
               onProtectSubtree={(placement, protect) => protectSubtree(placement.noteId, protect)}
+              onFocus={(placement) => setFocusedPlacementId(placement.placementId)}
             />
           </div>
         )}
@@ -1702,6 +1723,21 @@ export function App({
         {!isDesktopApp && deviceAccess === "ready" && connection.state === "offline" && (
           <ConnectionBanner locale={locale} retry={connection.retry} />
         )}
+        <CommandPalette
+          open={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          locale={locale}
+          client={client}
+          openNote={openNote}
+          onCreateNote={() => void createNewNote()}
+          onOpenTodayNote={openTodayNote}
+          onOpenSearch={openSearch}
+          onOpenGraph={openGraph}
+          onOpenHistory={openHistory}
+          onOpenArchive={openArchive}
+          onOpenAttachments={openAttachments}
+          onOpenSettings={openSettings}
+        />
         {pullDistancePx > 0 && (
           <div
             className={`pull-refresh-indicator ${pullDistancePx >= PULL_TRIGGER_PX ? "armed" : ""} ${pullRefreshing ? "refreshing" : ""}`}

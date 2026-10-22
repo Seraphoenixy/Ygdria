@@ -1,6 +1,6 @@
 import {
   FolderPlus, FileCode2, Archive, ArchiveRestore, X, Copy,
-  Trash2, FileText, Lock, Unlock,
+  Trash2, FileText, Lock, Unlock, ScanSearch,
 } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 import { effectiveSelectedPlacementIds } from "../../lib/tree-selection";
@@ -23,12 +23,13 @@ type TreeContextMenuProps = {
   onImport: (targetPlacementId: string) => void;
   onOpenInNewTab?: (placement: TreePlacement) => void;
   onProtectSubtree?: (placement: TreePlacement, protect: boolean) => void;
+  onFocus?: (placement: TreePlacement) => void;
 };
 
 export function TreeContextMenu({
   menu, tree, selectedPlacementId, selectedPlacementIds,
   treeClipboard, locale, onClose, onCreateChild, onArchive,
-  onSetClipboard, onDelete, onPaste,   onExport, onImport, onOpenInNewTab, onProtectSubtree,
+  onSetClipboard, onDelete, onPaste,   onExport, onImport, onOpenInNewTab, onProtectSubtree, onFocus,
 }: TreeContextMenuProps) {
   const { placement } = menu;
   const selectionIds = effectiveSelectedPlacementIds(selectedPlacementIds, selectedPlacementId);
@@ -65,6 +66,15 @@ export function TreeContextMenu({
           onClick={() => { onOpenInNewTab(placement); onClose(); }}
         >
           <FileText size={16} /> {t(locale, "openInNewTab")}
+        </button>
+      )}
+      {onFocus && (
+        <button
+          role="menuitem"
+          disabled={placement.isSystem || placement.isTrashed || placement.isTrash}
+          onClick={() => { onFocus(placement); onClose(); }}
+        >
+          <ScanSearch size={16} /> {t(locale, "focusNote")}
         </button>
       )}
       <button

@@ -4,13 +4,18 @@
 
 ## 1. 前置条件
 
-- Node.js 24 LTS（24.x）。
+- Node.js 24 LTS（至少 24.22.1，当前固定版本见根目录 `.nvmrc`）。旧的 24.x 也可能包含未修复漏洞，不能仅检查主版本。
 - pnpm 10；项目通过 Corepack 固定版本。
 - Windows 上若 `better-sqlite3` 需要从源码构建，安装 Visual Studio Build Tools 的 **Desktop development with C++** 工作负载。
 
 若 `corepack enable` 因没有 `C:\Program Files\nodejs` 写入权限而失败，不必执行它；后续命令均可使用 `corepack pnpm ...`，无需全局安装 `pnpm`。
 
 ## 2. 首次启动
+
+Linux SEA 构建会检查实际执行构建的 Node 版本，低于安全下限时在写入发布目录前终止。
+CI 同样固定安全版本。发布包根目录的 `build-info.json` 记录 Node/OpenSSL 和其他内嵌库版本、
+better-sqlite3 版本、构建时间、可执行文件与锁文件的 SHA-256。更新服务器上安装的 Node
+不会改变旧 SEA 文件，需重新构建并替换发布包；构建清单不是运行时完整漏洞审计。
 
 ```powershell
 # 安装所有 workspace 的依赖

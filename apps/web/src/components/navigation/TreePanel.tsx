@@ -72,6 +72,9 @@ type TreePanelProps = {
   onShowSyncConflicts?: () => void;
   onSync: () => void;
   onNavigateHome: () => void;
+  /** When set, the tree shows only this placement's subtree (hoisting). */
+  focusedPlacementId?: string;
+  onFocusPlacement: (placementId?: string) => void;
   /** Decrypted titles for protected notes (noteId -> title). Empty when locked. */
   decryptedTitles: Map<string, string>;
 };
@@ -86,6 +89,7 @@ export function TreePanel({
   onOpenAttachments, onCloseAttachments,
   protectedSession, onProtectedSessionToggle,
   onOpenTodayNote, syncing, syncState, lastSyncedAt, syncItemCount, lastSyncError, syncConflictCount, onShowSyncConflicts, onSync, onNavigateHome,
+  focusedPlacementId, onFocusPlacement,
   decryptedTitles,
 }: TreePanelProps) {
   const [search, setSearch] = useState("");
@@ -117,6 +121,54 @@ export function TreePanel({
     }
     return map;
   }, [tree]);
+
+  // ── Focused subtree (hoisting) ─────────────────────────────────────
+  // While focused, the tree shows only the focused placement's subtree; the
+  // focused placement itself is re-parented to `null` so NoteTree renders it
+  // as the tree root. Breadcrumbs above the tree navigate back out.
+  const focusedPlacement = focusedPlacementId ? byId.get(focusedPlacementId) : undefined;
+  useEffect(() => {
+    // Auto-exit when the focused placement disappears (deleted, trashed…).
+    if (focusedPlacementId && !focusedPlacement) onFocusPlacement(undefined);
+  }, [focusedPlacementId, focusedPlacement, onFocusPlacement]);
+
+  const visibleTree = useMemo(() => {
+    if (!focusedPlacementId) return tree;
+    const inside = new Set<string>([focusedPlacementId]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const placement of tree) {
+        if (!inside.has(placement.placementId) && placement.parentPlacementId && inside.has(placement.parentPlacementId)) {
+          inside.add(placement.placementId);
+          changed = true;
+        }
+      }
+    }
+    return tree
+      .filter((placement) => inside.has(placement.placementId))
+      .map((placement) =>
+        placement.placementId === focusedPlacementId ? { ...placement, parentPlacementId: null } : placement,
+      );
+  }, [focusedPlacementId, tree]);
+
+  const focusBreadcrumb = useMemo(
+    () => (focusedPlacementId ? ancestorChain(focusedPlacementId, byId) : []),
+    [focusedPlacementId, byId],
+  );
+
+  // Reveal the focused subtree root's children as soon as focus engages.
+  useEffect(() => {
+    if (!focusedPlacementId) return;
+    setExpanded((current) => new Set(current).add(focusedPlacementId));
+  }, [focusedPlacementId]);
+
+  const titleFor = (placement: TreePlacement) =>
+    placement.isSystem && placement.parentPlacementId === null
+      ? t(locale, "rootNode")
+      : placement.isProtected
+        ? (decryptedTitles.get(placement.noteId) ?? `[${t(locale, "protectedNote")}]`)
+        : placement.title;
 
   // The branch containing the currently selected note is "active" and must
   // never be auto-collapsed, even after the idle-operation threshold is met.
@@ -507,6 +559,36 @@ export function TreePanel({
             </button>
           ) : null}
         </div>
+        {focusedPlacement && (
+          <nav className="tree-focus-bar" aria-label={t(locale, "focusNote")}>
+            <button
+              type="button"
+              className="tree-focus-crumb"
+              onClick={() => onFocusPlacement(undefined)}
+            >
+              {t(locale, "allNotes")}
+            </button>
+            {focusBreadcrumb.map((placementId, index) => {
+              const placement = byId.get(placementId);
+              if (!placement) return null;
+              const isCurrent = index === focusBreadcrumb.length - 1;
+              return (
+                <span key={placementId} className="tree-focus-segment">
+                  <span className="tree-focus-sep" aria-hidden="true">/</span>
+                  <button
+                    type="button"
+                    className={`tree-focus-crumb ${isCurrent ? "current" : ""}`}
+                    title={titleFor(placement)}
+                    disabled={isCurrent}
+                    onClick={() => onFocusPlacement(placementId)}
+                  >
+                    {titleFor(placement)}
+                  </button>
+                </span>
+              );
+            })}
+          </nav>
+        )}
         <div className="tree-search">
           <Search size={18} />
           <input
@@ -519,7 +601,7 @@ export function TreePanel({
         </div>
         <nav className="note-tree" aria-label="Note tree">
           <NoteTree
-            placements={tree}
+            placements={visibleTree}
             expanded={effectiveExpanded}
             search={search}
             selectedNoteId={selected}

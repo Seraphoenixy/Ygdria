@@ -2,14 +2,14 @@
   "name": "ygdria",
   "private": true,
   "engines": {
-    "node": ">=24.0.0 <25.0.0"
+    "node": ">=24.22.1 <25.0.0"
   },
   "packageManager": "pnpm@10.16.1",
   "scripts": {
     "dev": "corepack pnpm --filter @ygdria/web dev",
     "dev:server": "corepack pnpm --filter @ygdria/server dev",
     "typecheck": "corepack pnpm -r typecheck",
-    "test": "corepack pnpm -r test",
+    "test": "node --test scripts/node-security.test.mjs && corepack pnpm -r test",
     "build": "corepack pnpm -r build",
     "lint": "node scripts/check-i18n.mjs",
     "check-i18n": "node scripts/check-i18n.mjs",

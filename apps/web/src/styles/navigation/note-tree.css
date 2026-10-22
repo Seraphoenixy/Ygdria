@@ -183,3 +183,41 @@
   color: #888a90;
   font-size: 0.9rem;
 }
+
+/* ── Focused subtree (hoisting) breadcrumb ─────────────────────────── */
+.tree-focus-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e7e7e9;
+  background: #f4f5f7;
+  font-size: 0.82rem;
+}
+.tree-focus-bar .tree-focus-segment {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.tree-focus-bar .tree-focus-sep {
+  margin: 0 3px;
+  color: #9a9aa1;
+}
+.tree-focus-crumb {
+  max-width: 140px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  overflow: hidden;
+  color: #50535a;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-focus-crumb:hover:not(:disabled) {
+  background: #e4e5e9;
+}
+.tree-focus-crumb.current {
+  color: #232529;
+  font-weight: 600;
+}

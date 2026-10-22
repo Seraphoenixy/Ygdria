@@ -128,7 +128,7 @@ Fastify 路由、Electron IPC 与 React 组件不承载核心业务规则，使�
 
 ## 快速开始
 
-运行环境统一使用 **Node.js 24 LTS**（24.x）；仓库根目录的 `.nvmrc` 已固定版本，建议用 `nvm` / `nvm-windows` 自动读取。包管理通过 **Corepack + pnpm 10**。
+运行环境统一使用 **Node.js 24 LTS，至少 24.22.1**；仓库根目录的 `.nvmrc` 已固定版本，建议用 `nvm` / `nvm-windows` 自动读取。包管理通过 **Corepack + pnpm 10**。
 
 ### 方式一：本地从源码运行（推荐体验）
 

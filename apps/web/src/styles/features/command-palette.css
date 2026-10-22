@@ -1,0 +1,87 @@
+/* ── Quick-jump command palette (Ctrl/Cmd+K) ───────────────────────── */
+.command-palette-backdrop {
+  position: fixed;
+  z-index: 110;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+  background: rgba(26, 29, 34, 0.34);
+}
+.command-palette {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 560px);
+  max-height: 60vh;
+  overflow: hidden;
+  border: 1px solid #dedee3;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 20px 56px rgba(20, 23, 28, 0.24);
+}
+.command-palette-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border-bottom: 1px solid #e7e7e9;
+  color: #686b73;
+}
+.command-palette-input input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  color: #232529;
+  font-size: 15px;
+  background: transparent;
+  outline: 0;
+}
+.command-palette-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+.command-palette-section {
+  margin: 8px 8px 4px;
+  color: #888a90;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.command-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: #33363c;
+  font: inherit;
+  text-align: left;
+}
+.command-palette-item svg {
+  flex: 0 0 16px;
+  color: #686b73;
+}
+.command-palette-item.active {
+  background: #eef1f6;
+}
+.command-palette-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.command-palette-label small {
+  overflow: hidden;
+  color: #888a90;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-palette-empty {
+  padding: 18px 12px;
+  color: #888a90;
+  font-size: 0.9rem;
+  text-align: center;
+}

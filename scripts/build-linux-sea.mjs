@@ -6,10 +6,15 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { assertSecureNode } from "./node-security.mjs";
+import { createHash } from "node:crypto";
+
+assertSecureNode();
 
 if (process.platform !== "linux" || process.arch !== "x64") {
   throw new Error("The Linux SEA release must be built on linux-x64");
@@ -28,9 +33,7 @@ const executable = resolve(releaseDirectory, "ygdria-server");
 const postject = resolve(repositoryRoot, "node_modules", ".bin", "postject");
 
 if (!process.argv[2]) {
-  throw new Error(
-    "Usage: node scripts/build-linux-sea.mjs <deployed-server-dir> [release-dir]",
-  );
+  throw new Error("Usage: node scripts/build-linux-sea.mjs <deployed-server-dir> [release-dir]");
 }
 
 rmSync(buildDirectory, { recursive: true, force: true });
@@ -48,13 +51,10 @@ const externalNativeModule = {
       path: "better-sqlite3",
       namespace: "ygdria-native",
     }));
-    esbuild.onLoad(
-      { filter: /.*/, namespace: "ygdria-native" },
-      ({ path }) => ({
-        contents: `module.exports = globalThis.__ygdriaExternalRequire(${JSON.stringify(path)});`,
-        loader: "js",
-      }),
-    );
+    esbuild.onLoad({ filter: /.*/, namespace: "ygdria-native" }, ({ path }) => ({
+      contents: `module.exports = globalThis.__ygdriaExternalRequire(${JSON.stringify(path)});`,
+      loader: "js",
+    }));
   },
 };
 
@@ -119,33 +119,15 @@ chmodSync(executable, 0o755);
 const nativeRoot = resolve(releaseDirectory, "native");
 const betterSqliteCandidates = [
   resolve(deployedServer, "node_modules", "better-sqlite3"),
-  resolve(
-    deployedServer,
-    "node_modules",
-    "@ygdria",
-    "database",
-    "node_modules",
-    "better-sqlite3",
-  ),
-  resolve(
-    repositoryRoot,
-    "packages",
-    "database",
-    "node_modules",
-    "better-sqlite3",
-  ),
+  resolve(deployedServer, "node_modules", "@ygdria", "database", "node_modules", "better-sqlite3"),
+  resolve(repositoryRoot, "packages", "database", "node_modules", "better-sqlite3"),
 ];
 const betterSqliteRuntime = betterSqliteCandidates
   .map((packageDirectory) => ({
     packageDirectory,
     nativeAddons: [
       resolve(packageDirectory, "prebuilds", "linux-x64.node"),
-      resolve(
-        packageDirectory,
-        "build",
-        "Release",
-        "better_sqlite3.node",
-      ),
+      resolve(packageDirectory, "build", "Release", "better_sqlite3.node"),
     ],
   }))
   .find(
@@ -158,9 +140,7 @@ if (!betterSqliteRuntime) {
     `Unable to locate a complete Linux x64 better-sqlite3 runtime. Checked: ${betterSqliteCandidates.join(", ")}`,
   );
 }
-console.log(
-  `Copying better-sqlite3 runtime from ${betterSqliteRuntime.packageDirectory}`,
-);
+console.log(`Copying better-sqlite3 runtime from ${betterSqliteRuntime.packageDirectory}`);
 mkdirSync(resolve(nativeRoot, "node_modules"), { recursive: true });
 writeFileSync(resolve(nativeRoot, "package.json"), "{}\n");
 cpSync(
@@ -168,15 +148,36 @@ cpSync(
   resolve(nativeRoot, "node_modules", "better-sqlite3"),
   { recursive: true, dereference: true },
 );
-cpSync(
-  resolve(repositoryRoot, "apps", "web", "dist"),
-  resolve(releaseDirectory, "web", "dist"),
-  { recursive: true },
-);
+cpSync(resolve(repositoryRoot, "apps", "web", "dist"), resolve(releaseDirectory, "web", "dist"), {
+  recursive: true,
+});
 copyFileSync(
   resolve(repositoryRoot, "scripts", "run-standalone-server.sh"),
   resolve(releaseDirectory, "start.sh"),
 );
 chmodSync(resolve(releaseDirectory, "start.sh"), 0o755);
+
+writeFileSync(
+  resolve(releaseDirectory, "build-info.json"),
+  JSON.stringify(
+    {
+      node: process.versions.node,
+      openssl: process.versions.openssl,
+      platform: process.platform,
+      arch: process.arch,
+      builtAt: new Date().toISOString(),
+      runtime: process.versions,
+      executableSha256: createHash("sha256").update(readFileSync(executable)).digest("hex"),
+      lockfileSha256: createHash("sha256")
+        .update(readFileSync(resolve(repositoryRoot, "pnpm-lock.yaml")))
+        .digest("hex"),
+      betterSqlite3: JSON.parse(
+        readFileSync(resolve(betterSqliteRuntime.packageDirectory, "package.json"), "utf8"),
+      ).version,
+    },
+    null,
+    2,
+  ) + "\n",
+);
 
 rmSync(buildDirectory, { recursive: true, force: true });

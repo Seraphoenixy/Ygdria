@@ -12,5 +12,6 @@
 @import "./styles/features/new-tab-search.css";
 @import "./styles/features/attachments-view.css";
 @import "./styles/features/graph-view.css";
+@import "./styles/features/command-palette.css";
 @import "./styles/responsive/breakpoints.css";
 @import "./styles/responsive/capacitor.css";
