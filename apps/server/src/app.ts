@@ -27,13 +27,13 @@ import {
   Devices,
 } from "@ygdria/domain";
 import { MaintenanceRunner } from "./maintenance.js";
-import { EtapiSessions } from "./security/etapi-sessions.js";
+import { EtapiAccess } from "./security/etapi-access.js";
 import { isPulledRemoteWrite } from "./http/errors.js";
 import { registerDeviceAuthHook } from "./http/auth-hook.js";
 import { registerErrorHandler } from "./http/error-handler.js";
 import { createAttachmentStorage } from "./http/attachment-storage.js";
 import { registerSyncCodec } from "./http/sync-middleware.js";
-import { registerSecurityHeaders, registerLocalTokenHook } from "./http/security-middleware.js";
+import { registerSecurityHeaders, registerLocalTokenHook, registerEtapiAccessHook } from "./http/security-middleware.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerProtectedSessionRoutes } from "./routes/protected-session.js";
@@ -42,22 +42,22 @@ import { registerNoteRoutes } from "./routes/notes.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerRelationRoutes } from "./routes/relations.js";
 import { registerMaintenanceRoutes } from "./routes/maintenance.js";
-import { registerEtapiSessionRoutes } from "./routes/etapi-sessions.js";
+import { registerEtapiAccessRoutes } from "./routes/etapi-access.js";
 import { registerEtapiRoutes } from "./routes/etapi.js";
 import { registerStaticRoutes } from "./routes/static.js";
 
 export function buildApp(
   options: {
     databaseUrl?: string;
-    /** Desktop-private ETAPI session-hash file; never part of the note database. */
-    etapiSessionStorePath?: string;
+    /** Desktop-local external access preference; never synced. */
+    etapiAccessStorePath?: string;
     origin?: string;
     localToken?: string;
     webDist?: string;
     trustedProxy?: string | string[];
     /** Enable device-credential authentication for standalone server deployments. */
     enableDeviceAuth?: boolean;
-    /** Expose short-lived ETAPI tokens. Intended for the desktop loopback server only. */
+    /** Register the optional ETAPI surface; user access remains off until enabled in settings. */
     enableEtapi?: boolean;
   } = {},
 ) {
@@ -79,7 +79,7 @@ export function buildApp(
   const loginRequestCounts = new Map<string, { count: number; resetAt: number }>();
   const notes = new NoteService(store);
   const devices = new Devices();
-  const etapiSessions = new EtapiSessions(options.etapiSessionStorePath);
+  const etapiAccess = new EtapiAccess(options.etapiAccessStorePath);
   const srpLoginSessions = new Map<string, { serverSecretEphemeral: string; expiresAt: number }>();
   const protectedSessionReauth = new Map<string, number>();
   const accessLoginFailures = new Map<
@@ -109,7 +109,8 @@ export function buildApp(
   // --- Middleware ---
   registerSyncCodec(app);
   registerSecurityHeaders(app, loginRequestCounts);
-  registerLocalTokenHook(app, options.localToken, enableEtapi ? etapiSessions : undefined);
+  if (enableEtapi) registerEtapiAccessHook(app, etapiAccess);
+  registerLocalTokenHook(app, options.localToken);
 
   // --- Content type parsers ---
   app.addContentTypeParser(
@@ -141,7 +142,7 @@ export function buildApp(
 
   // --- Device auth ---
   if (options.enableDeviceAuth) {
-    registerDeviceAuthHook(app, devices, enableEtapi ? etapiSessions : undefined);
+    registerDeviceAuthHook(app, devices);
   }
 
   const pulledRemoteWrite = (req: { headers: Record<string, string | string[] | undefined> }) =>
@@ -161,7 +162,7 @@ export function buildApp(
     devices,
     enableDeviceAuth: Boolean(options.enableDeviceAuth),
   });
-  if (enableEtapi) registerEtapiSessionRoutes(app, { sessions: etapiSessions });
+  if (enableEtapi) registerEtapiAccessRoutes(app, etapiAccess);
   registerNoteRoutes(app, { notes, sqlite: store.sqlite });
   registerProtectedSessionRoutes(app, {
     store,

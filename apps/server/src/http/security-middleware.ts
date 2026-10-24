@@ -1,9 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import type { EtapiSessions } from "../security/etapi-sessions.js";
+import type { EtapiAccess } from "../security/etapi-access.js";
 import { consumeRateLimit } from "../security/rate-limit.js";
 import { httpError, LOGIN_RATE_LIMIT_WINDOW_MS } from "./errors.js";
 
-export function registerSecurityHeaders(app: FastifyInstance, loginRequestCounts: Map<string, { count: number; resetAt: number }>) {
+export function registerSecurityHeaders(
+  app: FastifyInstance,
+  loginRequestCounts: Map<string, { count: number; resetAt: number }>,
+) {
   app.addHook("onRequest", async (req, reply) => {
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("X-Frame-Options", "DENY");
@@ -27,35 +30,41 @@ export function registerSecurityHeaders(app: FastifyInstance, loginRequestCounts
   });
 }
 
-export function registerLocalTokenHook(
-  app: FastifyInstance,
-  localToken?: string,
-  etapiSessions?: EtapiSessions,
-) {
+/** The optional ETAPI surface is local native-client access, never a public bearer API. */
+export function registerEtapiAccessHook(app: FastifyInstance, access: EtapiAccess) {
+  app.addHook("onRequest", async (req) => {
+    if (!req.url.split("?")[0].startsWith("/etapi/")) return;
+    if (!access.getState().enabled)
+      throw httpError(403, "AI and external access is disabled in Ygdria settings");
+    // Check the socket rather than proxy-derived IPs. Host validation prevents DNS rebinding.
+    const address = req.raw.socket.remoteAddress;
+    if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address ?? ""))
+      throw httpError(403, "ETAPI accepts loopback connections only");
+    let hostname: string;
+    try {
+      hostname = new URL(`http://${req.headers.host}`).hostname;
+    } catch {
+      throw httpError(403, "Invalid ETAPI host");
+    }
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(hostname))
+      throw httpError(403, "ETAPI requires a loopback host");
+    // A non-safelisted header plus rejecting browser origins prevents website-triggered requests.
+    if (
+      req.headers.origin ||
+      req.headers["sec-fetch-site"] ||
+      req.headers["x-ygdria-external-access"] !== "1"
+    )
+      throw httpError(403, "ETAPI requires a local native client with X-Ygdria-External-Access: 1");
+  });
+}
+
+export function registerLocalTokenHook(app: FastifyInstance, localToken?: string) {
   app.addHook("onRequest", async (req) => {
     if (req.method === "OPTIONS") return;
-    // The embedded desktop window navigates to the local server's static
-    // shell. Electron navigations cannot attach an application-specific
-    // request header, so protecting `/` (and its JS/CSS assets) makes a
-    // packaged desktop app render the JSON 401 response instead of the UI.
-    // Only application API routes expose user data or mutations; keep the
-    // per-launch local-token boundary on those routes.
     const pathname = req.url.split("?")[0];
-    if (!pathname.startsWith("/api/") && !pathname.startsWith("/etapi/")) return;
+    // ETAPI is handled separately by its local access switch. The desktop API still requires its secret.
+    if (!pathname.startsWith("/api/")) return;
     if (!localToken || req.headers["x-ygdria-local-token"] === localToken) return;
-
-    // The desktop app's own requests retain the per-launch loopback secret.
-    // External local AI tools instead present a scoped ETAPI token, which is
-    // deliberately the only credential accepted without that secret.
-    if (pathname.startsWith("/etapi/")) {
-      const authorization = req.headers.authorization;
-      const token = authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined;
-      const session = token ? etapiSessions?.verify(token) : undefined;
-      if (session) {
-        req.etapiSession = session;
-        return;
-      }
-    }
     throw httpError(401, "Missing local token");
   });
 }

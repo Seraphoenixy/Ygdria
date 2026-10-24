@@ -1,90 +1,222 @@
 import type { NoteContent } from "@ygdria/shared";
-import { marked } from "marked";
+import { Marked, type Token } from "marked";
+import {
+  blockNodes,
+  escapeHtml,
+  htmlToRichNodes,
+  richNodeToHtml,
+  type RichNode,
+} from "./markdown-html.js";
+
 export type ConversionResult = {
   document: NoteContent;
   warnings: string[];
   frontMatter: Record<string, unknown>;
 };
-const ref = /(!?)\[\[note:([^|\]]+)(?:\|([^\]]+))?\]\]/g;
 
-/**
- * Adds imported Markdown nodes after an existing document without changing the
- * existing nodes or document-level attributes.
- */
+// Lex extensions respect code boundaries. Whole-source replacements would
+// accidentally interpret formulas/references inside fenced or inline code.
+const parser = new Marked({
+  extensions: [
+    {
+      name: "ygdriaMathBlock",
+      level: "block",
+      start: (src) =>
+        src.search(
+          /^(?: {0,3}\$\$[\s\S]*?\$\$[ \t]*(?:\n|$)| {0,3}\\\[[\s\S]*?\\\][ \t]*(?:\n|$))/m,
+        ),
+      tokenizer(src) {
+        const match =
+          /^(?: {0,3}\$\$[ \t]*\n([\s\S]*?)\n {0,3}\$\$[ \t]*(?:\n|$)| {0,3}\$\$([^\n]+?)\$\$[ \t]*(?:\n|$)| {0,3}\\\[[ \t]*\n([\s\S]*?)\n {0,3}\\\][ \t]*(?:\n|$)| {0,3}\\\[[ \t]*(.+?)[ \t]*\\\][ \t]*(?:\n|$))/.exec(
+            src,
+          );
+        if (match)
+          return {
+            type: "ygdriaMathBlock",
+            raw: match[0],
+            formula: (match[1] ?? match[2] ?? match[3] ?? match[4]).trim(),
+          };
+      },
+      renderer: (token) =>
+        `<div data-ygdria-math-block data-formula="${escapeHtml(encodeURIComponent(token.formula))}"></div>`,
+    },
+    {
+      name: "ygdriaMathInline",
+      level: "inline",
+      start: (src) => src.indexOf("$"),
+      tokenizer(src) {
+        const match = /^\$([^$\n]+?)\$(?!\$)/.exec(src);
+        if (match) return { type: "ygdriaMathInline", raw: match[0], formula: match[1].trim() };
+      },
+      renderer: (token) =>
+        `<span data-ygdria-math-inline data-formula="${escapeHtml(encodeURIComponent(token.formula))}"></span>`,
+    },
+    {
+      name: "ygdriaReference",
+      level: "inline",
+      start: (src) => src.indexOf("[[note:"),
+      tokenizer(src) {
+        const match = /^(!?)\[\[note:([^|\]]+)(?:\|([^\]]+))?\]\]/.exec(src);
+        if (match)
+          return {
+            type: "ygdriaReference",
+            raw: match[0],
+            embedded: Boolean(match[1]),
+            noteId: match[2],
+            title: match[3] ?? match[2],
+          };
+      },
+      renderer: (token) =>
+        token.embedded
+          ? escapeHtml(token.raw)
+          : `<span data-note-id="${escapeHtml(token.noteId)}" data-note-title="${escapeHtml(token.title)}"></span>`,
+    },
+  ],
+});
+
+/** Append imported nodes without changing the existing document or attributes. */
 export function appendTiptapDocument(existing: NoteContent, imported: NoteContent): NoteContent {
-  return {
-    ...existing,
-    content: [...(existing.content ?? []), ...(imported.content ?? [])],
-  };
+  return { ...existing, content: [...(existing.content ?? []), ...(imported.content ?? [])] };
 }
 
 export function markdownToTiptap(markdown: string): ConversionResult {
   const warnings: string[] = [];
-  let source = markdown.trim();
+  let source = markdown.replace(/\r\n?/g, "\n").trim();
   const frontMatter: Record<string, unknown> = {};
   const fm = source.match(/^---\n([\s\S]*?)\n---\n?/);
   if (fm) {
-    fm[1].split("\n").forEach((line) => {
+    for (const line of fm[1].split("\n")) {
       const [key, ...value] = line.split(":");
       if (key && value.length) frontMatter[key.trim()] = value.join(":").trim();
-    });
+    }
     source = source.slice(fm[0].length);
   }
-  source = source
-    // Keep Ygdria's spoiler mark through Markdown source editing. Markdown
-    // itself has no standard spoiler syntax, so use a private token while
-    // parsing, then restore it as an inline mark below.
-    .replace(/<span\b[^>]*\bdata-ygdria-redacted\b[^>]*>([\s\S]*?)<\/span>/gi, (_match, text) => `[[ygdria:redacted:${encodeURIComponent(text)}]]`)
-    .replace(/^\$\$\s*\n([\s\S]*?)\n\$\$\s*$/gm, (_match, formula) => `<div data-ygdria-math-block data-formula="${encodeURIComponent(formula.trim())}"></div>`)
-    .replace(/^\$\$([^\n]+?)\$\$\s*$/gm, (_match, formula) => `<div data-ygdria-math-block data-formula="${encodeURIComponent(formula.trim())}"></div>`)
-    // MathJax/Typora/Obsidian also use \[ ... \] for display math.
-    .replace(/^\s*\\\[\s*\n([\s\S]*?)\n\\\]\s*$/gm, (_match, formula) => `<div data-ygdria-math-block data-formula="${encodeURIComponent(formula.trim())}"></div>`)
-    .replace(/^\s*\\\[\s*(.+?)\s*\\\]\s*$/gm, (_match, formula) => `<div data-ygdria-math-block data-formula="${encodeURIComponent(formula.trim())}"></div>`)
-    // Protect formulas before marked splits LaTeX commands such as \pm and
-    // \times into separate escape tokens.
-    .replace(/(?<!\\)\$([^$\n]+?)\$/g, (_match, formula) => `<span data-ygdria-math-inline data-formula="${encodeURIComponent(formula.trim())}"></span>`);
-  const parsed = marked.lexer(source);
-  const parsedContent = parsed.flatMap((token: any) => markdownTokenToNodes(token, warnings));
+  const content = parser.lexer(source).flatMap((token) => markdownTokenToNodes(token, warnings));
   return {
-    // Never turn non-empty source into an empty document. Unsupported syntax
-    // must remain visible/editable as text instead of being silently erased
-    // when Markdown view commits back to rich text.
     document: {
       type: "doc",
-      content: parsedContent.length
-        ? parsedContent
-        : source.trim()
-          ? [{ type: "paragraph", content: [{ type: "text", text: source }] }]
-          : [{ type: "paragraph" }],
+      content: content.length
+        ? content
+        : [
+            {
+              type: "paragraph",
+              ...(source.trim() ? { content: [{ type: "text", text: source }] } : {}),
+            },
+          ],
     },
-    warnings,
+    warnings: [...new Set(warnings)],
     frontMatter,
   };
 }
 
-function markdownTokenToNodes(token: any, warnings: string[]): any[] {
+function inlineNodes(tokens: Token[] = [], warnings: string[]): RichNode[] {
+  return htmlToRichNodes(
+    parser.Parser.parseInline(
+      tokens.filter((token) => token.type !== "checkbox"),
+      parser.defaults,
+    ),
+    warnings,
+  );
+}
+
+function markdownTokenToNodes(token: any, warnings: string[]): RichNode[] {
   switch (token.type) {
-    case "space": return [];
-    case "heading": return [{ type: "heading", attrs: { level: token.depth }, content: inlineNodes(token.tokens) }];
-    case "paragraph": {
-      if (token.tokens?.length === 1 && token.tokens[0].type === "image") return [imageNode(token.tokens[0])];
-      return [{ type: "paragraph", content: inlineNodes(token.tokens) }];
-    }
-    case "text": return [{ type: "paragraph", content: inlineNodes(token.tokens ?? [{ type: "text", text: token.text }]) }];
+    case "space":
+      return [];
+    case "heading":
+      return [
+        {
+          type: "heading",
+          attrs: { level: token.depth },
+          content: inlineNodes(token.tokens, warnings),
+        },
+      ];
+    case "paragraph":
+    case "text":
+      return blockNodes(
+        inlineNodes(
+          token.tokens ?? [{ type: "text", raw: token.text, text: token.text }],
+          warnings,
+        ),
+      );
     case "code": {
-      // Markdown exporters commonly leave a blank line immediately before a
-      // closing fence. `marked` correctly includes it in `token.text`, but a
-      // trailing line break becomes a visually empty final line in Tiptap's
-      // code-block editor. Normalize only the final line breaks; whitespace
-      // and blank lines within the source remain untouched.
-      const code = String(token.text ?? "").replace(/(?:\r\n|\r|\n)+$/, "");
-      return [{ type: "codeBlock", attrs: { language: token.lang || null }, content: code ? [{ type: "text", text: code }] : [] }];
+      // Keep the established clipboard normalization for fenced imports.
+      // Native code with significant trailing newlines exports as <pre>.
+      const code = String(token.text ?? "").replace(/\n+$/, "");
+      return [
+        {
+          type: "codeBlock",
+          attrs: { language: token.lang || null },
+          content: code ? [{ type: "text", text: code }] : [],
+        },
+      ];
     }
-    case "blockquote": return [{ type: "blockquote", content: (token.tokens ?? []).flatMap((item: any) => markdownTokenToNodes(item, warnings)) }];
-    case "hr": return [{ type: "horizontalRule" }];
-    case "list": return [{ type: token.ordered ? "orderedList" : "bulletList", content: (token.items ?? []).map((item: any) => ({ type: "listItem", content: (item.tokens ?? []).flatMap((child: any) => markdownTokenToNodes(child, warnings)) })) }];
-    case "table": return [{ type: "table", content: [{ type: "tableRow", content: token.header.map((cell: any) => tableCell("tableHeader", cell)) }, ...token.rows.map((row: any[]) => ({ type: "tableRow", content: row.map((cell) => tableCell("tableCell", cell)) }))] }];
-    case "html": return htmlToNodes(String(token.text), warnings);
+    case "blockquote":
+      return [
+        {
+          type: "blockquote",
+          content: (token.tokens ?? []).flatMap((child: any) =>
+            markdownTokenToNodes(child, warnings),
+          ),
+        },
+      ];
+    case "hr":
+      return [{ type: "horizontalRule" }];
+    case "list": {
+      const lists: RichNode[] = [];
+      for (const [index, item] of token.items.entries()) {
+        const type = item.task ? "taskList" : token.ordered ? "orderedList" : "bulletList";
+        let list = lists.at(-1);
+        if (list?.type !== type) {
+          list = {
+            type,
+            ...(type === "orderedList" ? { attrs: { start: (token.start || 1) + index } } : {}),
+            content: [],
+          };
+          lists.push(list);
+        }
+        const content = (item.tokens ?? [])
+          .filter((child: any) => child.type !== "checkbox")
+          .flatMap((child: any) => markdownTokenToNodes(child, warnings));
+        list!.content!.push({
+          type: item.task ? "taskItem" : "listItem",
+          ...(item.task ? { attrs: { checked: Boolean(item.checked) } } : {}),
+          content: content.length ? content : [{ type: "paragraph" }],
+        });
+      }
+      return lists;
+    }
+    case "table": {
+      const cell = (type: string, value: any, index: number): RichNode => ({
+        type,
+        content: [
+          {
+            type: "paragraph",
+            ...(token.align[index] ? { attrs: { textAlign: token.align[index] } } : {}),
+            content: inlineNodes(value.tokens, warnings),
+          },
+        ],
+      });
+      return [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: token.header.map((value: any, i: number) => cell("tableHeader", value, i)),
+            },
+            ...token.rows.map((row: any[]) => ({
+              type: "tableRow",
+              content: row.map((value, i) => cell("tableCell", value, i)),
+            })),
+          ],
+        },
+      ];
+    }
+    case "html":
+      return blockNodes(htmlToRichNodes(String(token.text), warnings));
+    case "ygdriaMathBlock":
+      return [{ type: "mathBlock", attrs: { formula: token.formula } }];
     default: {
       const raw = String(token.raw ?? token.text ?? "");
       if (!raw.trim()) return [];
@@ -94,195 +226,218 @@ function markdownTokenToNodes(token: any, warnings: string[]): any[] {
   }
 }
 
-function htmlToNodes(html: string, warnings: string[]): any[] {
-  const mathInline = html.match(/<span\b[^>]*\bdata-ygdria-math-inline\b[^>]*\bdata-formula="([^"]*)"[^>]*>/i);
-  if (mathInline) {
-    let formula = mathInline[1];
-    try { formula = decodeURIComponent(formula); } catch { /* retain malformed escape sequences */ }
-    return [{ type: "mathInline", attrs: { formula } }];
-  }
-  const mathBlock = html.match(/<div\b[^>]*\bdata-ygdria-math-block\b[^>]*\bdata-formula="([^"]*)"[^>]*>/i);
-  if (mathBlock) {
-    let formula = mathBlock[1];
-    try { formula = decodeURIComponent(formula); } catch { /* retain malformed escape sequences */ }
-    return [{ type: "mathBlock", attrs: { formula } }];
-  }
-  const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)];
-  if (tables.length) {
-    return tables.map((table) => {
-      const rows = [...table[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map((row) => {
-        const cells = [...row[1].matchAll(/<(th|td)\b[^>]*>([\s\S]*?)<\/\1>/gi)];
-        return {
-          type: "tableRow",
-          content: cells.map((cell) => ({
-            type: cell[1].toLowerCase() === "th" ? "tableHeader" : "tableCell",
-            content: [{ type: "paragraph", content: textNodes(stripHtml(cell[2])) }],
-          })),
-        };
-      });
-      return { type: "table", content: rows };
-    });
-  }
-  const images = [...html.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)];
-  if (images.length) {
-    return images.map((image) => {
-      const tag = image[0];
-      return {
-        type: "image",
-        attrs: {
-          src: image[1],
-          alt: tag.match(/\balt=["']([^"']*)["']/i)?.[1] ?? "",
-          title: tag.match(/\btitle=["']([^"']*)["']/i)?.[1] ?? null,
-        },
-      };
-    });
-  }
-  const text = stripHtml(html);
-  if (!text) return [];
-  warnings.push("Unsupported HTML formatting imported as plain text.");
-  return [{ type: "paragraph", content: textNodes(text) }];
+function escapeMarkdown(value: string): string {
+  return value.replace(/[\\`*_{}\[\]()#+.!|>~$<>&:-]/g, (char) =>
+    char === "[" ? "&#91;" : "\\" + char,
+  );
 }
 
-function stripHtml(value: string) {
-  return value
-    .replace(/<br\s*\/?\s*>/gi, "\n")
-    .replace(/<[^>]*>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .trim();
+function codeSpan(value: string): string {
+  const fence = "`".repeat(
+    Math.max(0, ...Array.from(value.matchAll(/`+/g), (m) => m[0].length)) + 1,
+  );
+  const pad =
+    value.startsWith("`") || value.endsWith("`") || (/^ .* $/.test(value) && value.trim())
+      ? " "
+      : "";
+  return fence + pad + value + pad + fence;
 }
 
-function tableCell(type: "tableCell" | "tableHeader", cell: any) {
-  return { type, content: [{ type: "paragraph", content: inlineNodes(cell.tokens) }] };
-}
-function imageNode(token: any) { return { type: "image", attrs: { src: token.href, alt: token.text || "", title: token.title || null } }; }
-function inlineNodes(tokens: any[] = [], marks: any[] = [], warnings: string[] = []): any[] {
-  const output: any[] = [];
-  for (const token of tokens) {
-    if (token.type === "strong" || token.type === "em" || token.type === "del") {
-      output.push(...inlineNodes(token.tokens, [...marks, { type: token.type === "strong" ? "bold" : token.type === "em" ? "italic" : "strike" }]));
-    } else if (token.type === "link") {
-      output.push(...inlineNodes(token.tokens, [...marks, { type: "link", attrs: { href: token.href, title: token.title || null } }], warnings));
-    } else if (token.type === "codespan") output.push({ type: "text", text: token.text, marks: [...marks, { type: "code" }] });
-    else if (token.type === "br") output.push({ type: "hardBreak" });
-    else if (token.type === "image") output.push({ type: "text", text: token.text || token.href, marks });
-    else if (token.type === "html") output.push(...htmlToNodes(token.raw ?? token.text ?? "", warnings));
-    else if (token.type === "text" || token.type === "escape") output.push(...referenceTextNodes(token.text ?? token.raw ?? "", marks));
-    else {
-      const raw = String(token.raw ?? token.text ?? "");
-      if (raw) output.push({ type: "text", text: raw, ...(marks.length ? { marks } : {}) });
-    }
-  }
-  return output;
-}
-function referenceTextNodes(value: string, marks: any[]) {
-  const output: any[] = [];
-  const referencesAndMath = /(!?)\[\[note:([^|\]]+)(?:\|([^\]]+))?\]\]|(?<!\\)\$([^$\n]+?)\$|\[\[ygdria:redacted:([^\]]*)\]\]/g;
-  let p = 0; let match: RegExpExecArray | null;
-  while ((match = referencesAndMath.exec(value))) {
-    if (match.index > p) output.push({ type: "text", text: value.slice(p, match.index), ...(marks.length ? { marks } : {}) });
-    if (match[4]) output.push({ type: "mathInline", attrs: { formula: match[4].trim() } });
-    else if (match[5] !== undefined) {
-      let text = match[5];
-      try { text = decodeURIComponent(text); } catch { /* retain malformed encoded text */ }
-      output.push({ type: "text", text, marks: [...marks, { type: "redacted" }] });
-    }
-    else output.push(match[1] ? { type: "text", text: match[0], ...(marks.length ? { marks } : {}) } : { type: "noteReference", attrs: { noteId: match[2], title: match[3] || match[2] } });
-    p = match.index + match[0].length;
-  }
-  if (p < value.length) output.push({ type: "text", text: value.slice(p), ...(marks.length ? { marks } : {}) });
-  return output;
-}
-function textNodes(value: string): any[] {
-  const output: any[] = [];
-  let p = 0;
-  ref.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = ref.exec(value))) {
-    if (m.index > p) output.push({ type: "text", text: value.slice(p, m.index) });
-    output.push(
-      m[1]
-        ? { type: "text", text: value.slice(m.index, m.index + m[0].length) }
-        : { type: "noteReference", attrs: { noteId: m[2], title: m[3] || m[2] } },
-    );
-    p = m.index + m[0].length;
-  }
-  if (p < value.length) output.push({ type: "text", text: value.slice(p) });
-  return output;
-}
 export function tiptapToMarkdown(document: NoteContent): { markdown: string; warnings: string[] } {
   const warnings: string[] = [];
-  const render = (node: any): string => {
-    const kids = (node.content || []).map(render).join("");
+  const html = (node: RichNode) => richNodeToHtml(node, warnings);
+  const needsHtml = (node: RichNode): boolean => {
+    if (node.attrs?.textAlign && node.attrs.textAlign !== "left") return true;
+    if (
+      ["paragraph", "heading"].includes(node.type) &&
+      (!node.content?.length ||
+        /^\s/.test(node.content[0]?.text ?? "") ||
+        /\s$/.test(node.content.at(-1)?.text ?? ""))
+    )
+      return true;
+    if (node.type === "text") {
+      const marks = node.marks ?? [];
+      return (
+        marks.length > 1 ||
+        marks.some((m) => !["bold", "italic", "strike", "code", "link"].includes(m.type)) ||
+        marks.some(
+          (m) =>
+            (m.type === "link" &&
+              (/[\s<>]/.test(m.attrs?.href ?? "") ||
+                Boolean(m.attrs?.target) ||
+                Boolean(m.attrs?.rel))) ||
+            (m.type === "code" && /\n/.test(node.text ?? "")),
+        ) ||
+        (marks.length > 0 && /^\s|\s$/.test(node.text ?? "")) ||
+        /[\r\n]/.test(node.text ?? "")
+      );
+    }
+    const children = node.content ?? [];
+    return children.some(
+      (child, i) =>
+        needsHtml(child) ||
+        (i > 0 && Boolean(child.marks?.length) && Boolean(children[i - 1].marks?.length)),
+    );
+  };
+  const quoteTitle = (title: unknown) =>
+    title == null ? "" : ` "${String(title).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+  const destination = (src: string) => (src.includes("(") || src.includes(")") ? `<${src}>` : src);
+  const render = (node: RichNode): string => {
+    const children = node.content ?? [];
+    const kids = () => children.map(render).join("");
     switch (node.type) {
       case "doc":
-        return kids;
+        return kids();
       case "paragraph":
-        return kids + "\n\n";
-      case "text": {
-        let text = node.text || "";
-        // Markdown has no standard spoiler mark, so keep Ygdria's private
-        // representation as the innermost wrapper. Applying bold outside it
-        // lets the Markdown parser restore both marks on re-import.
-        if (node.marks?.some((mark: any) => mark.type === "redacted"))
-          text = `<span data-ygdria-redacted>${text}</span>`;
-        if (node.marks?.some((mark: any) => mark.type === "bold"))
-          text = `**${text}**`;
-        return text;
-      }
-      case "heading":
-        return "#".repeat(node.attrs?.level || 1) + " " + kids + "\n\n";
-      case "codeBlock":
-        return "```" + (node.attrs?.language || "") + "\n" + kids + "\n```\n\n";
-      case "bulletList":
-        return (node.content || []).map((x: any) => "- " + render(x).trim()).join("\n") + "\n\n";
-      case "orderedList":
+      case "heading": {
+        if (needsHtml(node)) return html(node) + "\n\n";
         return (
-          (node.content || [])
-            .map((x: any, i: number) => `${i + 1}. ${render(x).trim()}`)
+          (node.type === "heading" ? "#".repeat(node.attrs?.level || 1) + " " : "") +
+          kids() +
+          "\n\n"
+        );
+      }
+      case "text": {
+        const mark = node.marks?.[0];
+        if (needsHtml(node)) return html(node);
+        if (mark?.type === "code") return codeSpan(node.text ?? "");
+        const value = escapeMarkdown(node.text ?? "");
+        if (!mark) return value;
+        if (mark.type === "bold") return `**${value}**`;
+        if (mark.type === "italic") return `*${value}*`;
+        if (mark.type === "strike") return `~~${value}~~`;
+        if (mark.type === "link") {
+          const href = String(mark.attrs?.href ?? "");
+          // Encoding a URL here would change it on reimport; HTML is lossless.
+          if (/[\s<>]/.test(href)) return html(node);
+          return `[${value}](${destination(href)}${quoteTitle(mark.attrs?.title)})`;
+        }
+        return html(node);
+      }
+      case "hardBreak":
+        return "  \n";
+      case "horizontalRule":
+        return "***\n\n";
+      case "blockquote":
+        return (
+          kids()
+            .trimEnd()
+            .split("\n")
+            .map((line) => `> ${line}`)
             .join("\n") + "\n\n"
         );
-      case "listItem":
-        return kids;
-      case "noteReference":
-        return `[[note:${node.attrs.noteId}|${node.attrs.title}]]`;
-      case "image":
-        return `![${node.attrs.alt || ""}](${node.attrs.src || ""})`;
+      case "codeBlock": {
+        const code = children.map((child) => child.text ?? "").join("");
+        if (/\n$|\r/.test(code) || /[\s`]/.test(node.attrs?.language ?? ""))
+          return html(node) + "\n\n";
+        const fence = "`".repeat(
+          Math.max(2, ...Array.from(code.matchAll(/`+/g), (m) => m[0].length)) + 1,
+        );
+        return `${fence}${node.attrs?.language || ""}\n${code}\n${fence}\n\n`;
+      }
+      case "bulletList":
+      case "orderedList":
+      case "taskList":
+        return (
+          children
+            .map((item, i) => {
+              const marker =
+                node.type === "orderedList"
+                  ? `${(node.attrs?.start ?? 1) + i}. `
+                  : node.type === "taskList"
+                    ? `- [${item.attrs?.checked ? "x" : " "}] `
+                    : "- ";
+              const content = (item.content ?? []).map(render).join("").trimEnd();
+              const lines = content.split("\n");
+              const indent = node.type === "orderedList" ? marker.length : 2;
+              return (
+                marker +
+                lines[0] +
+                lines
+                  .slice(1)
+                  .map((line) => "\n" + " ".repeat(indent) + line)
+                  .join("")
+              );
+            })
+            .join("\n\n") + "\n\n"
+        );
+      case "noteReference": {
+        const { noteId = "", title = "" } = node.attrs ?? {};
+        return /[\]|\n]/.test(noteId) || /[\]\n]/.test(title)
+          ? html(node)
+          : `[[note:${noteId}|${title}]]`;
+      }
+      case "image": {
+        const { src = "", alt = "", title, width, height } = node.attrs ?? {};
+        if (width || height || /[\s<>]/.test(src)) return html(node) + "\n\n";
+        return `![${escapeMarkdown(alt)}](${destination(src)}${quoteTitle(title)})\n\n`;
+      }
       case "mathInline":
         return `$${node.attrs?.formula ?? ""}$`;
       case "mathBlock":
         return `$$\n${node.attrs?.formula ?? ""}\n$$\n\n`;
       case "table": {
-        if (
-          node.attrs?.colwidth?.some((x: any) => x) ||
-          node.content?.some((r: any) =>
-            r.content?.some((c: any) => c.attrs?.colspan > 1 || c.attrs?.rowspan > 1),
-          )
-        ) {
-          warnings.push("Complex table serialized as HTML to preserve merged cells or widths.");
-          return "<table>" + kids + "</table>\n\n";
+        const rows = children;
+        const complex =
+          node.attrs?.colwidth?.some((w: unknown) => w) ||
+          !rows.length ||
+          rows.some((row, i) =>
+            row.content?.some(
+              (cell) =>
+                (i === 0 && cell.type !== "tableHeader") ||
+                (i > 0 && cell.type !== "tableCell") ||
+                cell.attrs?.colspan > 1 ||
+                cell.attrs?.rowspan > 1 ||
+                cell.attrs?.colwidth?.some((w: unknown) => w) ||
+                cell.content?.length !== 1 ||
+                cell.content?.[0]?.type !== "paragraph" ||
+                needsHtml(cell) ||
+                cell.content?.[0]?.content?.some(
+                  (n) =>
+                    n.type === "hardBreak" ||
+                    (n.marks?.some((m) => m.type === "code") && n.text?.includes("|")),
+                ),
+            ),
+          ) ||
+          rows.some((row) => row.content?.length !== rows[0].content?.length);
+        if (complex) {
+          warnings.push(
+            "Complex table serialized as HTML to preserve merged cells, widths or rich content.",
+          );
+          return html(node) + "\n\n";
         }
-        const rows = node.content || [];
-        if (!rows.length) return "";
-        const renderRow = (row: any) => "| " + (row.content || []).map((cell: any) => render(cell).trim()).join(" | ") + " |";
-        // GFM requires a delimiter row after the header. Without it, a table
-        // exported from rich text is parsed as ordinary paragraphs on reimport.
-        const delimiter = "| " + (rows[0].content || []).map(() => "---").join(" | ") + " |";
-        return [renderRow(rows[0]), delimiter, ...rows.slice(1).map(renderRow)].join("\n") + "\n\n";
+        const row = (value: RichNode) =>
+          "| " +
+          (value.content ?? [])
+            .map((cell) => render(cell.content![0]).trim().replaceAll("\n", "<br>"))
+            .join(" | ") +
+          " |";
+        const alignments: Record<string, string> = { left: ":---", right: "---:", center: ":---:" };
+        const delimiter =
+          "| " +
+          (rows[0].content ?? [])
+            .map((cell) => alignments[cell.content?.[0]?.attrs?.textAlign] ?? "---")
+            .join(" | ") +
+          " |";
+        return [row(rows[0]), delimiter, ...rows.slice(1).map(row)].join("\n") + "\n\n";
       }
+      case "listItem":
+      case "taskItem":
       case "tableRow":
       case "tableCell":
       case "tableHeader":
-        return kids;
+        return kids();
       default:
-        return kids;
+        warnings.push(`Unsupported node '${node.type}' formatting was omitted.`);
+        return kids();
     }
   };
-  return { markdown: render(document).trim() + "\n", warnings };
+  return {
+    markdown: render(document as RichNode).trimEnd() + "\n",
+    warnings: [...new Set(warnings)],
+  };
 }
+
 export function plainText(document: NoteContent) {
   const out: string[] = [];
   const walk = (n: any) => {

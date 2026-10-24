@@ -200,6 +200,7 @@ export function YgdriaEditor({
   onEditorReady,
   readOnly = false,
   markdownView = false,
+  markdownNotices,
   onUploadError,
   documentId,
   readClipboardText,
@@ -215,6 +216,8 @@ export function YgdriaEditor({
   onEditorReady?: (editor: Editor) => void;
   readOnly?: boolean;
   markdownView?: boolean;
+  /** Localized conversion notices supplied by the host application's i18n. */
+  markdownNotices?: { html: string; unsupported: string };
   /** Called when an image upload or paste fails, so the host can surface a toast. */
   onUploadError?: (message: string) => void;
   /** Stable owning-note identity; protects a reused editor from stale content. */
@@ -475,7 +478,17 @@ export function YgdriaEditor({
   const markdownTextRef = useRef("");
   const originalMarkdownRef = useRef("");
   const [markdownReady, setMarkdownReady] = useState(false);
+  const [exportHasUnsupported, setExportHasUnsupported] = useState(false);
+  const [importHasUnsupported, setImportHasUnsupported] = useState(false);
   const markdownInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!markdownView || !markdownReady) return;
+    const timer = setTimeout(() => {
+      setImportHasUnsupported(markdownToTiptap(markdownText).warnings.length > 0);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [markdownView, markdownReady, markdownText]);
 
   const commitMarkdown = () => {
     if (!markdownInitializedRef.current) return;
@@ -495,7 +508,9 @@ export function YgdriaEditor({
   useEffect(() => {
     if (markdownView && !markdownInitializedRef.current && editor) {
       const json = editor.getJSON() as NoteContent;
-      const { markdown } = tiptapToMarkdown(json);
+      const { markdown, warnings } = tiptapToMarkdown(json);
+      setExportHasUnsupported(warnings.some((warning) => !warning.startsWith("Complex table serialized as HTML")));
+      setImportHasUnsupported(false);
       setMarkdownText(markdown);
       markdownTextRef.current = markdown;
       originalMarkdownRef.current = markdown;
@@ -587,6 +602,11 @@ export function YgdriaEditor({
     <>
       {markdownView ? (
         <div className="ygdria-markdown-view">
+          {markdownNotices && (exportHasUnsupported || importHasUnsupported || /<(?:p|table|h[1-6]|pre)\b/i.test(markdownText)) && (
+            <p className="ygdria-markdown-notice" role="status">
+              {exportHasUnsupported || importHasUnsupported ? markdownNotices.unsupported : markdownNotices.html}
+            </p>
+          )}
           <textarea
             ref={textareaRef}
             className="ygdria-markdown-textarea"

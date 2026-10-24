@@ -218,6 +218,18 @@ const MIGRATIONS: Migration[] = [
           insert.run(row.id, target);
     },
   },
+  {
+    version: 16,
+    description: "Persist local ETAPI idempotency receipts",
+    checksum: "8a371fc20b649de1",
+    up(sqlite) {
+      sqlite.exec(`CREATE TABLE IF NOT EXISTS etapi_receipts (
+        scope text not null, key text not null, request_hash text not null,
+        result_json text not null, created_at integer not null,
+        primary key (scope,key)
+      ); CREATE INDEX IF NOT EXISTS etapi_receipts_created_idx ON etapi_receipts(created_at);`);
+    },
+  },
 ];
 
 /** The supported migration history begins at v11. Older migration records are

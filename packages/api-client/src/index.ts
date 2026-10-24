@@ -10,16 +10,6 @@ import type {
   TreePlacement,
 } from "@ygdria/shared";
 
-export type EtapiScope = "notes:read" | "notes:write";
-export type EtapiSession = {
-  id: string;
-  label: string;
-  scopes: EtapiScope[];
-  createdAt: number;
-  expiresAt: number;
-  issuedByDeviceId: string | null;
-};
-
 /** A sync change the server rejected because last-write-wins kept a newer
  * local version. Surfaced so clients can flag a divergence to the user. */
 export type RejectedSyncChange = {
@@ -96,8 +86,12 @@ export class YgdriaClient {
     const headers: Record<string, string> = {
       ...((init?.headers as Record<string, string>) ?? {}),
     };
-    if (this.token) headers["X-Ygdria-Local-Token"] = this.token;
-    if (this.deviceToken) headers["Authorization"] = `Bearer ${this.deviceToken}`;
+    if (path.startsWith("/etapi/")) {
+      headers["X-Ygdria-External-Access"] = "1";
+    } else {
+      if (this.token) headers["X-Ygdria-Local-Token"] = this.token;
+      if (this.deviceToken) headers["Authorization"] = `Bearer ${this.deviceToken}`;
+    }
     // Honor a caller-supplied signal; otherwise apply a short timeout so a
     // startup probe can never hang forever on a slow or unreachable server.
     const signal = init?.signal ?? createTimeoutSignal(timeoutMs);
@@ -141,6 +135,9 @@ export class YgdriaClient {
     if (this.token) headers["X-Ygdria-Local-Token"] = this.token;
     if (this.deviceToken) headers["Authorization"] = `Bearer ${this.deviceToken}`;
     return fetch(this.baseUrl + path, { headers });
+  }
+  workspaceVersion() {
+    return this.request<{version:number}>("/api/v1/tree/version");
   }
   tree() {
     return this.request<TreePlacement[]>("/api/v1/tree");
@@ -841,23 +838,12 @@ export class YgdriaClient {
       },
     );
   }
-  createEtapiSession(input: {
-    label: string;
-    scopes: EtapiScope[];
-    ttlSeconds?: number;
-  }) {
-    return this.request<EtapiSession & { accessToken: string }>("/api/v1/etapi/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
+  getEtapiAccess() {
+    return this.request<{enabled:boolean}>("/api/v1/etapi/access");
   }
-  listEtapiSessions() {
-    return this.request<{ sessions: EtapiSession[] }>("/api/v1/etapi/sessions");
-  }
-  revokeEtapiSession(id: string) {
-    return this.request<{ revoked: string }>(`/api/v1/etapi/sessions/${id}`, {
-      method: "DELETE",
+  setEtapiAccess(enabled: boolean) {
+    return this.request<{enabled:boolean}>("/api/v1/etapi/access", {
+      method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled}),
     });
   }
   revokeDevice(id: string) {

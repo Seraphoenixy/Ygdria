@@ -826,6 +826,6 @@ describe("upgrading a v11 database", () => {
     expect(getCursor(sqlite, "desktop")).toMatchObject({ lastAdvanceId: 3 });
     expect(
       sqlite.prepare("SELECT COUNT(*) c FROM schema_migrations").get(),
-    ).toEqual({ c: 5 });
+    ).toEqual({ c: 6 });
   });
 });

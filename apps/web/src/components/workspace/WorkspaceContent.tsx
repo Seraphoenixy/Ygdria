@@ -115,7 +115,7 @@ export interface WorkspaceContentProps {
   canEditSyncServerUrl?: boolean;
   /** Desktop only: remote URL tracked by the main process, shown read-only. */
   syncServerDisplayUrl?: string | null;
-  etapiTokenManagementAvailable?: boolean;
+  etapiAccessAvailable?: boolean;
   onOpenFrontendConsole: () => void;
   onProtectedSessionTimeoutChange: (minutes: number) => void;
   onMaintainDatabase: (rebuildFts?: boolean) => void;
@@ -205,7 +205,7 @@ export function WorkspaceContent({
   syncRunsAutomatically,
   canEditSyncServerUrl,
   syncServerDisplayUrl,
-  etapiTokenManagementAvailable,
+  etapiAccessAvailable,
   onOpenFrontendConsole,
   onProtectedSessionTimeoutChange,
   onMaintainDatabase,
@@ -400,7 +400,7 @@ export function WorkspaceContent({
             syncRunsAutomatically={syncRunsAutomatically}
             canEditSyncServerUrl={canEditSyncServerUrl}
             syncServerDisplayUrl={syncServerDisplayUrl}
-            etapiTokenManagementAvailable={etapiTokenManagementAvailable}
+            etapiAccessAvailable={etapiAccessAvailable}
             client={client}
             onProtectedSessionTimeoutChange={onProtectedSessionTimeoutChange}
             onMaintainDatabase={onMaintainDatabase}

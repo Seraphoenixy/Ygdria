@@ -67,3 +67,20 @@ it("reports accepted sub-batch conflicts before a later sub-batch fails", async 
   ).rejects.toThrow("offline");
   expect(persisted).toEqual([1]);
 });
+
+it("sends ancestors before children even when 413 splits every entity into its own request",async()=>{
+  const accepted:string[]=[];
+  const changes=[
+    {entityType:"placement",entityId:"child",changeKind:"updated",data:{id:"child",parentPlacementId:"parent"}},
+    {entityType:"placement",entityId:"parent",changeKind:"updated",data:{id:"parent",parentPlacementId:null}},
+    {entityType:"note",entityId:"note",changeKind:"updated",data:{id:"note"}},
+  ];
+  await pushSyncBatches(changes,async(batch)=>{
+    if(batch.length>1) throw Object.assign(new Error("split"),{statusCode:413});
+    const change=batch[0];
+    if(change.entityId==="child") expect(accepted).toContain("parent");
+    accepted.push(change.entityId);
+    return {applied:1,rejected:[]};
+  });
+  expect(accepted).toEqual(["note","parent","child"]);
+});

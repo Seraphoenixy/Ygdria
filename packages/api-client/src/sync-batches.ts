@@ -1,3 +1,5 @@
+import { orderSyncChanges } from "@ygdria/shared";
+
 /** Split hydrated requests, including the JSON envelope, before compression.
  * Keep order and only return success after every sub-batch has been accepted. */
 export async function pushSyncBatches<T, R>(
@@ -31,7 +33,7 @@ export async function pushSyncBatches<T, R>(
   };
   let batch: T[] = [];
   let bytes = envelopeBytes;
-  for (const change of changes) {
+  for (const change of orderSyncChanges(changes)) {
     const size = encoder.encode(JSON.stringify(change)).length;
     if (size + envelopeBytes > maxBytes) {
       throw Object.assign(new Error("Single sync entity exceeds 16 MiB"), { statusCode: 413 });

@@ -267,6 +267,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
               onEditorReady={onEditorReady}
               readOnly={!editing || isTrashed}
               markdownView={markdownView}
+                markdownNotices={{ html: t(locale, "markdownHtmlPreservation"), unsupported: t(locale, "markdownUnsupportedFormatting") }}
               onUploadError={onUploadError}
               readClipboardText={clipboardAdapter.readText}
               readClipboardHtml={clipboardAdapter.readHtml}

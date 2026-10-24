@@ -4,11 +4,23 @@ export function httpError(statusCode: number, message: string) {
 
 // --- schemas (was schemas.ts) ---
 
-export function parse(schema: any, value: any, log?: { debug: (obj: object, msg: string) => void }) {
+export function parse(
+  schema: any,
+  value: any,
+  log?: { debug: (obj: object, msg: string) => void },
+) {
   const r = schema.safeParse(value);
   if (!r.success) {
     if (log) log.debug({ issues: r.error.issues }, "request validation failed");
-    throw httpError(400, "Invalid request data");
+    throw Object.assign(httpError(400, "Invalid request data"), {
+      validationIssues: r.error.issues
+        .slice(0, 20)
+        .map((issue: { path: unknown[]; code: string; message: string }) => ({
+          path: issue.path,
+          code: issue.code,
+          message: issue.message,
+        })),
+    });
   }
   return r.data;
 }

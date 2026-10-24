@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { applyMigrations, createDatabase } from "@ygdria/database";
+import { applyMigrations, createDatabase, getCoalescedChangesSince } from "@ygdria/database";
 import { NoteService, RelationService } from "@ygdria/domain";
 import {
   CALENDAR_NOTE_ID,
@@ -601,5 +601,25 @@ describe("LWW clock arbitration", () => {
     applySyncChanges(b.sqlite, [later], false);
     const title = b.sqlite.prepare("SELECT title FROM notes WHERE id=?").get(note.id) as { title: string };
     expect(title.title).toBe("Honest edit");
+  });
+});
+
+describe("incremental tree dependencies", () => {
+  it("syncs a child moved into a new folder whose latest change was reordered later", () => {
+    const source=freshDb(), target=freshDb();const notes=new NoteService(source);
+    try {
+      const child=notes.create({title:"existing child"});
+      const childPlacement=notes.tree().find(p=>p.noteId===child.id)!.placementId;
+      const cursor={id:0};sync(source,target,cursor);
+      const folder=notes.create({title:"new folder"});
+      const folderPlacement=notes.tree().find(p=>p.noteId===folder.id)!.placementId;
+      notes.movePlacement(childPlacement,folderPlacement,0);
+      notes.movePlacement(folderPlacement,SYSTEM_ROOT_PLACEMENT_ID,0);
+      const changes=resolveChangeEntities(source.sqlite,"",getCoalescedChangesSince(source.sqlite,cursor.id,500));
+      expect(changes.findIndex(c=>c.entityId===childPlacement)).toBeLessThan(changes.findIndex(c=>c.entityId===folderPlacement));
+      expect(()=>applySyncChanges(target.sqlite,changes,false)).not.toThrow();
+      expect(target.sqlite.prepare("SELECT parent_placement_id parent FROM placements WHERE id=?").get(childPlacement)).toEqual({parent:folderPlacement});
+      expect(target.sqlite.pragma("foreign_key_check")).toEqual([]);
+    } finally {source.sqlite.close();target.sqlite.close();}
   });
 });

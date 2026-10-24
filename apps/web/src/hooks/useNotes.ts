@@ -1,3 +1,4 @@
+import { useWorkspaceChanges } from "./useWorkspaceChanges";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { YgdriaClient } from "@ygdria/api-client";
@@ -82,6 +83,7 @@ export function useNotes({
   onNoteRestored,
 }: UseNotesOptions) {
   const qc = useQueryClient();
+  useWorkspaceChanges(client, dataAccessReady, editing);
   // Editor updates only replace this draft while editing. It is written once
   // when the user intentionally exits editing mode.
   const pendingAutoSaveRef = useRef<ContentSaveRequest | undefined>(undefined);
@@ -112,7 +114,7 @@ export function useNotes({
     queryFn: () => client.tree(),
     retry: 1,
     enabled: dataAccessReady,
-    // Every mutation already invalidates ["tree"]; a short staleTime just
+    // UI mutations and external change monitoring invalidate ["tree"]; staleTime
     // spares thin mobile clients a redundant refetch on refocus.
     staleTime: 30_000,
   });

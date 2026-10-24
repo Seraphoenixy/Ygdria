@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { ListTree } from "lucide-react";
-import type { EtapiScope, EtapiSession, YgdriaClient } from "@ygdria/api-client";
+import type { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
 import { APP_VERSION } from "../../lib/appVersion";
 import { readSettings, writeSettings, type StoredSettings, type ThemePreference, type TimeUnit } from "./settingsStore";
@@ -37,7 +37,7 @@ export function SettingsPage({
   canEditSyncServerUrl = false,
   /** Desktop: the remote URL held by the main process (source of truth). */
   syncServerDisplayUrl,
-  etapiTokenManagementAvailable = false,
+  etapiAccessAvailable = false,
   client,
 }: {
   locale: Locale;
@@ -71,7 +71,7 @@ export function SettingsPage({
    * settings value, because the main process owns the desktop connection. */
   syncServerDisplayUrl?: string | null;
   /** True when this is the desktop app's local ETAPI server. */
-  etapiTokenManagementAvailable?: boolean;
+  etapiAccessAvailable?: boolean;
   client: YgdriaClient;
 }) {
   // `syncServerUrl` used to be initialized exclusively from localStorage, so
@@ -202,10 +202,10 @@ export function SettingsPage({
         <SettingsActionRow key="protected-password" title={t(locale, "changeProtectedPassword")} description={t(locale, "changeProtectedPasswordHint")} action={t(locale, "changeProtectedPassword")} disabled={!canChangeProtectedPassword} onClick={onChangeProtectedPassword} />,
         <SettingsNumberRow key="protected-timeout" title={t(locale, "protectedSessionTimeout")} description={t(locale, "protectedSessionHint")} value={protectedSessionTimeoutMinutes ?? 10} min={1} unit={t(locale, "minutes")} onChange={(event) => onProtectedSessionTimeoutChange?.(Number(event.target.value))} />,
       ]} />
-      <EtapiTokenSettings
+      <EtapiAccessSettings
         locale={locale}
         client={client}
-        available={etapiTokenManagementAvailable}
+        available={etapiAccessAvailable}
       />
     </article>;
 }
@@ -219,7 +219,7 @@ export function SettingsOutline({ locale }: { locale: Locale }) {
     ["settings-general", t(locale, "settingsGeneral"), [["settings-language", t(locale, "settingsLanguage")], ["settings-appearance", t(locale, "settingsAppearance")], ["settings-about", t(locale, "about")]]],
     ["settings-connection", t(locale, "settingsConnection"), [["settings-sync", t(locale, "syncServer")]]],
     ["settings-data", t(locale, "settingsData"), [["settings-transfer", t(locale, "importExport")], ["settings-trash", t(locale, "deletedNotes")], ["settings-attachments", t(locale, "unusedAttachments")], ["settings-revisions", t(locale, "noteRevisions")], ["settings-database", t(locale, "databaseMaintenance")]]],
-    ["settings-security", t(locale, "settingsSecurityAndAi"), [["settings-protected", t(locale, "protectedSession")], ["settings-etapi", t(locale, "etapiTokens")]]],
+    ["settings-security", t(locale, "settingsSecurityAndAi"), [["settings-protected", t(locale, "protectedSession")], ["settings-etapi", t(locale, "etapiAccess")]]],
   ] as const;
   return <aside className="note-inspector settings-outline"><div className="inspector-heading"><ListTree size={16} /> {t(locale, "onThisPage")}</div><ul className="outline-list">{groups.map(([id, label, sections]) => <li key={id}><button className="settings-outline-group" type="button" onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{label}</button><ul>{sections.map(([sectionId, sectionLabel]) => <li key={sectionId}><button type="button" onClick={() => document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" })}>{sectionLabel}</button></li>)}</ul></li>)}</ul></aside>;
 }
@@ -231,90 +231,42 @@ function displayServerUrl(baseUrl: string): string {
   return typeof window === "undefined" ? "" : window.location.origin;
 }
 
-function EtapiTokenSettings({ locale, client, available }: { locale: Locale; client: YgdriaClient; available: boolean }) {
-  const [label, setLabel] = useState("AI assistant");
-  const [scopes, setScopes] = useState<EtapiScope[]>(["notes:read"]);
-  const [ttlSeconds, setTtlSeconds] = useState(15 * 60);
-  const [sessions, setSessions] = useState<EtapiSession[]>([]);
-  const [createdToken, setCreatedToken] = useState<string>();
+function EtapiAccessSettings({ locale, client, available }: { locale: Locale; client: YgdriaClient; available: boolean }) {
+  const [enabled, setEnabled] = useState<boolean>();
   const [message, setMessage] = useState<string>();
-  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const load = async () => {
-    if (!available) return;
-    setLoading(true);
+  useEffect(() => {
+    let active = true;
+    setEnabled(undefined);
+    setMessage(undefined);
+    if (available) void client.getEtapiAccess().then((state) => {
+      if (active) setEnabled(state.enabled);
+    }).catch((error: unknown) => {
+      if (active) setMessage(error instanceof Error ? error.message : String(error));
+    });
+    return () => { active = false; };
+  }, [available, client]);
+
+  const toggle = async () => {
+    if (enabled === undefined || saving) return;
+    setSaving(true);
     try {
-      setSessions((await client.listEtapiSessions()).sessions);
+      const state = await client.setEtapiAccess(!enabled);
+      setEnabled(state.enabled);
       setMessage(undefined);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { void load(); }, [available, client]);
-
-  const toggleScope = (scope: EtapiScope) => {
-    setScopes((current) => current.includes(scope)
-      ? (current.length === 1 ? current : current.filter((item) => item !== scope))
-      : [...current, scope]);
-  };
-  const create = async () => {
-    if (!label.trim() || scopes.length === 0) return;
-    setLoading(true);
-    try {
-      const issued = await client.createEtapiSession({ label: label.trim(), scopes, ttlSeconds });
-      setCreatedToken(issued.accessToken);
-      setSessions((current) => [issued, ...current.filter((session) => session.id !== issued.id)]);
-      setMessage(undefined);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  };
-  const revoke = async (id: string) => {
-    setLoading(true);
-    try {
-      await client.revokeEtapiSession(id);
-      setSessions((current) => current.filter((session) => session.id !== id));
-      setMessage(undefined);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  };
-  const copy = async () => {
-    if (!createdToken) return;
-    try {
-      await navigator.clipboard.writeText(createdToken);
-      setMessage(t(locale, "etapiTokenCopied"));
-    } catch {
-      setMessage(t(locale, "etapiCopyFailed"));
-    }
+    } finally { setSaving(false); }
   };
 
   return <section id="settings-etapi" className="settings-section">
-    <h3>{t(locale, "etapiTokens")}</h3>
+    <h3>{t(locale, "etapiAccess")}</h3>
     <div className="settings-card">
-      <p className="settings-intro">{available ? t(locale, "etapiTokensHint") : t(locale, "etapiTokensUnavailable")}</p>
-      {available && <>
-        <div className="settings-row settings-etapi-form">
-          <div>
-            <strong>{t(locale, "etapiNewToken")}</strong>
-            <p>{t(locale, "etapiTokenWarning")}</p>
-            <label className="settings-etapi-label">{t(locale, "etapiTokenLabel")}<input className="settings-text-control" value={label} maxLength={100} onChange={(event) => setLabel(event.target.value)} /></label>
-            <fieldset className="settings-etapi-scopes"><legend>{t(locale, "etapiPermissions")}</legend>
-              {(["notes:read", "notes:write"] as EtapiScope[]).map((scope) => <label key={scope}><input type="checkbox" checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} /> {t(locale, scope === "notes:read" ? "etapiRead" : "etapiWrite")}</label>)}
-            </fieldset>
-          </div>
-          <div className="settings-etapi-actions"><label>{t(locale, "etapiExpiry")}<select className="settings-select" value={ttlSeconds} onChange={(event) => setTtlSeconds(Number(event.target.value))}><option value={15 * 60}>{t(locale, "etapi15Minutes")}</option><option value={30 * 60}>{t(locale, "etapi30Minutes")}</option><option value={60 * 60}>{t(locale, "etapi1Hour")}</option><option value={8 * 60 * 60}>{t(locale, "etapi8Hours")}</option></select></label><button className="settings-action" disabled={loading || !label.trim()} onClick={() => void create()}>{t(locale, "etapiCreateToken")}</button></div>
-        </div>
-        {createdToken && <div className="settings-row settings-etapi-issued"><div><strong>{t(locale, "etapiTokenCreated")}</strong><p>{t(locale, "etapiTokenOnce")}</p><input className="settings-text-control settings-etapi-secret" readOnly value={createdToken} aria-label={t(locale, "etapiTokenCreated")} /></div><button className="settings-action" onClick={() => void copy()}>{t(locale, "copy")}</button></div>}
-        <div className="settings-row settings-etapi-list"><div><strong>{t(locale, "etapiActiveTokens")}</strong><p>{t(locale, "etapiActiveTokensHint")}</p>{message && <p className="settings-status" role="status">{message}</p>}{sessions.length > 0 && <ul>{sessions.map((session) => <li key={session.id}><span><b>{session.label}</b> · {session.scopes.join(", ")} · {t(locale, "etapiExpiresAt")} {new Date(session.expiresAt).toLocaleString(locale)}</span><button className="settings-action" disabled={loading} onClick={() => void revoke(session.id)}>{t(locale, "revoke")}</button></li>)}</ul>}</div><button className="settings-action" disabled={loading} onClick={() => void load()}>{t(locale, "refresh")}</button></div>
-      </>}
+      {available ? <div className="settings-row">
+        <div><strong>{t(locale, "etapiAccessEnabled")}</strong><p>{t(locale, "etapiAccessHint")}</p>{message && <p className="settings-status" role="status">{message}</p>}</div>
+        <button type="button" role="switch" className="settings-switch" aria-label={t(locale, "etapiAccessEnabled")} aria-checked={enabled ?? false} disabled={saving || enabled === undefined} onClick={() => void toggle()} />
+      </div> : <p className="settings-intro">{t(locale, "etapiAccessUnavailable")}</p>}
     </div>
   </section>;
 }

@@ -1,130 +1,46 @@
-# ETAPI：AI 与外部自动化接口
+# ETAPI：本机 AI 与外部访问
 
-ETAPI 用于让 AI 工具和外部自动化在受控权限下读取、搜索和编辑 Ygdria 笔记。它以 Markdown 作为默认交换格式，内部仍由 Ygdria 转换为 Tiptap JSON 并维护修订、全文索引和同步变更记录。
+ETAPI 供本机 MCP 和自动化工具读取、搜索、整理笔记，默认以 Markdown 交换正文，内部权威格式仍为 Tiptap JSON。
 
-本接口当前只覆盖笔记、placement 层级和 tag。
+## 1. 一个开关
 
-如果文档的读者是 AI 工具，请提供精简且不含管理凭据的 [`etapi-ai.md`](./etapi-ai.md)；本文档面向管理员与集成人员。
+桌面应用的 **设置 → 安全 → AI 与外部访问 → 允许本机工具访问** 控制全部外部读写，默认关闭。开启或关闭立即影响后续请求，无需重启；状态保存在桌面私有 `etapi-access.json`，不参与笔记同步和数据库备份。文件缺失或损坏时保持关闭。
 
-## 1. 认证模型
+不再签发访问令牌，不提供权限选择、有效期或会话列表。升级后旧令牌和 `etapi-sessions.json` 不再使用，外部访问默认关闭，需要用户主动开启。
 
-ETAPI 仅由 **桌面应用的本机 loopback 服务** 提供。在 **设置 → 安全 → AI 与外部访问令牌** 中创建短期令牌，再把该令牌一次性交给本机 AI 工具。令牌的名称、权限和失效时间都由用户在设置页选择；默认是只读、15 分钟。
-
-桌面应用自身使用每次启动生成的本机凭据管理令牌；该凭据不是 AI 令牌，AI 永远不应获得它或主密码。远程独立服务器只用于同步，默认不会注册 ETAPI 或令牌管理接口。
-
-```text
-已登录的 Ygdria 设置页
-  │ 创建 / 列出 / 撤销
-  ▼
-短期 ETAPI 令牌（明文只返回一次）
-  │ Authorization: Bearer <accessToken>
-  ▼
-/etapi/*
-```
-
-短期令牌具有以下约束：
-
-- 仅可访问 `/etapi/*`，不能访问 `/api/v1/*`。
-- 默认有效期 15 分钟；可指定 60～28800 秒（最长 8 小时）。
-- 仅在桌面应用私有的本地令牌文件保存 SHA-256 摘要和会话元数据，不保存令牌明文；该文件不属于笔记数据库，不参与同步或数据库备份。
-- 令牌到期、主动撤销、签发设备被撤销或主密码变更后失效；桌面应用重启不会使未到期令牌失效。
-- 同时最多保留 100 个会话；达到上限时淘汰最早创建的会话。
-
-接口监听在 `127.0.0.1`，不会向局域网或互联网暴露。若 AI 不在同一台电脑上，请使用本机代理/桥接方案，并审慎处理令牌；不要直接开放桌面端口。
-
-### 1.1 Scope
-
-| Scope | 能力 |
-| --- | --- |
-| `notes:read` | 读取层级、笔记、正文、tag 和搜索结果。 |
-| `notes:write` | 创建和更新笔记、替换正文、移动 placement。 |
-
-两个 scope 彼此独立。需要读写的 AI 应同时申请 `notes:read` 和 `notes:write`。
-只有 `notes:write` 的调用方执行写操作时，响应仅包含 `{ id, version, updatedAt }`，不会借由写入响应读取原笔记内容。
-
-### 1.2 在设置页管理令牌
-
-设置页提供以下操作：
-
-- 输入令牌名称（例如“研究助手”）。
-- 选择只读或读写权限；只读是默认值。
-- 选择 15 分钟、30 分钟、1 小时或 8 小时有效期。
-- 创建后立即复制令牌；关闭或刷新页面后无法再次查看明文。
-- 查看仍有效的令牌及其失效时间，并可随时撤销。
-
-### 1.3 管理 API（供设置页使用）
-
-以下接口由桌面设置页使用，不是 AI 的 ETAPI 能力。它们受应用私有的 per-launch loopback 凭据保护；不得将该凭据提供给第三方。
+仅桌面本机服务注册这些接口；独立同步服务器不提供 ETAPI。所有请求均需：
 
 ```http
-POST /api/v1/etapi/sessions
-X-Ygdria-Local-Token: <desktop-app-private-token>
-Content-Type: application/json
+X-Ygdria-External-Access: 1
 ```
 
-```json
-{
-  "label": "notes-ai",
-  "scopes": ["notes:read", "notes:write"],
-  "ttlSeconds": 900
-}
-```
+不需要 Authorization，也不接受设备凭据作为开启开关的替代方式。服务端检查实际 socket 地址和 Host 均为 loopback，拒绝 Origin / Sec-Fetch-Site 浏览器请求。自定义请求头不列入 CORS 允许头，普通网页不能借此访问。MCP 自动添加该头，无需用户配置凭据。
 
-成功返回 `201`。`accessToken` 仅在这次响应中出现：
+开关开启后，本机工具可读写普通笔记。受保护笔记只返回脱敏树占位，正文与修改均拒绝；版本检查、修订和系统节点保护不变。外部请求不能调用桌面私有 `/api/v1/*`。
 
-```json
-{
-  "id": "93c0b800-bc84-4f38-9d96-a38836ccb801",
-  "label": "notes-ai",
-  "scopes": ["notes:read", "notes:write"],
-  "createdAt": 1785769200000,
-  "expiresAt": 1785770100000,
-  "issuedByDeviceId": null,
-  "accessToken": "yg_etapi_..."
-}
-```
+设置页使用私有管理接口 `GET /api/v1/etapi/access` 读取 `{ enabled }`，用 `PATCH /api/v1/etapi/access` 提交 `{ "enabled": true }` 或 false。这些接口继续受桌面私有凭据或设备认证保护，不提供给 MCP。旧 `/api/v1/etapi/sessions` 已移除。
 
-列出会话时不会返回令牌明文：
+## 2. 接口
 
-```http
-GET /api/v1/etapi/sessions
-X-Ygdria-Local-Token: <desktop-app-private-token>
-```
-
-撤销令牌：
-
-```http
-DELETE /api/v1/etapi/sessions/:sessionId
-X-Ygdria-Local-Token: <desktop-app-private-token>
-```
-
-## 2. ETAPI 端点
-
-除签发、列出和撤销会话外，以下请求均使用短期令牌：
-
-```http
-Authorization: Bearer <accessToken>
-```
-
-| 方法 | 路径 | Scope | 用途 |
-| --- | --- | --- | --- |
-| `GET` | `/etapi/tree/roots` | `notes:read` | 分页读取可见顶层节点。 |
-| `GET` | `/etapi/tree/nodes/:placementId` | `notes:read` | 读取一个树节点。 |
-| `GET` | `/etapi/tree/nodes/:placementId/children` | `notes:read` | 分页读取直接子节点。 |
-| `GET` | `/etapi/tree/nodes/:placementId/subtree` | `notes:read` | 在深度和节点数上限内读取子树。 |
-| `GET` | `/etapi/tree/resolve?query=...` | `notes:read` | 按名称片段定位候选节点。 |
-| `GET` | `/etapi/notes/:id?format=markdown` | `notes:read` | 读取笔记元数据、placement、属性和正文。 |
-| `GET` | `/etapi/notes/:id/content?format=markdown` | `notes:read` | 只读取正文；支持 `markdown`、`json`、`html`。 |
-| `GET` | `/etapi/search?q=关键词&placementId=...` | `notes:read` | 全文搜索；可限定到树节点及全部子节点。 |
-| `GET` | `/etapi/search?tag=标签&placementId=...` | `notes:read` | 精确 tag 搜索；可限定到树节点及全部子节点。 |
-| `GET` | `/etapi/tags` | `notes:read` | 读取 tag 及使用次数。 |
-| `POST` | `/etapi/notes` | `notes:write` | 创建笔记及首个 placement。 |
-| `PATCH` | `/etapi/notes/:id` | `notes:write` | 原子更新标题、Markdown 正文或属性。 |
-| `PUT` | `/etapi/notes/:id/content` | `notes:write` | 兼容的正文替换接口。 |
-| `PATCH` | `/etapi/notes/:id/content` | `notes:write` | 使用精确文本片段原子编辑正文。 |
-| `PATCH` | `/etapi/placements/:id` | `notes:write` | 移动一个 placement。 |
-
-桌面应用内部的本机凭据仍可直接访问 `/etapi/*`，以兼容已有客户端；交给 AI 的凭据应始终是短期令牌。
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/etapi/capabilities` | 当前访问模式、操作能力和幂等窗口。 |
+| GET | `/etapi/tree/roots` | 顶层节点分页。 |
+| GET | `/etapi/tree/nodes/:placementId` | 单个节点。 |
+| GET | `/etapi/tree/nodes/:placementId/children` | 子节点分页。 |
+| GET | `/etapi/tree/nodes/:placementId/subtree` | 有界子树。 |
+| GET | `/etapi/tree/resolve` | 按标题定位候选。 |
+| GET | `/etapi/notes/:id` | 笔记、正文和版本。 |
+| GET | `/etapi/notes/:id/content` | 正文。 |
+| GET | `/etapi/notes/:id/section` | 唯一标题路径下的正文和版本。 |
+| GET | `/etapi/search` | 关键词、标签、目录组合搜索。 |
+| GET | `/etapi/tags` | 标签统计。 |
+| POST | `/etapi/notes` | 创建笔记，支持 Idempotency-Key。 |
+| PATCH | `/etapi/notes/:id` | 原子更新标题、正文、标签或语言。 |
+| PUT | `/etapi/notes/:id/content` | 带版本的正文替换。 |
+| PATCH | `/etapi/notes/:id/content` | 精确文本编辑或预览。 |
+| POST | `/etapi/notes/:id/operations` | 追加、章节替换、标签增删。 |
+| PATCH | `/etapi/placements/:id` | 移动 placement。 |
 
 ## 3. 读取层级
 
@@ -135,7 +51,7 @@ GET /etapi/tree/roots?limit=50
 GET /etapi/tree/nodes/:placementId/children?limit=50&cursor=:cursor
 GET /etapi/tree/nodes/:placementId/subtree?maxDepth=2&maxNodes=100
 GET /etapi/tree/resolve?query=项目&parentPlacementId=:optional-parent
-Authorization: Bearer <accessToken>
+X-Ygdria-External-Access: 1
 ```
 
 `roots` 与 `children` 返回 `{ items, nextCursor }`，必须在 `nextCursor` 不为空时继续分页。`subtree` 只返回 `{ items }`，`maxDepth` 范围为 1–10，`maxNodes` 范围为 1–500。所有接口可用 `includeArchived=true` 纳入归档笔记。不要用 `noteId` 作为树节点 ID，因为同一笔记可以有多个 placement。
@@ -190,10 +106,10 @@ GET /etapi/notes/:id?format=markdown
 
 `format=json` 对文本笔记返回 Tiptap JSON；代码笔记的正文始终是原始源代码字符串，其 `properties` 还包含 `codeLanguage`。
 
-全文搜索和 tag 搜索二选一：
+全文搜索和 tag 可单独使用或组合，组合条件在结果上限之前执行：
 
 ```http
-GET /etapi/search?q=会议纪要&includeArchived=false
+GET /etapi/search?q=会议纪要&tag=项目&includeArchived=false
 GET /etapi/search?tag=项目&placementId=parent-placement-id
 ```
 
@@ -206,7 +122,7 @@ GET /etapi/search?tag=项目&placementId=parent-placement-id
 ```http
 POST /etapi/notes
 Content-Type: application/json
-Authorization: Bearer <accessToken>
+X-Ygdria-External-Access: 1
 ```
 
 ```json
@@ -265,9 +181,9 @@ If-Match: 3
 }
 ```
 
-`oldText` 默认必须恰好出现一次；需要替换多个相同片段时，显式传入 `expectedMatches`，且实际数必须完全相等。任何目标未命中、次数不符或与其他编辑重叠时，接口返回 `422 PatchTargetError`，且不会写入任何内容。`dryRun: true` 可预览结果和每项命中次数，但因响应含正文，令牌必须同时具备 `notes:read`。
+`oldText` 默认必须恰好出现一次；需要替换多个相同片段时，显式传入 `expectedMatches`，且实际数必须完全相等。任何目标未命中、次数不符或与其他编辑重叠时，接口返回 `422 PatchTargetError`，且不会写入任何内容。`dryRun: true` 可预览结果和每项命中次数。
 
-短期 ETAPI 令牌不能通过 `X-Ygdria-Import` 跳过修订记录；该兼容头只对受信任的设备调用生效。
+ETAPI 外部调用不能通过 `X-Ygdria-Import` 跳过修订记录。
 
 移动 placement：
 
@@ -290,9 +206,8 @@ Content-Type: application/json
 | 状态码 | 含义 |
 | --- | --- |
 | `400` | 请求体、查询参数或 `If-Match` 不合法。 |
-| `401` | 令牌缺失、无效、过期或已撤销。 |
-| `403` | 短期令牌缺少所需 scope。 |
-| `404` | 笔记、placement 或会话不存在。 |
+| `403` | 外部访问已关闭，或请求不符合本机原生客户端访问条件。 |
+| `404` | 笔记或 placement 不存在。 |
 | `409` | 笔记版本冲突、受保护笔记被访问，或层级操作违反约束。 |
 | `415` | 正文写入使用了不支持的 `Content-Type`。 |
 | `422` | 精确编辑的文本目标未命中、命中次数不符或编辑区间重叠。 |
@@ -307,3 +222,46 @@ Content-Type: application/json
   }
 }
 ```
+
+
+## 7. 持续自动化与按意图编辑
+
+`GET /etapi/capabilities` 返回 `access: "local-read-write"`、支持的意图操作和幂等回执保留天数。
+
+创建笔记可携带 `Idempotency-Key` 请求头（1～200 字符）。同一本机数据库、同一操作范围内，相同键和相同参数在 30 天内返回原始 `{ id, version, updatedAt }` 回执；不同参数复用同一键返回 409。携带键的创建响应固定为最小回执；需要正文时另行读取。请求结果不确定时，只能使用原键和原参数重试；未携带键时不可盲目重试。恢复旧数据库备份后不保证去重。
+
+回执与笔记更新在同一 SQLite 事务内写入，重启后仍有效，不保存正文或凭据明文，不参与同步；数据库备份包含回执。超过 30 天的回执在下一次带键写入时清理。
+
+`POST /etapi/notes/:id/operations` 支持：
+
+```json
+{ "operation": "append", "text": "新增段落" }
+```
+
+追加必须携带 `Idempotency-Key`。文本笔记将 Markdown 解析成 Tiptap 节点追加，保留已有节点与属性；代码笔记直接追加原始字符串，不自动添加分隔换行。`expectedVersion` 可选，省略时基于最新快照执行，最终仍通过乐观并发保存。
+
+```json
+{ "operation": "tags", "addTags": ["已整理"], "removeTags": ["待整理"] }
+```
+
+标签增删保留其他标签；同一个标签同时出现在两组时以添加为准。合并后超过现有标签上限会原子拒绝，不截断。可选 `expectedVersion` 和幂等键。
+
+先通过 `GET /etapi/notes/:id/section?path=<URL编码的JSON数组>` 读取唯一章节，例如 path 为 `["项目","结论"]`。返回 `{ id, version, headingPath, content }`，content 是不含目标标题、包含子章节的 Markdown 正文。然后提交：
+
+```json
+{
+  "operation": "replace_section",
+  "headingPath": ["项目", "结论"],
+  "oldText": "读取接口返回的完整 content",
+  "text": "新的章节正文",
+  "expectedVersion": 3
+}
+```
+
+章节路径按 Tiptap heading 的祖先标题精确定位；路径不唯一、原文不匹配或版本变化均拒绝，不自动模糊匹配。保留目标标题和章节之外的原始 Tiptap 节点。仅支持文本笔记。可选幂等键；与创建、追加一样返回最小回执。
+
+精确编辑失败时，调用方可收到 `error.diagnostics`，其中包含编辑序号、预期及实际命中数、最多 20 个候选字符偏移，不包含正文片段。
+
+MCP 适配器可通过既有分页接口实现有预算的目录概览、批量读取和批量移动。批量移动逐项执行，允许部分成功，不构成跨请求事务。遍历整库可用于用户授权的整理任务；客户端应明确标记截断和待续位置。
+
+ETAPI 的参数校验失败还返回 `error.validation`（最多 20 项字段路径、校验码和说明）；版本冲突返回 `error.currentVersion`。通用 API 和 5xx 响应不暴露这些诊断。

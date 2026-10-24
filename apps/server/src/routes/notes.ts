@@ -22,6 +22,12 @@ export interface NoteRouteDeps {
 export function registerNoteRoutes(app: FastifyInstance, deps: NoteRouteDeps) {
   const { notes, sqlite } = deps;
 
+  // AUTOINCREMENT's sequence survives pruning and is cheap to poll independently
+  // of remote sync. External adapters write the same domain change log.
+  app.get("/api/v1/tree/version", async () => {
+    return sqlite.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='sync_change_log'),0) version").get() as {version:number};
+  });
+
   app.get("/api/v1/tree", async () => notes.tree());
 
   app.get("/api/v1/placements/:id/children", async (req) =>

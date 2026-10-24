@@ -11,7 +11,7 @@ Ygdria 的认证策略取决于运行形态，二者使用同一份 `buildApp` �
 | A：桌面内嵌服务 | `apps/desktop/src/main.ts` 启动 Fastify | loopback 端口（默认 4318） | 关闭（`enableDeviceAuth` 未传） | 远端服务器凭据由主进程持有，经 Electron `safeStorage` 加密落盘；渲染进程只通过 IPC 间接访问 |
 | 形态 B：独立服务器 | `apps/server/src/index.ts` | `127.0.0.1:PORT`；远端部署需反向代理 HTTPS | **始终开启**（`index.ts` 硬编码 `enableDeviceAuth: true`） | 内存，不持久化 |
 
-形态 A 是默认形态：桌面主进程在同一进程内启动 Fastify，Renderer 通过 `contextIsolation` + `sandbox` 访问本地 API，数据库文件位于用户应用数据目录。形态 A 不需要设备令牌，因为只有本机 Renderer 能访问 loopback 端口；受保护笔记的主密码此时只保护"文件密钥"，不绑定服务端登录。
+形态 A 是默认形态：桌面主进程在同一进程内启动 Fastify，Renderer 通过 `contextIsolation` + `sandbox` 访问本地 API，数据库文件位于用户应用数据目录。形态 A 不需要设备令牌；Renderer 使用每次启动生成的桌面私有本地令牌访问 API，本机外部工具由独立开关控制 ETAPI；受保护笔记的主密码此时只保护"文件密钥"，不绑定服务端登录。
 
 形态 B 用于多端共享同一知识库：手机、远程浏览器或第二台桌面连接到一个常驻服务器进程。此时设备认证始终启用，并应经反向代理对外仅暴露 HTTPS。
 
@@ -53,8 +53,8 @@ HTTPS 远端服务（形态 B）
 ### 2.1 本地令牌（`X-Ygdria-Local-Token`）
 
 - 由 `buildApp({ localToken })` 传入；为空时不校验。
-- 桌面内嵌服务当前不设置该令牌（loopback 已经是信任边界）。
-- 所有非 `OPTIONS` 请求都必须携带该头，否则返回 `401`。
+- 桌面内嵌服务每次启动生成随机令牌，仅交给 Renderer，不交给外部工具。
+- `/api/*` 的非 `OPTIONS` 请求必须携带该头，否则返回 `401`；静态资源公开，`/etapi/*` 由本机访问开关单独控制。
 - 它是共享密钥，不区分设备，适合单用户本机或开发场景。
 
 ### 2.2 设备凭据（`Authorization: Bearer <deviceToken>`）
@@ -64,15 +64,15 @@ HTTPS 远端服务（形态 B）
 - **内存存储，不持久化**：服务器重启后所有设备令牌失效，需要重新登录或配对。这是刻意设计——保证设备凭据绝不进入数据库同步路径，避免一份库被复制后旧令牌仍然有效。
 - **只保留 `sha256(token)`**：明文 `deviceToken` 和 `pairingToken` 仅在签发时返回一次，之后不再存储。
 - **5 天滑动空闲超时**（`DEVICE_TOKEN_IDLE_TIMEOUT_MS`，固定不可配置）：每次认证请求刷新 `lastActiveAt`；超过 5 天未使用的令牌在下次校验时被删除并返回 `401`。
-- 静态资源与 SPA 壳始终公开；`/api/*` 与 `/etapi/*` 受保护。`/api/*` 只接受设备令牌；`/etapi/*` 还接受由设备令牌签发、带 scope 的短期 ETAPI 令牌。
+- 静态资源与 SPA 壳始终公开；`/api/*` 与 `/etapi/*` 受保护。`/api/*` 只接受设备令牌；`/etapi/*` 由桌面本机外部访问开关控制，不使用设备或单独访问令牌。
 - 公开路径白名单：`/api/v1/health`、`/api/v1/auth/config`、`/api/v1/devices/initialize`、`/api/v1/auth/login/challenge`、`/api/v1/auth/login/verify`、`/api/v1/devices/pair`。
 - 校验通过后把 `device` 挂到请求对象上，供 `/api/v1/devices/me` 等端点读取。
 
 设备凭据不与数据库绑定，因此它不是"用户账户"：它只授权某台设备在当前服务器进程生命周期内（且 5 天内有活动）访问该库。
 
-### 2.3 ETAPI 短期凭据
+### 2.3 本机外部访问开关
 
-已认证设备可通过 `POST /api/v1/etapi/sessions` 签发 1 分钟～8 小时有效的短期令牌，并限定为 `notes:read`、`notes:write` 或两者。短期令牌只可调用 `/etapi/*`，明文同样只返回一次；桌面端仅在其私有本地令牌文件中保存 SHA-256 摘要和会话元数据，不写入笔记数据库、不参与同步或数据库备份。到期或主动撤销会使其失效，桌面应用重启不会。接口契约见 [ETAPI：AI 与外部自动化](etapi.md)。
+桌面设置用 `GET/PATCH /api/v1/etapi/access` 管理唯一的 enabled 状态，默认关闭，保存到桌面私有 `etapi-access.json`，不参与笔记同步或数据库备份。管理接口继续受桌面私有凭据和既有设备认证保护。开启后，本机原生工具通过 `X-Ygdria-External-Access: 1` 调用 `/etapi/*`；服务端检查实际 loopback socket、loopback Host，拒绝浏览器 Origin / Sec-Fetch-Site。开关不暴露桌面 API，不允许读取受保护笔记，也不改变笔记保存的乐观并发机制。关闭立即阻止后续外部请求；旧令牌管理接口和会话文件不再使用。详见 [ETAPI](etapi.md)。
 
 ## 3. 统一主密码模型
 
@@ -273,3 +273,11 @@ Ygdria 提供**基于游标的增量同步**，不是 CRDT，也不做细粒度�
 - 最后一页返回后会话仍保留，以供正文和附件同步。客户端应用完成后通过 `/sync/advance` 的 `snapshotSession` 字段确认并释放；确认游标必须匹配已完整交付的快照。
 - 上传冲突在每个实际请求返回后立即持久化，早于后续子批次、附件传输及游标推进。持久化失败中止同步，避免无记录地跳过冲突。
 - 每次同步开始时补发本地已应用游标的远端确认，即使本轮没有新数据。桌面远端请求的超时覆盖响应头和完整正文接收。
+
+
+### 5.8 外部修改通知与结构依赖顺序
+
+- 桌面 UI 独立轮询 `GET /api/v1/tree/version`，读取本机同步日志 AUTOINCREMENT 高水位。轮询不传输整棵树，也不依赖远端同步成功；日志清理不会使高水位回退。
+- 版本变化时刷新目录、搜索和元数据缓存。编辑中仍可刷新树，但笔记正文刷新延后到退出编辑，保留编辑器中的实时草稿；保存冲突继续使用既有乐观并发机制处理。
+- 同一物化同步批次按笔记、父 placement 到子 placement、placement-order 和其余实体排序。发送端在请求拆包和 413 二分之前排序，兼容旧接收端；接收端也进行依赖排序。原始 changeId 和整页游标不变，不对增量日志本身重排。
+- 这解决创建目录、移入笔记后再次调整目录位置时，日志合并使子节点排在新父节点之前的外键错误。批次内循环依赖返回 409，不部分应用。

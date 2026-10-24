@@ -163,89 +163,32 @@
   color: #a0a1a6;
   cursor: not-allowed;
 }
-.settings-etapi-form {
-  align-items: flex-start;
+.settings-switch {
+  flex: 0 0 auto;
+  position: relative;
+  width: 42px;
+  height: 24px;
+  padding: 2px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+  cursor: pointer;
 }
-.settings-etapi-label,
-.settings-etapi-actions > label {
-  display: grid;
-  gap: 6px;
-  margin-top: 12px;
-  color: #55575e;
-  font-size: 13px;
-  font-weight: 600;
+.settings-switch::after {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-circle);
+  background: var(--color-surface);
 }
-.settings-etapi-label .settings-text-control {
-  width: min(100%, 320px);
+.settings-switch[aria-checked="true"] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
 }
-.settings-etapi-scopes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 16px;
-  margin: 14px 0 0;
-  padding: 0;
-  border: 0;
-  color: #55575e;
-  font-size: 13px;
-}
-.settings-etapi-scopes legend {
-  margin-bottom: 6px;
-  font-weight: 600;
-}
-.settings-etapi-scopes label {
-  white-space: nowrap;
-}
-.settings-etapi-actions {
-  display: grid;
-  gap: 12px;
-  justify-items: end;
-}
-.settings-etapi-actions .settings-select {
-  min-width: 144px;
-}
-.settings-etapi-secret {
-  width: min(100%, 540px);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-}
-.settings-etapi-list > div {
-  width: 100%;
-}
-.settings-etapi-list ul {
-  display: grid;
-  gap: 8px;
-  margin: 14px 0 0;
-  padding: 0;
-  list-style: none;
-}
-.settings-etapi-list li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: #55575e;
-  font-size: 13px;
-}
-.settings-etapi-list li .settings-action {
-  min-width: auto;
-  padding: 5px 10px;
-}
-@media (max-width: 640px) {
-  .settings-etapi-form,
-  .settings-etapi-list,
-  .settings-etapi-issued {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .settings-etapi-actions {
-    justify-items: stretch;
-  }
-  .settings-etapi-actions .settings-select,
-  .settings-etapi-actions .settings-action,
-  .settings-etapi-issued .settings-action {
-    width: 100%;
-  }
-}
+.settings-switch[aria-checked="true"]::after { transform: translateX(18px); }
+.settings-switch:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.settings-switch:disabled { opacity: 0.5; cursor: not-allowed; }
 .settings-version {
   flex: 0 0 auto;
   color: #55575e;

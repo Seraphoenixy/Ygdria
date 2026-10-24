@@ -1,117 +1,19 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll,beforeAll,describe,expect,it } from "vitest";
 import { buildApp } from "./app.js";
 
-describe("AI-oriented ETAPI", () => {
-  let app: ReturnType<typeof buildApp>;
-  let deviceToken: string;
-
-  beforeAll(async () => {
-    app = buildApp({ databaseUrl: ":memory:", enableDeviceAuth: true, enableEtapi: true });
-    const initialized = await app.inject({
-      method: "POST",
-      url: "/api/v1/devices/initialize",
-      payload: {
-        accessSalt: "test-access-salt",
-        srpSalt: "test-srp-salt",
-        verifier: "test-verifier",
-        fileSalt: "test-file-salt",
-        fileVerifier: "test-file-verifier",
-        label: "test device",
-      },
-    });
-    expect(initialized.statusCode).toBe(200);
-    deviceToken = initialized.json().deviceToken;
+describe("switch-controlled local ETAPI",()=>{
+  let app:ReturnType<typeof buildApp>;
+  let deviceToken:string;
+  const headers={"x-ygdria-external-access":"1"};
+  beforeAll(async()=>{
+    app=buildApp({databaseUrl:":memory:",enableDeviceAuth:true,enableEtapi:true});
+    const initialized=await app.inject({method:"POST",url:"/api/v1/devices/initialize",payload:{accessSalt:"test-access-salt",srpSalt:"test-srp-salt",verifier:"test-verifier",fileSalt:"test-file-salt",fileVerifier:"test-file-verifier",label:"test device"}});
+    deviceToken=initialized.json().deviceToken;
+    const enabled=await app.inject({method:"PATCH",url:"/api/v1/etapi/access",headers:{authorization:`Bearer ${deviceToken}`},payload:{enabled:true}});
+    expect(enabled.statusCode).toBe(200);
   });
-
-  afterAll(async () => app.close());
-
-  async function issue(scopes: Array<"notes:read" | "notes:write">) {
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/etapi/sessions",
-      headers: { authorization: `Bearer ${deviceToken}` },
-      payload: { label: "test AI", scopes, ttlSeconds: 300 },
-    });
-    expect(response.statusCode).toBe(201);
-    return response.json() as {
-      id: string;
-      accessToken: string;
-      scopes: string[];
-      expiresAt: number;
-    };
-  }
-
-  it("limits a short-lived token to ETAPI and its declared scopes", async () => {
-    const session = await issue(["notes:read"]);
-    const headers = { authorization: `Bearer ${session.accessToken}` };
-
-    expect((await app.inject({ url: "/etapi/tree/roots", headers })).statusCode).toBe(200);
-    expect((await app.inject({ url: "/api/v1/tree", headers })).statusCode).toBe(401);
-    expect(
-      (
-        await app.inject({
-          method: "POST",
-          url: "/etapi/notes",
-          headers,
-          payload: { title: "Denied" },
-        })
-      ).statusCode,
-    ).toBe(403);
-
-    const writer = await issue(["notes:write"]);
-    const writerHeaders = { authorization: `Bearer ${writer.accessToken}` };
-    const created = await app.inject({
-      method: "POST",
-      url: "/etapi/notes",
-      headers: writerHeaders,
-      payload: { title: "Write only", content: "private input" },
-    });
-    expect(created.statusCode).toBe(201);
-    expect(created.json()).toEqual({
-      id: expect.any(String),
-      version: 1,
-      updatedAt: expect.any(String),
-    });
-    expect(
-      (
-        await app.inject({
-          url: `/etapi/notes/${created.json().id}`,
-          headers: writerHeaders,
-        })
-      ).statusCode,
-    ).toBe(403);
-    expect(
-      (
-        await app.inject({
-          method: "PATCH",
-          url: `/etapi/notes/${created.json().id}/content`,
-          headers: writerHeaders,
-          payload: {
-            expectedVersion: 1,
-            edits: [{ oldText: "private input", newText: "changed" }],
-            dryRun: true,
-          },
-        })
-      ).statusCode,
-    ).toBe(403);
-  });
-
-  it("accepts an ETAPI token lifetime of up to eight hours", async () => {
-    const before = Date.now();
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/etapi/sessions",
-      headers: { authorization: `Bearer ${deviceToken}` },
-      payload: { label: "long-running AI", scopes: ["notes:read"], ttlSeconds: 8 * 60 * 60 },
-    });
-
-    expect(response.statusCode).toBe(201);
-    expect(response.json().expiresAt).toBeGreaterThanOrEqual(before + 8 * 60 * 60 * 1000);
-  });
-
+  afterAll(async()=>app.close());
   it("reads hierarchy, content and tags and edits with optimistic locking", async () => {
-    const session = await issue(["notes:read", "notes:write"]);
-    const headers = { authorization: `Bearer ${session.accessToken}` };
     const parentResponse = await app.inject({
       method: "POST",
       url: "/etapi/notes",
@@ -199,40 +101,7 @@ describe("AI-oriented ETAPI", () => {
     expect(codeJson.json()).toBe("const answer = 42;");
   });
 
-  it("keeps protected notes redacted while preserving their tree position", async () => {
-    const deviceHeaders = { authorization: `Bearer ${deviceToken}` };
-    const note = (
-      await app.inject({
-        method: "POST",
-        url: "/api/v1/notes",
-        headers: deviceHeaders,
-        payload: { title: "Secret title", tags: ["secret-tag"] },
-      })
-    ).json();
-    const protectedResponse = await app.inject({
-      method: "PATCH",
-      url: `/api/v1/notes/${note.id}/protected`,
-      headers: deviceHeaders,
-      payload: { protected: true, contentCiphertext: "v1.test-ciphertext" },
-    });
-    expect(protectedResponse.statusCode).toBe(200);
-    const protectedPlacementId = (await app.inject({
-      url: "/api/v1/tree",
-      headers: deviceHeaders,
-    })).json().find((item: any) => item.noteId === note.id).placementId;
-
-    const session = await issue(["notes:read"]);
-    const headers = { authorization: `Bearer ${session.accessToken}` };
-    const protectedNode = (await app.inject({ url: `/etapi/tree/nodes/${protectedPlacementId}`, headers })).json();
-    expect(protectedNode).toMatchObject({ title: "", isProtected: true });
-    expect(
-      (await app.inject({ url: `/etapi/notes/${note.id}`, headers })).statusCode,
-    ).toBe(409);
-  });
-
   it("searches a placement subtree and applies atomic literal content edits", async () => {
-    const session = await issue(["notes:read", "notes:write"]);
-    const headers = { authorization: `Bearer ${session.accessToken}` };
     const root = (await app.inject({
       method: "POST", url: "/etapi/notes", headers,
       payload: { title: "Scoped root", content: "root body" },
@@ -281,21 +150,174 @@ describe("AI-oriented ETAPI", () => {
     })).statusCode).toBe(422);
   });
 
-  it("revokes an ETAPI session immediately", async () => {
-    const session = await issue(["notes:read"]);
-    const revoked = await app.inject({
-      method: "DELETE",
-      url: `/api/v1/etapi/sessions/${session.id}`,
-      headers: { authorization: `Bearer ${deviceToken}` },
-    });
-    expect(revoked.statusCode).toBe(200);
+  it("creates and appends idempotently and rejects key reuse with changed parameters", async () => {
+    const headers = {
+      "x-ygdria-external-access": "1",
+      "idempotency-key": "create-once",
+    };
+    const payload = { title: "Idempotent", content: "original" };
+    const first = await app.inject({ method: "POST", url: "/etapi/notes", headers, payload });
+    const second = await app.inject({ method: "POST", url: "/etapi/notes", headers, payload });
+    expect(first.statusCode).toBe(201);
+    expect(second.json()).toEqual(first.json());
+    expect(Object.keys(first.json()).sort()).toEqual(["id", "updatedAt", "version"]);
     expect(
       (
         await app.inject({
-          url: "/etapi/tree/roots",
-          headers: { authorization: `Bearer ${session.accessToken}` },
+          method: "POST",
+          url: "/etapi/notes",
+          headers,
+          payload: { ...payload, title: "different" },
         })
       ).statusCode,
-    ).toBe(401);
+    ).toBe(409);
+    const id = first.json().id;
+    const url = `/etapi/notes/${id}/operations`;
+    const appendHeaders = { ...headers, "idempotency-key": "append-once" };
+    const append = { operation: "append", text: "added" };
+    const a = await app.inject({ method: "POST", url, headers: appendHeaders, payload: append });
+    const b = await app.inject({ method: "POST", url, headers: appendHeaders, payload: append });
+    expect(a.statusCode).toBe(200);
+    expect(b.json()).toEqual(a.json());
+    const note = (await app.inject({ url: `/etapi/notes/${id}`, headers })).json();
+    expect(note.version).toBe(2);
+    expect(note.content.match(/added/g)).toHaveLength(1);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          headers: { "x-ygdria-external-access": "1" },
+          payload: append,
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          headers: { ...headers, "idempotency-key": "stale" },
+          payload: { ...append, expectedVersion: 1 },
+        })
+      ).statusCode,
+    ).toBe(409);
   });
+
+  it("combines keyword and tag filtering before limiting results, including Han search", async () => {
+    const target = (
+      await app.inject({
+        method: "POST",
+        url: "/etapi/notes",
+        headers,
+        payload: {
+          title: "combinedneedle target",
+          content: "combinedneedle 学习计划",
+          tags: ["combined-tag"],
+        },
+      })
+    ).json();
+    for (let i = 0; i < 31; i++)
+      await app.inject({
+        method: "POST",
+        url: "/etapi/notes",
+        headers,
+        payload: { title: `combinedneedle ${i}`, content: "combinedneedle 学习计划" },
+      });
+    for (const q of ["combinedneedle", "学习", "学习 combinedneedle"]) {
+      const response = await app.inject({
+        url: `/etapi/search?q=${encodeURIComponent(q)}&tag=combined-tag`,
+        headers,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().items.map((n: any) => n.noteId)).toEqual([target.id]);
+    }
+  });
+
+  it("defaults off, switches immediately, and cannot be enabled by external clients",async()=>{
+    const local=buildApp({databaseUrl:":memory:",enableEtapi:true,localToken:"private"});
+    const admin={"x-ygdria-local-token":"private"};
+    try {
+      expect((await local.inject({url:"/api/v1/etapi/access",headers:admin})).json()).toEqual({enabled:false});
+      expect((await local.inject({url:"/etapi/tree/roots",headers})).statusCode).toBe(403);
+      expect((await local.inject({method:"PATCH",url:"/api/v1/etapi/access",headers,payload:{enabled:true}})).statusCode).toBe(401);
+      expect((await local.inject({method:"PATCH",url:"/api/v1/etapi/access",headers:admin,payload:{enabled:true}})).json()).toEqual({enabled:true});
+      expect((await local.inject({url:"/etapi/tree/roots",headers})).statusCode).toBe(200);
+      expect((await local.inject({url:"/api/v1/tree",headers})).statusCode).toBe(401);
+      expect((await local.inject({method:"POST",url:"/api/v1/etapi/sessions",headers:admin,payload:{label:"retired"}})).statusCode).toBe(404);
+      await local.inject({method:"PATCH",url:"/api/v1/etapi/access",headers:admin,payload:{enabled:false}});
+      expect((await local.inject({url:"/etapi/tree/roots",headers})).statusCode).toBe(403);
+    } finally {await local.close();}
+  });
+  it("rejects remote, browser, rebinding, and unmarked requests",async()=>{
+    expect((await app.inject({url:"/etapi/tree/roots"})).statusCode).toBe(403);
+    for(const extraHeaders of [{origin:"https://example.com"},{origin:"http://localhost:5173"},{host:"evil.example"},{"sec-fetch-site":"cross-site"}]) {
+      expect((await app.inject({url:"/etapi/tree/roots",headers:{...headers,...extraHeaders}})).statusCode).toBe(403);
+    }
+    expect((await app.inject({url:"/etapi/tree/roots",headers,remoteAddress:"192.168.1.2"})).statusCode).toBe(403);
+    expect((await app.inject({url:"/etapi/tree/roots",headers:{...headers,"x-forwarded-for":"127.0.0.1"},remoteAddress:"192.168.1.2"})).statusCode).toBe(403);
+  });
+  it("keeps the ETAPI and access management surface absent on standalone hosts",async()=>{
+    const standalone=buildApp({databaseUrl:":memory:",enableEtapi:false});
+    try {
+      expect((await standalone.inject({url:"/etapi/tree/roots",headers})).statusCode).toBe(404);
+      expect((await standalone.inject({url:"/api/v1/etapi/access"})).statusCode).toBe(404);
+    } finally {await standalone.close();}
+  });
+  it("reads unique sections and returns actionable validation and conflict errors",async()=>{
+    const note=(await app.inject({method:"POST",url:"/etapi/notes",headers,payload:{title:"section",content:"# Plan\n\nold\n\n# Other\n\nkeep"}})).json();
+    const section=(await app.inject({url:`/etapi/notes/${note.id}/section?path=${encodeURIComponent(JSON.stringify(["Plan"]))}`,headers})).json();
+    expect(section.version).toBe(1);
+    const update=await app.inject({method:"POST",url:`/etapi/notes/${note.id}/operations`,headers,payload:{operation:"replace_section",headingPath:["Plan"],oldText:section.content,text:"new",expectedVersion:section.version}});
+    expect(update.statusCode).toBe(200);expect(update.json().content).toContain("keep");
+    const stale=await app.inject({method:"PATCH",url:`/etapi/notes/${note.id}`,headers,payload:{title:"stale",expectedVersion:1}});
+    expect(stale.statusCode).toBe(409);expect(stale.json().error.currentVersion).toBe(2);
+    const invalid=await app.inject({method:"PATCH",url:`/etapi/notes/${note.id}`,headers,payload:{title:"missing version"}});
+    expect(invalid.json().error.validation).toContainEqual(expect.objectContaining({path:["expectedVersion"]}));
+  });
+  it("keeps protected notes redacted and refuses protected reads and writes",async()=>{
+    const note=(await app.inject({method:"POST",url:"/etapi/notes",headers,payload:{title:"private",content:"secret"}})).json();
+    const protectedResult=await app.inject({method:"PATCH",url:`/api/v1/notes/${note.id}/protected`,headers:{authorization:`Bearer ${deviceToken}`},payload:{protected:true,contentCiphertext:"v1.test-ciphertext"}});
+    expect(protectedResult.statusCode).toBe(200);
+    const node=(await app.inject({url:`/etapi/tree/nodes/${note.placements[0].placementId}`,headers})).json();
+    expect(node).toMatchObject({title:"",isProtected:true});
+    expect((await app.inject({url:`/etapi/notes/${note.id}`,headers})).statusCode).toBe(409);
+    expect((await app.inject({method:"POST",url:`/etapi/notes/${note.id}/operations`,headers,payload:{operation:"tags",addTags:["denied"]}})).statusCode).toBe(409);
+  });
+
+  it("preserves links, task states and literal code through Markdown API read/write", async () => {
+    const created = await app.inject({
+      method: "POST", url: "/etapi/notes", headers,
+      payload: {
+        title: "Markdown fidelity",
+        content: '# Integration\n\n[Driver](https://www.wch.cn/downloads/CH341SER_ZIP.html "official")\n\n- [x] Installed\n- [ ] Connected\n\n```js\nconst literal = "$x$ [[note:abc|literal]]";\n```',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const noteId = created.json().id;
+    const before = (await app.inject({ url: `/etapi/notes/${noteId}?format=json`, headers })).json();
+    const exported = (await app.inject({ url: `/etapi/notes/${noteId}?format=markdown`, headers })).json();
+    expect(exported.content).toContain("https://www.wch.cn/downloads/CH341SER_ZIP.html");
+    expect(exported.content).toContain("- [x] Installed");
+    const updated = await app.inject({
+      method: "PATCH", url: `/etapi/notes/${noteId}`, headers,
+      payload: { expectedVersion: before.version, content: exported.content },
+    });
+    expect(updated.statusCode).toBe(200);
+    const after = (await app.inject({ url: `/etapi/notes/${noteId}?format=json`, headers })).json();
+    expect(after.content).toEqual(before.content);
+  });
+
+  it("reports external changes independently of sync success",async()=>{
+    const admin={authorization:`Bearer ${deviceToken}`};
+    const readVersion=async()=> (await app.inject({url:"/api/v1/tree/version",headers:admin})).json().version;
+    const before=await readVersion();
+    const note=(await app.inject({method:"POST",url:"/etapi/notes",headers,payload:{title:"version signal"}})).json();
+    const created=await readVersion();expect(created).toBeGreaterThan(before);
+    await app.inject({method:"PATCH",url:`/etapi/notes/${note.id}`,headers,payload:{title:"renamed externally",expectedVersion:note.version}});
+    const renamed=await readVersion();expect(renamed).toBeGreaterThan(created);
+    await app.inject({method:"PATCH",url:`/etapi/placements/${note.placements[0].placementId}`,headers,payload:{parentPlacementId:"00000000-0000-4000-8000-000000000002",position:0}});
+    expect(await readVersion()).toBeGreaterThan(renamed);
+  });
+
 });

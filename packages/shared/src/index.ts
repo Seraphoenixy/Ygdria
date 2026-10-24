@@ -436,3 +436,5 @@ export type SyncMaintenanceStats = {
   };
   warnings: SyncMaintenanceWarning[];
 };
+
+export { orderSyncChanges } from "./sync-order.js";

@@ -1,11 +1,10 @@
-import {
-  decodeStoredContent,
-  recordChange,
-  type ContentCodec,
-} from "@ygdria/database";
+import { createHash } from "node:crypto";
+import { decodeStoredContent, recordChange, type ContentCodec } from "@ygdria/database";
 import { markdownToTiptap, tiptapToMarkdown } from "@ygdria/editor/markdown";
 import {
   CALENDAR_PLACEMENT_ID,
+  TAG_MAX_COUNT,
+  TAG_MAX_LENGTH,
   SYSTEM_ROOT_NOTE_ID,
   SYSTEM_ROOT_PLACEMENT_ID,
   SYSTEM_TRASH_NOTE_ID,
@@ -27,6 +26,17 @@ import { readTags } from "./properties-utils.js";
 export class PatchTargetError extends Error {
   statusCode = 422;
   code = "PatchTargetError";
+  constructor(
+    message: string,
+    public readonly diagnostics?: {
+      editIndex?: number;
+      expectedMatches?: number;
+      actualMatches?: number;
+      candidateOffsets?: number[];
+    },
+  ) {
+    super(message);
+  }
 }
 export type ExternalTextEdit = {
   oldText: string;
@@ -60,6 +70,12 @@ function applyLiteralEdits(source: string, edits: ExternalTextEdit[]) {
     if (positions.length !== expected) {
       throw new PatchTargetError(
         `Edit ${editIndex + 1} expected ${expected} literal match(es), found ${positions.length}`,
+        {
+          editIndex,
+          expectedMatches: expected,
+          actualMatches: positions.length,
+          candidateOffsets: positions.slice(0, 20),
+        },
       );
     }
     matches.push(positions.length);
@@ -82,6 +98,40 @@ function applyLiteralEdits(source: string, edits: ExternalTextEdit[]) {
       content.slice(0, replacement.start) + replacement.text + content.slice(replacement.end);
   }
   return { content, matches };
+}
+
+function externalSectionRange(document: NoteContent, headingPath: string[]) {
+  const nodes = (document.content ?? []) as Array<{
+    type: string;
+    attrs?: { level?: number };
+    text?: string;
+    content?: unknown[];
+  }>;
+  const textOf = (node: unknown): string => {
+    const n = node as { text?: string; content?: unknown[] };
+    return n.text ?? (n.content ?? []).map(textOf).join("");
+  };
+  const path: Array<{ level: number; title: string }> = [];
+  const candidates: Array<{ start: number; level: number }> = [];
+  nodes.forEach((node, index) => {
+    if (node.type !== "heading") return;
+    const level = node.attrs?.level ?? 1;
+    while (path.length && path[path.length - 1].level >= level) path.pop();
+    path.push({ level, title: textOf(node) });
+    if (JSON.stringify(path.map((item) => item.title)) === JSON.stringify(headingPath))
+      candidates.push({ start: index, level });
+  });
+  if (candidates.length !== 1)
+    throw new PatchTargetError(`Section path expected one match, found ${candidates.length}`);
+  const { start, level } = candidates[0];
+  let end = start + 1;
+  while (
+    end < nodes.length &&
+    !(nodes[end].type === "heading" && (nodes[end].attrs?.level ?? 1) <= level)
+  )
+    end++;
+  const oldText = tiptapToMarkdown({ type: "doc", content: nodes.slice(start + 1, end) }).markdown;
+  return { nodes, start, end, oldText };
 }
 
 export class NoteService extends PlacementService {
@@ -268,6 +318,117 @@ export class NoteService extends PlacementService {
     };
   }
 
+  externalMutation(
+    scope: string,
+    key: string | undefined,
+    request: unknown,
+    write: () => { id: string; version: number; updatedAt: string },
+  ): { id: string; version: number; updatedAt: string } {
+    if (!key) return write();
+    const canonical = (value: unknown): string => {
+      if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+      if (value && typeof value === "object")
+        return `{${Object.entries(value)
+          .filter(([, v]) => v !== undefined)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`)
+          .join(",")}}`;
+      return JSON.stringify(value);
+    };
+    const hash = createHash("sha256").update(canonical(request)).digest("hex");
+    return this.store.sqlite.transaction(() => {
+      this.store.sqlite
+        .prepare("DELETE FROM etapi_receipts WHERE created_at<?")
+        .run(Date.now() - 30 * 86400_000);
+      const receipt = this.store.sqlite
+        .prepare("SELECT request_hash,result_json FROM etapi_receipts WHERE scope=? AND key=?")
+        .get(scope, key) as { request_hash: string; result_json: string } | undefined;
+      if (receipt) {
+        if (receipt.request_hash !== hash)
+          throw new ConflictError("Idempotency key was already used with different parameters");
+        return JSON.parse(receipt.result_json) as {
+          id: string;
+          version: number;
+          updatedAt: string;
+        };
+      }
+      const note = write();
+      const result = { id: note.id, version: note.version, updatedAt: note.updatedAt };
+      this.store.sqlite
+        .prepare("INSERT INTO etapi_receipts VALUES (?,?,?,?,?)")
+        .run(scope, key, hash, JSON.stringify(result), Date.now());
+      return result;
+    })();
+  }
+
+  externalSection(noteId: string, headingPath: string[]) {
+    const note = this.get(noteId);
+    if (!note) throw new NotFoundError();
+    if (note.isProtected) throw new ConflictError("Cannot access protected notes via ETAPI");
+    if (note.type === "code") throw new ConflictError("Sections are only supported for text notes");
+    const section = externalSectionRange(note.content as NoteContent, headingPath);
+    return { id: note.id, version: note.version, headingPath, content: section.oldText };
+  }
+
+  operateExternal(
+    noteId: string,
+    input: {
+      operation: "append" | "replace_section" | "tags";
+      text?: string;
+      headingPath?: string[];
+      oldText?: string;
+      addTags?: string[];
+      removeTags?: string[];
+      expectedVersion?: number;
+    },
+  ) {
+    const note = this.get(noteId);
+    if (!note) throw new NotFoundError();
+    if (note.isProtected) throw new ConflictError("Cannot modify protected notes via ETAPI");
+    if (input.expectedVersion !== undefined && input.expectedVersion !== note.version)
+      throw new ConflictError(undefined, note.version);
+    if (input.operation === "tags") {
+      const removed = new Set(input.removeTags ?? []);
+      const tags = [
+        ...new Set([...note.tags.filter((tag) => !removed.has(tag)), ...(input.addTags ?? [])]),
+      ];
+      if (
+        tags.length > TAG_MAX_COUNT ||
+        tags.some((tag) => !tag.trim() || tag.length > TAG_MAX_LENGTH)
+      )
+        throw new PatchTargetError(
+          `Resulting tags exceed limits (${TAG_MAX_COUNT} tags, ${TAG_MAX_LENGTH} characters each)`,
+        );
+      return this.updateExternal(noteId, { tags, expectedVersion: note.version });
+    }
+    if (input.operation === "append") {
+      if (note.type === "code")
+        return this.update(noteId, {
+          code: String(note.content ?? "") + (input.text ?? ""),
+          expectedVersion: note.version,
+        });
+      const document = note.content as NoteContent;
+      const added = markdownToTiptap(input.text ?? "").document;
+      return this.update(noteId, {
+        content: { ...document, content: [...(document.content ?? []), ...(added.content ?? [])] },
+        expectedVersion: note.version,
+      });
+    }
+    if (note.type === "code") throw new ConflictError("Sections are only supported for text notes");
+    const document = note.content as NoteContent;
+    const { nodes, start, end, oldText } = externalSectionRange(document, input.headingPath ?? []);
+    if (oldText !== input.oldText)
+      throw new PatchTargetError("Section body changed; read the note and regenerate the edit");
+    const replacement = markdownToTiptap(input.text ?? "").document.content ?? [];
+    return this.update(noteId, {
+      content: {
+        ...document,
+        content: [...nodes.slice(0, start + 1), ...replacement, ...nodes.slice(end)],
+      },
+      expectedVersion: note.version,
+    });
+  }
+
   createExternal(input: {
     title: string;
     parentPlacementId?: string;
@@ -359,7 +520,7 @@ export class NoteService extends PlacementService {
     const note = this.get(noteId);
     if (!note) throw new NotFoundError();
     if (note.isProtected) throw new ConflictError("Cannot modify protected note content via ETAPI");
-    if (note.version !== input.expectedVersion) throw new ConflictError();
+    if (note.version !== input.expectedVersion) throw new ConflictError(undefined, note.version);
     const source =
       note.type === "code"
         ? typeof note.content === "string"
@@ -497,7 +658,12 @@ export class NoteService extends PlacementService {
         : { content: JSON.parse(restored) as NoteContent, expectedVersion },
     );
   }
-  search(query: string, includeArchived = false, placementId?: string): SearchResult[] {
+  search(
+    query: string,
+    includeArchived = false,
+    placementId?: string,
+    tag?: string,
+  ): SearchResult[] {
     if (!query.trim()) return [];
     const normalizedQuery = query.trim();
     const resultLimit = 30;
@@ -521,7 +687,7 @@ export class NoteService extends PlacementService {
     const hanPredicates = hanTerms
       .map(() => "(n.title LIKE ? ESCAPE '\\' OR n.plain_text LIKE ? ESCAPE '\\')")
       .join(" AND ");
-    const visibility = `n.deleted_at IS NULL AND n.is_protected=0 ${includeArchived ? "" : "AND n.archived_at IS NULL"}`;
+    const visibility = `n.deleted_at IS NULL AND n.is_protected=0 ${includeArchived ? "" : "AND n.archived_at IS NULL"} ${tag ? "AND EXISTS(SELECT 1 FROM json_each(n.properties_json, '$.tags') jt WHERE jt.value=?)" : ""}`;
     this.assertSearchPlacement(placementId);
     const subtreeFilter = placementId
       ? "AND n.id IN (WITH RECURSIVE subtree AS (SELECT id,note_id FROM placements WHERE id=? UNION ALL SELECT p.id,p.note_id FROM placements p JOIN subtree s ON p.parent_placement_id=s.id) SELECT note_id FROM subtree)"
@@ -536,18 +702,16 @@ export class NoteService extends PlacementService {
          WHERE notes_fts MATCH ? AND ${visibility} ${hanPredicates ? `AND ${hanPredicates}` : ""} ${subtreeFilter}
          ORDER BY relevance,n.updated_at DESC LIMIT ${resultLimit}`,
           )
-          .all(ftsQuery, ...hanParams, ...subtreeParams) as Array<
+          .all(ftsQuery, ...(tag ? [tag] : []), ...hanParams, ...subtreeParams) as Array<
           SearchRow & { relevance: number }
         >)
       : (this.store.sqlite
           .prepare(
             `SELECT n.id noteId,n.title title,
-           ${hanTerms
-             .reduce(
-               (expr, _term) => `replace(${expr},?,'<mark>' || ? || '</mark>')`,
-               `CASE WHEN instr(n.plain_text, ?) > 0 THEN substr(n.plain_text,MAX(1,instr(n.plain_text,?)-60),180) ELSE n.title END`,
-             )
-           } snippet,
+           ${hanTerms.reduce(
+             (expr, _term) => `replace(${expr},?,'<mark>' || ? || '</mark>')`,
+             `CASE WHEN instr(n.plain_text, ?) > 0 THEN substr(n.plain_text,MAX(1,instr(n.plain_text,?)-60),180) ELSE n.title END`,
+           )} snippet,
            n.updated_at updatedAt,n.archived_at IS NOT NULL isArchived,0 relevance
          FROM notes n WHERE ${visibility} AND ${hanPredicates} ${subtreeFilter}
          ORDER BY n.updated_at DESC LIMIT ${resultLimit}`,
@@ -556,6 +720,7 @@ export class NoteService extends PlacementService {
             hanTerms[0],
             hanTerms[0],
             ...hanTerms.flatMap((term) => [term, term]),
+            ...(tag ? [tag] : []),
             ...hanParams,
             ...subtreeParams,
           ) as Array<SearchRow & { relevance: number }>);
@@ -670,9 +835,7 @@ export class NoteService extends PlacementService {
          ORDER BY n.updated_at DESC
          LIMIT ?`,
       )
-      .all(
-        placementId ? [tag, placementId, resultLimit] : [tag, resultLimit],
-      ) as Array<{
+      .all(placementId ? [tag, placementId, resultLimit] : [tag, resultLimit]) as Array<{
       noteId: string;
       title: string;
       plainText: string;

@@ -1,41 +1,10 @@
 # Ygdria ETAPI：给 AI 的调用说明
 
-你可以通过 Ygdria 桌面应用在本机提供的 ETAPI 读取和编辑笔记。只使用用户明确提供给你的 **ETAPI 短期令牌**；不要索取、保存或尝试使用主密码、设备令牌、`X-Ygdria-Local-Token`，也不要调用 `/api/v1/*`。
+通过本机 `http://127.0.0.1:4318/etapi/*` 读写笔记。用户先在桌面设置开启 **AI 与外部访问**；关闭时请求返回 403。无需访问令牌，不要索取主密码、设备令牌或桌面私有凭据，也不要调用 `/api/v1/*`。
 
-## 连接
+每个请求添加 `X-Ygdria-External-Access: 1`，MCP 服务会自动处理。只支持本机原生客户端，不支持网页或远程直接调用。
 
-基础地址固定为：
-
-```text
-http://127.0.0.1:4318
-```
-
-所有请求都带：
-
-```http
-Authorization: Bearer <ETAPI_TOKEN>
-```
-
-令牌仅对本机桌面应用有效，具有有限有效期；过期、撤销、签发设备被撤销或主密码变更后会失效。桌面应用重启不会使未到期令牌失效。令牌只可调用本页列出的 `/etapi/*` 接口。
-
-## 必须遵守的操作规则
-
-1. 除非用户明确要求修改，否则只读，不创建、不编辑、不移动笔记。
-2. 编辑已有笔记前，先读取它以获得最新 `version`。
-3. `PATCH /etapi/notes/:id` 必须带读取到的 `expectedVersion`。
-4. 收到 `409 Conflict` 后，重新读取笔记、基于最新内容重新判断；不要直接重试旧写入。
-5. 网络超时后不要自动重试 `POST /etapi/notes`，因为可能已成功创建笔记。先搜索或询问用户。
-6. 不要请求、修改或推断受保护笔记。它们不会提供正文，层级中可能仅有脱敏占位。
-7. 不要使用删除、清空回收站等未列出的接口；ETAPI 不提供这些能力。
-
-## 权限
-
-| 权限 | 可以做什么 |
-| --- | --- |
-| `notes:read` | 读取层级、笔记、正文、tag，执行搜索。 |
-| `notes:write` | 创建/更新笔记、替换正文、移动 placement。 |
-
-只持有 `notes:write` 时，写入成功响应只包含 `id`、`version`、`updatedAt`；这不是读取正文的替代方式。
+用户授权整理、归类、生成或编辑任务后，可连续完成范围内的必要操作，无需逐项确认。替换已有内容前读取内容和版本；发生 409 时基于最新状态重新判断。创建和追加使用幂等键；未携带键的创建不能在网络异常后盲目重试。受保护笔记不可读取或修改。ETAPI 不提供永久删除或清空回收站能力。
 
 ## 读取接口
 
@@ -45,7 +14,7 @@ Authorization: Bearer <ETAPI_TOKEN>
 GET /etapi/tree/roots?limit=50
 ```
 
-先用 `roots` 获取顶层节点，再用唯一的 `placementId` 逐层导航；不能获取整棵根树。`roots` 和 `GET /etapi/tree/nodes/:placementId/children` 均分页返回 `{ items, nextCursor }`。名称仅用于 `GET /etapi/tree/resolve?query=...` 定位候选节点；再用候选的 `placementId` 读取节点、子节点或子树。受限子树接口为 `GET /etapi/tree/nodes/:placementId/subtree?maxDepth=2&maxNodes=100`。同一笔记可有多个 placement，因此不要把 `noteId` 当作树节点 ID。
+可先用 `roots` 获取顶层节点，或按名称直接解析目标，再用唯一的 `placementId` 导航。用户任务需要时允许遍历整库，应限制每次响应的深度、节点数和字节数并标明截断。`roots` 和 `GET /etapi/tree/nodes/:placementId/children` 均分页返回 `{ items, nextCursor }`。名称仅用于 `GET /etapi/tree/resolve?query=...` 定位候选节点；再用候选的 `placementId` 读取节点、子节点或子树。受限子树接口为 `GET /etapi/tree/nodes/:placementId/subtree?maxDepth=2&maxNodes=100`。同一笔记可有多个 placement，因此不要把 `noteId` 当作树节点 ID。
 
 每项主要字段：
 
@@ -81,10 +50,10 @@ GET /etapi/notes/:noteId/content?format=markdown
 
 ### 搜索和 tag
 
-二者必须二选一：
+关键词与 tag 可单独使用或组合：
 
 ```http
-GET /etapi/search?q=会议纪要&includeArchived=false
+GET /etapi/search?q=会议纪要&tag=项目&includeArchived=false
 GET /etapi/search?tag=项目&placementId=parent-placement-id
 GET /etapi/tags
 ```
@@ -93,7 +62,7 @@ GET /etapi/tags
 
 ## 写入接口
 
-仅在用户明确授权修改时使用，并以最小改动为原则。
+在用户授权的任务范围内使用；任务级授权包括完成该任务所需的创建、编辑和移动，无需逐项再问。
 
 ### 创建笔记
 
@@ -162,7 +131,7 @@ Content-Type: application/json
 }
 ```
 
-`oldText` 是大小写和换行均敏感的字面文本，默认必须恰好命中一次。对重复片段，传入 `expectedMatches` 并让它等于预期命中数。多个编辑原子执行；找不到目标、命中数不符或目标重叠会返回 `422 PatchTargetError`，此时重新读取内容后再判断。带 `dryRun: true` 可预览结果，但需要同时具备 `notes:read`。
+`oldText` 是大小写和换行均敏感的字面文本，默认必须恰好命中一次。对重复片段，传入 `expectedMatches` 并让它等于预期命中数。多个编辑原子执行；找不到目标、命中数不符或目标重叠会返回 `422 PatchTargetError`，此时重新读取内容后再判断。带 `dryRun: true` 可预览结果。
 
 ### 移动 placement
 
@@ -185,8 +154,7 @@ Content-Type: application/json
 | 状态码 | 应对方式 |
 | --- | --- |
 | `400` | 修正参数、正文格式或版本头后再执行。 |
-| `401` | 停止调用，令牌缺失、无效、过期或已撤销；请用户在桌面设置中创建新令牌。 |
-| `403` | 停止当前操作；令牌缺少所需权限。不要尝试绕过权限。 |
+| `403` | 请用户在桌面设置中开启 AI 与外部访问，然后重新调用；不需要令牌或重启。只允许本机原生客户端访问。 |
 | `404` | 目标不存在；重新读取层级或请用户确认。 |
 | `409` | 重新读取最新状态后再决定是否修改，不能盲目重试。 |
 | `415` | 正文接口的 `Content-Type` 不受支持。 |
@@ -203,4 +171,13 @@ Content-Type: application/json
 }
 ```
 
-完整的管理员、安全与令牌管理说明见 [`etapi.md`](./etapi.md)。
+完整的管理员与本机访问说明见 [`etapi.md`](./etapi.md)。
+
+
+## 按意图操作
+
+- `get_section` 返回的 content 原样作为章节替换的 oldText，同时使用其 version 和 headingPath。
+- 追加使用 `operation: "append"`，标签增删使用 `operation: "tags"`，章节替换使用 `operation: "replace_section"`。
+- 创建建议携带 Idempotency-Key，追加必须携带。同一本机数据库及操作范围内，30 天内可以使用相同键和参数重试。带键写入返回最小回执，另行读取正文。
+- 追加文本按 Markdown 新块处理；代码为字面字符串，调用方自己提供换行。
+- 批量读取和移动逐项报告结果；批量移动不是跨请求事务。

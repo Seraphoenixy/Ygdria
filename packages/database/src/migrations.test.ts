@@ -15,7 +15,7 @@ describe("migration integrity", () => {
 
     expect(sqlite.prepare("SELECT value FROM migration_integrity_metadata WHERE key='checksum_format'").get())
       .toEqual({ value: "stable-v1" });
-    expect(sqlite.prepare("SELECT COUNT(*) count FROM schema_migrations").get()).toEqual({ count: 5 });
+    expect(sqlite.prepare("SELECT COUNT(*) count FROM schema_migrations").get()).toEqual({ count: 6 });
   });
 
   it("rejects the removed file note type", () => {
@@ -36,7 +36,7 @@ describe("migration integrity", () => {
 
     expect(sqlite.prepare("SELECT title FROM notes WHERE id=?").get("00000000-0000-4000-8000-000000000001"))
       .toEqual({ title: "v11 data survives" });
-    expect(sqlite.prepare("SELECT COUNT(*) count FROM schema_migrations").get()).toEqual({ count: 5 });
+    expect(sqlite.prepare("SELECT COUNT(*) count FROM schema_migrations").get()).toEqual({ count: 6 });
     expect(sqlite.prepare("PRAGMA table_info(sync_rebaseline_required)").all())
       .toContainEqual(expect.objectContaining({ name: "snapshot_max_change_id" }));
   });

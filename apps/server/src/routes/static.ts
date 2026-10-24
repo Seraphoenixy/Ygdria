@@ -34,7 +34,13 @@ export function registerStaticRoutes(app: FastifyInstance, deps: StaticRouteDeps
     return reply.type(contentType(file)).send(readFileSync(file));
   });
 
-  app.get("/*", async (_request, reply) =>
-    reply.type("text/html; charset=utf-8").send(readFileSync(resolve(webDist, "index.html"))),
-  );
+  app.get("/*", async (request, reply) => {
+    const pathname = request.url.split("?")[0];
+    if (pathname.startsWith("/api/") || pathname.startsWith("/etapi/")) {
+      return reply.code(404).send({ error: { code: "NotFound", message: "API route not found" } });
+    }
+    return reply
+      .type("text/html; charset=utf-8")
+      .send(readFileSync(resolve(webDist, "index.html")));
+  });
 }

@@ -1517,7 +1517,7 @@ export function App({
             syncRunsAutomatically={isDesktopApp}
             canEditSyncServerUrl={Capacitor.isNativePlatform()}
             syncServerDisplayUrl={isDesktopApp ? desktopRemoteServerUrl : undefined}
-            etapiTokenManagementAvailable={isDesktopApp}
+            etapiAccessAvailable={isDesktopApp}
             onProtectedSessionTimeoutChange={handleProtectedSessionTimeoutChange}
             onMaintainDatabase={maintainDatabase}
             noteIsLoading={note.isLoading}

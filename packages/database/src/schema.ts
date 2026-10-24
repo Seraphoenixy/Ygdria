@@ -1,5 +1,30 @@
 import { sql } from "drizzle-orm";
-import { blob, check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  blob,
+  check,
+  index,
+  integer,
+  sqliteTable,
+  text,
+  uniqueIndex,
+  primaryKey,
+} from "drizzle-orm/sqlite-core";
+
+/** Local automation receipts are excluded from sync; retained for 30 days. */
+export const etapiReceipts = sqliteTable(
+  "etapi_receipts",
+  {
+    scope: text("scope").notNull(),
+    key: text("key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    resultJson: text("result_json").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.scope, table.key] }),
+    index("etapi_receipts_created_idx").on(table.createdAt),
+  ],
+);
 
 const timestamps = {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),

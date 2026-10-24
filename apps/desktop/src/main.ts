@@ -139,8 +139,8 @@ function databasePath() {
   return database;
 }
 
-function etapiSessionStorePath() {
-  return path.join(app.getPath("userData"), "etapi-sessions.json");
+function etapiAccessStorePath() {
+  return path.join(app.getPath("userData"), "etapi-access.json");
 }
 
 async function startLocalApiWithRetry() {
@@ -157,7 +157,7 @@ async function startLocalApiWithRetry() {
         origin: "http://localhost:5173",
         localToken: localApiToken,
         enableEtapi: true,
-        etapiSessionStorePath: etapiSessionStorePath(),
+        etapiAccessStorePath: etapiAccessStorePath(),
       });
       apiUrl = await localApi.listen({
         // Keep the loopback endpoint discoverable for local integrations. The

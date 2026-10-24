@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { NotFoundError, ConflictError, DeviceError } from "@ygdria/domain";
+import { NotFoundError, ConflictError, DeviceError, PatchTargetError } from "@ygdria/domain";
 
 export function registerErrorHandler(app: FastifyInstance) {
-  app.setErrorHandler((error, _req, reply) => {
+  app.setErrorHandler((error, req, reply) => {
     const issue = error as Error & { statusCode?: number };
     let code: number;
     if (issue instanceof NotFoundError) code = 404;
@@ -25,6 +25,24 @@ export function registerErrorHandler(app: FastifyInstance) {
     // error carries one; otherwise fall back to the constructor name so existing
     // clients that branch on the code string keep working.
     const errorCode = (issue as Error & { code?: string }).code ?? issue.constructor.name;
-    reply.code(code).send({ error: { code: errorCode, message } });
+    const readableEtapi =
+      req.url.startsWith("/etapi/");
+    const diagnostics =
+      readableEtapi && issue instanceof PatchTargetError ? issue.diagnostics : undefined;
+    reply
+      .code(code)
+      .send({
+        error: {
+          code: errorCode,
+          message,
+          ...(diagnostics ? { diagnostics } : {}),
+          ...(readableEtapi && "currentVersion" in issue && typeof issue.currentVersion === "number"
+            ? { currentVersion: issue.currentVersion }
+            : {}),
+          ...(req.url.startsWith("/etapi/") && code === 400 && "validationIssues" in issue
+            ? { validation: issue.validationIssues }
+            : {}),
+        },
+      });
   });
 }

@@ -108,7 +108,7 @@ export class NotFoundError extends Error {
   }
 }
 export class ConflictError extends Error {
-  constructor(message = "Note changed elsewhere; refresh before saving.") {
+  constructor(message = "Note changed elsewhere; refresh before saving.", public readonly currentVersion?: number) {
     super(message);
   }
 }
@@ -405,7 +405,7 @@ export class NoteServiceBase {
     this.assertNotSystemNote(noteId);
     const old = this.get(noteId);
     if (!old) throw new NotFoundError();
-    if (input.expectedVersion !== old.version) throw new ConflictError();
+    if (input.expectedVersion !== old.version) throw new ConflictError(undefined, old.version);
     const t = now();
     if (old.isProtected) {
       // Protected notes: only accept contentCiphertext updates

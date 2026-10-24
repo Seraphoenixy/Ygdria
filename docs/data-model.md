@@ -361,3 +361,7 @@ WAL 改善读写并发；外键阻止 placement、relation、revision 关联指�
 ```
 
 具体动作：重建 FTS（DROP + CREATE，跳过受保护笔记，避免误把密文写进索引）、重建有效正文的 `plain_text`、按每个父 placement 重新编号 `position`（修复同层重号或空号），以及清理受控临时目录 `attachments-tmp` 中的上传残留。当前模型按需从 `content_data` 生成 Markdown，未保存 `markdown_cache`，所以该项会报告为 `not-applicable`。正文 JSON、revision、附件元数据、关系和有环 placement 均不会自动篡改，须人工处理或从备份恢复。
+
+## ETAPI 幂等回执（迁移 16）
+
+`etapi_receipts` 是本机自动化操作回执表，主键为 `(scope, key)`，另有 `request_hash`、`result_json`、`created_at` 和创建时间索引。scope 隔离本机创建操作和具体操作目标；request_hash 为规范化请求的 SHA-256，result_json 仅保存笔记 id、version、updatedAt。回执与实际创建或编辑同事务提交，保留 30 天，带键写入时清理过期记录。不参与同步日志、游标或墓碑；随 SQLite 备份恢复。恢复较旧备份后不保证旧请求去重。

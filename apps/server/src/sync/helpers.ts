@@ -8,7 +8,7 @@ import {
   type ContentCodec,
   type SqliteDatabase,
 } from "@ygdria/database";
-import { SYNC_MAX_CLOCK_SKEW_MS, SYNC_SNAPSHOT_EXPIRED, attachmentIdsFromSerializedDocument, CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
+import { orderSyncChanges, SYNC_MAX_CLOCK_SKEW_MS, SYNC_SNAPSHOT_EXPIRED, attachmentIdsFromSerializedDocument, CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
 import { isSensitiveSettingKey } from "../http/settings.js";
 
 export type SyncSqlite = SqliteDatabase;
@@ -701,10 +701,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
   const logChange = (entityType: string, entityId: string, changeKind: ChangeKind) => {
     if (recordOutbound) recordChange(sqlite, entityType, entityId, changeKind);
   };
-  const ordered = [...changes].sort((a, b) => {
-    const rank = (type: string) => type === "note" ? 0 : type === "placement" ? 1 : type === "placement-order" ? 2 : 3;
-    return rank(a.entityType) - rank(b.entityType);
-  });
+  const ordered = orderSyncChanges(changes);
   // Clock arbitration: a record claiming to be from further in the future than
   // the skew tolerance is capped to the receiver's clock. Honest devices are
   // untouched; a run-ahead device can no longer mint timestamps that outrank

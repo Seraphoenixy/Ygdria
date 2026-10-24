@@ -16,6 +16,7 @@ describe("ETAPI", () => {
   let app: any;
   beforeAll(async () => {
     app = buildApp({ databaseUrl: file });
+    await app.inject({method:"PATCH",url:"/api/v1/etapi/access",payload:{enabled:true}});
   });
   afterAll(() => app.close());
   it("writes and reads markdown", async () => {
@@ -25,20 +26,21 @@ describe("ETAPI", () => {
     const firstSave = await app.inject({
       method: "PUT",
       url: `/etapi/notes/${n.id}/content`,
-      headers: { "content-type": "text/markdown", "if-match": String(n.version) },
+      headers: { "x-ygdria-external-access":"1", "content-type": "text/markdown", "if-match": String(n.version) },
       payload: "# Hello",
     });
     const repeatedSave = await app.inject({
       method: "PUT",
       url: `/etapi/notes/${n.id}/content`,
       headers: {
+        "x-ygdria-external-access":"1",
         "content-type": "text/markdown",
         "if-match": String(firstSave.json().version),
       },
       payload: "# Hello",
     });
     expect(repeatedSave.json().version).toBe(firstSave.json().version);
-    const r = await app.inject(`/etapi/notes/${n.id}/content?format=markdown`);
+    const r = await app.inject({url:`/etapi/notes/${n.id}/content?format=markdown`,headers:{"x-ygdria-external-access":"1"}});
     expect(r.body).toContain("Hello");
   });
   it("ensures today's calendar day without creating a child note", async () => {
@@ -353,31 +355,15 @@ describe("desktop local-token boundary", () => {
     expect(brandMark.headers["content-type"]).toContain("image/png");
   });
 
-  it("lets a short-lived ETAPI token access only the local ETAPI surface", async () => {
-    const issued = await app.inject({
-      method: "POST",
-      url: "/api/v1/etapi/sessions",
-      headers: { "x-ygdria-local-token": token },
-      payload: { label: "local AI", scopes: ["notes:read"], ttlSeconds: 300 },
-    });
-    expect(issued.statusCode).toBe(201);
-    const authorization = `Bearer ${issued.json().accessToken}`;
-
-    expect((await app.inject({ url: "/etapi/tree/roots", headers: { authorization } })).statusCode).toBe(200);
-    expect(
-      (await app.inject({ url: "/api/v1/tree", headers: { authorization } })).statusCode,
-    ).toBe(401);
-    expect(
-      (
-        await app.inject({
-          method: "POST",
-          url: "/api/v1/etapi/sessions",
-          headers: { authorization },
-          payload: { label: "escalation", scopes: ["notes:read"] },
-        })
-      ).statusCode,
-    ).toBe(401);
+  it("lets enabled local tools access ETAPI without the desktop API credential",async()=>{
+    const headers={"x-ygdria-external-access":"1"};
+    expect((await app.inject({url:"/etapi/tree/roots",headers})).statusCode).toBe(403);
+    const enabled=await app.inject({method:"PATCH",url:"/api/v1/etapi/access",headers:{"x-ygdria-local-token":token},payload:{enabled:true}});
+    expect(enabled.statusCode).toBe(200);
+    expect((await app.inject({url:"/etapi/tree/roots",headers})).statusCode).toBe(200);
+    expect((await app.inject({url:"/api/v1/tree",headers})).statusCode).toBe(401);
   });
+
 });
 
 describe("Sync deletion", () => {
