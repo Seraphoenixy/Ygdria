@@ -71,7 +71,7 @@ export function registerEtapiRoutes(app: FastifyInstance, deps: EtapiRouteDeps) 
 
   app.get("/etapi/capabilities", async (req) => ({
     access: "local-read-write",
-    operations: ["append", "replace_section", "tags"],
+    operations: ["append", "replace_section", "tags", "upload_image"],
     idempotencyRetentionDays: 30,
   }));
 

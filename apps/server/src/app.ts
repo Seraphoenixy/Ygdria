@@ -44,6 +44,7 @@ import { registerRelationRoutes } from "./routes/relations.js";
 import { registerMaintenanceRoutes } from "./routes/maintenance.js";
 import { registerEtapiAccessRoutes } from "./routes/etapi-access.js";
 import { registerEtapiRoutes } from "./routes/etapi.js";
+import { registerEtapiImageRoutes } from "./routes/etapi-images.js";
 import { registerStaticRoutes } from "./routes/static.js";
 
 export function buildApp(
@@ -182,7 +183,10 @@ export function buildApp(
     recordOutbound: (req) => pulledRemoteWrite(req),
   });
   registerMaintenanceRoutes(app, { maintenance, sqlite: store.sqlite });
-  if (enableEtapi) registerEtapiRoutes(app, { notes });
+  if (enableEtapi) {
+    registerEtapiRoutes(app, { notes });
+    registerEtapiImageRoutes(app, { notes, attachments });
+  }
   registerRelationRoutes(app, { sqlite: store.sqlite });
   registerStaticRoutes(app, { webDist });
 

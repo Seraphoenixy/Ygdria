@@ -265,3 +265,16 @@ Content-Type: application/json
 MCP 适配器可通过既有分页接口实现有预算的目录概览、批量读取和批量移动。批量移动逐项执行，允许部分成功，不构成跨请求事务。遍历整库可用于用户授权的整理任务；客户端应明确标记截断和待续位置。
 
 ETAPI 的参数校验失败还返回 `error.validation`（最多 20 项字段路径、校验码和说明）；版本冲突返回 `error.currentVersion`。通用 API 和 5xx 响应不暴露这些诊断。
+
+
+## 图片上传
+
+`POST /etapi/notes/:id/images` 使用现有本机外部访问开关和请求头，接收 JSON：
+
+```json
+{ "filename": "diagram.png", "dataBase64": "<标准 Base64 图片字节，无 data: 前缀>" }
+```
+
+笔记必须存在且可通过 ETAPI 访问，不支持受保护笔记。按文件内容识别 PNG、JPEG、GIF、WebP、SVG，最大 20 MiB，校验标准 Base64 和文件名。使用现有 AttachmentService 存储、哈希去重和同步记录；相同图片可安全重传。返回 `id`、`filename`、`mimeType`、`size`、`contentHash`、`url` 和 `markdown`。
+
+上传不修改正文或版本。调用者须用当前版本将返回的 Markdown 插入正文，资源链接为 `/api/v1/attachments/<id>`，由编辑器现有附件加载逻辑显示。未被正文引用的图片仍遵循现有未使用附件清理规则。不要在正文中嵌入 Base64 data URL。
