@@ -37,10 +37,15 @@ X-Ygdria-External-Access: 1
 | GET | `/etapi/tags` | 标签统计。 |
 | POST | `/etapi/notes` | 创建笔记，支持 Idempotency-Key。 |
 | PATCH | `/etapi/notes/:id` | 原子更新标题、正文、标签或语言。 |
+| DELETE | `/etapi/notes/:id` | If-Match 版本校验后将无子节点的笔记移入回收站。 |
 | PUT | `/etapi/notes/:id/content` | 带版本的正文替换。 |
 | PATCH | `/etapi/notes/:id/content` | 精确文本编辑或预览。 |
 | POST | `/etapi/notes/:id/operations` | 追加、章节替换、标签增删。 |
 | PATCH | `/etapi/placements/:id` | 移动 placement。 |
+
+### 可恢复删除
+
+删除使用 `DELETE /etapi/notes/:id`，必带 `If-Match: <当前版本>`，成功返回 `{ id, deleted: true, undoId }`。复用应用回收站与撤销记录、同步变更日志，不永久删除。删除会移除该笔记的全部 placement（clone）；任意 placement 存在直接子节点时拒绝，以避免级联移除后代。受保护笔记、系统笔记、版本冲突或存在子节点返回 409；缺少有效版本返回 400，目标不存在或已入回收站返回 404。可通过应用回收站恢复。网络异常后应先检查目标状态，不盲目重试；旧服务端的 404 也可能表示尚不支持该路由。
 
 ## 3. 读取层级
 

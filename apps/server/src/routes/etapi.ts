@@ -195,6 +195,11 @@ export function registerEtapiRoutes(app: FastifyInstance, deps: EtapiRouteDeps) 
     return notes.externalNote((req.params as { id: string }).id, query.format);
   });
 
+  app.delete("/etapi/notes/:id", async (req) => {
+    const expectedVersion = parseExpectedVersion(req.headers["if-match"]);
+    return notes.removeExternal((req.params as { id: string }).id, expectedVersion);
+  });
+
   app.post("/etapi/notes", async (req, reply) => {
     const input = parse(createExternalNoteSchema, req.body, req.log);
     const key = parse(

@@ -13,14 +13,15 @@ import { Highlight } from "@tiptap/extension-highlight";
 import { TextAlign } from "@tiptap/extension-text-align";
 import { Underline } from "@tiptap/extension-underline";
 import { TextStyle, Color, FontSize } from "@tiptap/extension-text-style";
-import { Extension, Node, mergeAttributes, type Editor } from "@tiptap/core";
+import { Extension, Node, type Editor } from "@tiptap/core";
 import type { NoteContent } from "@ygdria/shared";
-import { normalizePastedHtml } from "./clipboard.js";
+import { hasPastedContent, normalizePastedHtml, pasteClipboardHtml } from "./clipboard.js";
 import { markdownToTiptap, tiptapToMarkdown } from "./markdown.js";
 import { YgdriaCodeBlock } from "./CodeBlock.js";
 import { SearchReplace, SearchReplaceBar } from "./SearchReplaceBar.js";
 import { EDITOR_OPEN_SEARCH_EVENT } from "./search-events.js";
 import { Redacted } from "./Redacted.js";
+import { NoteReference, activateNoteReference } from "./NoteReference.js";
 import { selectTable, selectTableColumn, selectTableRow, TABLE_ACTION_LABELS } from "./table-actions.js";
 import katex from "katex";
 // @ts-ignore
@@ -28,17 +29,19 @@ import "katex/dist/katex.min.css";
 
 type EditorContextMenu = { x: number; y: number; hasSelection: boolean; isInTable: boolean } | null;
 
-function createClipboardShortcuts(readText?: () => Promise<string>) {
+function createClipboardShortcuts(readText?: () => Promise<string>, onError?: () => void) {
   const doReadText = readText ?? (() => navigator.clipboard.readText());
   return Extension.create({
     name: "clipboardShortcuts",
     addKeyboardShortcuts() {
       return {
         "Mod-Shift-v": () => {
+          if (!this.editor.isEditable) return false;
           doReadText().then((text) => {
-            this.editor.commands.insertContent(text);
+            if (!this.editor.isDestroyed && this.editor.isEditable && text)
+              this.editor.view.pasteText(text);
           }).catch(() => {
-            // Clipboard API may reject in insecure contexts
+            onError?.();
           });
           return true;
         },
@@ -83,26 +86,6 @@ const Indent = Extension.create({
         return (this.editor.commands as any).liftListItem("listItem");
       },
     };
-  },
-});
-
-const NoteReference = Node.create({
-  name: "noteReference",
-  inline: true,
-  group: "inline",
-  atom: true,
-  addAttributes() {
-    return { noteId: { default: null }, title: { default: "" } };
-  },
-  parseHTML() {
-    return [{ tag: "span[data-note-id]" }];
-  },
-  renderHTML({ HTMLAttributes }) {
-    return [
-      "span",
-      mergeAttributes({ class: "note-reference" }, HTMLAttributes),
-      HTMLAttributes.title,
-    ];
   },
 });
 
@@ -198,6 +181,7 @@ export function YgdriaEditor({
   onUploadImage,
   resolveImageSrc,
   onEditorReady,
+  onNavigateNote,
   readOnly = false,
   markdownView = false,
   markdownNotices,
@@ -214,6 +198,8 @@ export function YgdriaEditor({
   /** Resolves authenticated attachment URLs to browser-displayable object URLs. */
   resolveImageSrc?: (src: string) => Promise<string>;
   onEditorReady?: (editor: Editor) => void;
+  /** Open a referenced note through the host application's workspace. */
+  onNavigateNote?: (noteId: string) => void;
   readOnly?: boolean;
   markdownView?: boolean;
   /** Localized conversion notices supplied by the host application's i18n. */
@@ -233,6 +219,8 @@ export function YgdriaEditor({
   const [searchOpen, setSearchOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const onSaveRef = useRef(onSave);
+  const onNavigateNoteRef = useRef(onNavigateNote);
+  onNavigateNoteRef.current = onNavigateNote;
   // Leaving edit mode removes `onSave` before this component's Markdown
   // cleanup runs. Keep the most recent editable callback so that cleanup can
   // still commit the Markdown draft for the note that owned this editor.
@@ -265,7 +253,7 @@ export function YgdriaEditor({
       AuthenticatedImage,
       MathInline,
       MathBlock,
-      createClipboardShortcuts(readClipboardText),
+      createClipboardShortcuts(readClipboardText, () => onUploadErrorRef.current?.("Clipboard read failed")),
       Indent,
       NoteReference,
       Redacted,
@@ -285,7 +273,17 @@ export function YgdriaEditor({
     editorProps: {
       attributes: { class: "ygdria-document ygdria-editor", spellcheck: "false" },
       transformPastedHTML: normalizePastedHtml,
-      handlePaste: (view, event) => {
+      handlePaste: (view, event, slice) => {
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        // Some applications provide HTML which sanitizes/parses to nothing,
+        // alongside usable plain text. Never consume that text as an empty paste.
+        if (text) {
+          if (hasPastedContent(slice)) return false;
+          return view.pasteText(text);
+        }
+        // Rich content with text must not be replaced by an accompanying
+        // bitmap representation (Office and browsers can provide both).
+        if (slice.content.textBetween(0, slice.content.size).trim().length) return false;
         // Browsers expose screenshots and copied files as ClipboardItems, not
         // HTML. Tiptap does not upload those files by itself, so handle them
         // before the default parser silently drops them.
@@ -301,6 +299,7 @@ export function YgdriaEditor({
           for (const file of files) {
             try {
               const src = await onUploadImage(file);
+              if (view.isDestroyed || !view.editable) return;
               // Content can change while the attachment uploads. Clamp the
               // saved position rather than using a possibly stale selection.
               position = Math.min(position, view.state.doc.content.size);
@@ -334,6 +333,10 @@ export function YgdriaEditor({
         return false;
       },
       handleDOMEvents: {
+        // DOM handlers also run in read-only mode, where ProseMirror skips
+        // editable keyboard handlers and does not treat a click as an edit.
+        click: (_view, event) => activateNoteReference(event, onNavigateNoteRef.current),
+        keydown: (_view, event) => event.key === "Enter" && activateNoteReference(event, onNavigateNoteRef.current),
         contextmenu: (view, event) => {
           event.preventDefault();
           window.dispatchEvent(new Event("ygdria:editor-context-menu-open"));
@@ -575,7 +578,7 @@ export function YgdriaEditor({
   });
   const doWriteText = writeClipboardText ?? ((text: string) => navigator.clipboard.writeText(text));
   const paste = async (plain: boolean) => {
-    if (!editor) return;
+    if (!editor || !editor.isEditable) return;
     try {
       if (!plain) {
         let html: string | null = null;
@@ -584,14 +587,14 @@ export function YgdriaEditor({
         } catch {
           // readHtml failed; fall back to readText below
         }
-        if (html) {
-          editor.commands.insertContent(normalizePastedHtml(html));
+        if (editor.isDestroyed || !editor.isEditable) return;
+        if (html && pasteClipboardHtml(editor.view, html)) {
           closeMenu();
           return;
         }
       }
       const text = await doReadText();
-      editor.commands.insertContent(text);
+      if (!editor.isDestroyed && editor.isEditable && text) editor.view.pasteText(text);
     } catch {
       onUploadErrorRef.current?.("Clipboard read failed");
     }

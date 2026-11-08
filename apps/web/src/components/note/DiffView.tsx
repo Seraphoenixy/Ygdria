@@ -1,23 +1,30 @@
 import { useMemo } from "react";
 import { Undo2 } from "lucide-react";
+import { tiptapToMarkdown } from "@ygdria/editor";
 import { t, type Locale } from "../../lib/i18n";
 
 export type DiffOp = { type: "equal" | "insert" | "delete"; text: string };
 
-/** Flatten note content into an array of lines for diffing. */
+/**
+ * Flatten note content into an array of lines for diffing. Code notes (plain
+ * strings) map one input line to one diff line, which `revertHunk` relies on
+ * to reconstruct content by joining lines back. Rich-text documents go through
+ * the shared Markdown converter so diff lines match the note's visual lines:
+ * inline marks no longer split a paragraph into fragments, and hard breaks /
+ * code-block newlines produce real line breaks.
+ */
 export function linesFromContent(content: unknown): string[] {
   if (typeof content === "string") return content.split("\n");
-  const lines: string[] = [];
-  const visit = (node: unknown) => {
-    if (!node || typeof node !== "object") return;
-    const value = node as { type?: string; text?: string; content?: unknown[] };
-    if (value.type === "text" && value.text) lines.push(value.text);
-    if (Array.isArray(value.content)) {
-      value.content.forEach(visit);
-    }
-  };
-  visit(content);
-  return lines;
+  if (!content || typeof content !== "object") return [];
+  return tiptapToMarkdown(content as Parameters<typeof tiptapToMarkdown>[0])
+    .markdown.trimEnd()
+    .split("\n")
+    // Markdown hard breaks emit trailing spaces ("  \n") and an empty
+    // paragraph round-trips as its HTML fallback ("<p></p>"). Neither is
+    // visible in a rendered note, so normalize them to keep diff lines
+    // matching what the user sees. Trailing whitespace in code notes is
+    // preserved: their string path above never applies this mapping.
+    .map((line) => (line === "<p></p>" ? "" : line.trimEnd()));
 }
 
 /**
@@ -192,6 +199,10 @@ export function DiffView({
   }, [hunks, oldContent, newContent]);
 
   if (!derivedHunks.length) {
+    // An explicit empty hint (title-only conflicts) renders nothing at all,
+    // so the title diff block does not sit next to a contradictory "no
+    // differences" note.
+    if (emptyHint === "") return null;
     return <p className="revision-diff-hint">{emptyHint ?? t(locale, "revisionNoDiff")}</p>;
   }
 

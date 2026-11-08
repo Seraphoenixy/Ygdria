@@ -438,6 +438,7 @@ export function WorkspaceContent({
             onSaveContent={autoSave}
             onSaveTitle={(nextTitle) => saveTitle.mutate(nextTitle)}
             onOpenChild={openChildNote}
+            onNavigateNote={(noteId) => openNote(noteId, false, false)}
             onChildMore={onChildMore}
             onUnarchive={onUnarchive}
             onEditorReady={onEditorReady}

@@ -21,7 +21,7 @@ export type NoteContentData = {
   tags?: string[];
 };
 
-export function NoteContent({ note, editing, isTrashed, locale, childNotes, childrenByParent, client, onSaveContent, onSaveTitle, onOpenChild, onChildMore, onUnarchive, onEditorReady, session, markdownView, onUnlock, onUploadError }: {
+export function NoteContent({ note, editing, isTrashed, locale, childNotes, childrenByParent, client, onSaveContent, onSaveTitle, onOpenChild, onChildMore, onUnarchive, onEditorReady, onNavigateNote, session, markdownView, onUnlock, onUploadError }: {
   note: NoteContentData;
   editing: boolean;
   isTrashed: boolean;
@@ -35,6 +35,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
   onChildMore: (placement: TreePlacement, event: MouseEvent<HTMLButtonElement>) => void;
   onUnarchive: () => void;
   onEditorReady?: (editor: any) => void;
+  onNavigateNote?: (noteId: string) => void;
   session?: ProtectedClientSession;
   markdownView?: boolean;
   onUnlock?: () => void;
@@ -265,6 +266,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
               onUploadImage={note.isProtected ? undefined : uploadImage}
               resolveImageSrc={resolveImageSrc}
               onEditorReady={onEditorReady}
+              onNavigateNote={onNavigateNote}
               readOnly={!editing || isTrashed}
               markdownView={markdownView}
                 markdownNotices={{ html: t(locale, "markdownHtmlPreservation"), unsupported: t(locale, "markdownUnsupportedFormatting") }}
@@ -293,7 +295,7 @@ export function NoteContent({ note, editing, isTrashed, locale, childNotes, chil
         ) : null}
       </>
     )}
-    <ChildNoteList children={childNotes} childrenByParent={childrenByParent} client={client} locale={locale} onOpen={onOpenChild} onMore={onChildMore} />
+    <ChildNoteList children={childNotes} childrenByParent={childrenByParent} client={client} locale={locale} onOpen={onOpenChild} onMore={onChildMore} onNavigateNote={onNavigateNote} />
   </article>;
 }
 

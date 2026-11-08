@@ -143,6 +143,25 @@ function etapiAccessStorePath() {
   return path.join(app.getPath("userData"), "etapi-access.json");
 }
 
+/**
+ * The origin the Vite dev server actually serves the renderer from. Vite
+ * drifts to the next free port when 5173 is taken (for example by a leftover
+ * dev server), and the desktop renderer then runs on a different origin — the
+ * local API's CORS allow-list must follow VITE_DEV_SERVER_URL instead of a
+ * hardcoded port, or every renderer request fails CORS and the boot screen
+ * reports an unreachable service. In production the packaged renderer is
+ * served by this same process, so the fallback value is irrelevant there.
+ */
+function devServerOrigin() {
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
+  if (!devUrl) return "http://localhost:5173";
+  try {
+    return new URL(devUrl).origin;
+  } catch {
+    return "http://localhost:5173";
+  }
+}
+
 async function startLocalApiWithRetry() {
   while (!isQuitting()) {
     try {
@@ -154,7 +173,7 @@ async function startLocalApiWithRetry() {
       localApi = buildApp({
         databaseUrl,
         webDist,
-        origin: "http://localhost:5173",
+        origin: devServerOrigin(),
         localToken: localApiToken,
         enableEtapi: true,
         etapiAccessStorePath: etapiAccessStorePath(),

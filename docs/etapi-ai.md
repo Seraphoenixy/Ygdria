@@ -40,6 +40,8 @@ GET /etapi/notes/:noteId?format=markdown
 
 文本笔记默认返回 Markdown 正文；可用 `format=json` 获取 Tiptap JSON。响应包含 `id`、`title`、`type`、`content`、`contentFormat`、`properties.tags`、`placements`、`version` 和时间字段。
 
+笔记内链使用 `[[note:目标noteId|显示标题]]`，导入后保存为原生 `noteReference` 节点。正文编辑、只读查看和展开的子笔记预览均支持点击或聚焦后按 Enter，在应用工作区打开目标笔记；代码中的同名字面文本不会跳转。
+
 只读取正文：
 
 ```http
@@ -61,6 +63,15 @@ GET /etapi/tags
 传入 `placementId` 时，搜索仅覆盖该树节点及全部子节点；结果中的 `matchedPlacementIds` 可用于定位 clone 的树内位置。受保护笔记不会出现在搜索结果中。
 
 ## 写入接口
+
+### 删除笔记（移入回收站）
+
+```http
+DELETE /etapi/notes/:noteId
+If-Match: 3
+```
+
+先读取目标，使用其当前版本。只支持无子节点的普通笔记，移除其全部 placement（clone），返回 `{ id, deleted: true, undoId }`，可在应用中恢复。任意 placement 仍有子节点、受保护笔记、系统笔记或版本冲突均返回 409，应重新检查目标和树结构。不提供永久删除。网络异常后检查状态，勿盲目重试；旧服务端的 404 不代表删除成功。
 
 在用户授权的任务范围内使用；任务级授权包括完成该任务所需的创建、编辑和移动，无需逐项再问。
 

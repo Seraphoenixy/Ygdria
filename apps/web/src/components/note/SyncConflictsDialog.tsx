@@ -24,6 +24,8 @@ function formatLocalTime(ts: number, locale: Locale) {
   }).format(new Date(ts));
 }
 
+type TheirsSnapshot = { version: number; content: unknown; title?: string };
+
 function SyncConflictCard({
   conflict,
   client,
@@ -37,16 +39,25 @@ function SyncConflictCard({
   locale: Locale;
   onResolve: (noteId: string) => void;
 }) {
-  const [theirs, setTheirs] = useState<{ version: number; content: unknown } | null>(null);
+  // Prefer the snapshot captured when the conflict was detected: the remote's
+  // live copy may already have been changed by a later sync. Records persisted
+  // by older builds carry no snapshot and fall back to a live remote fetch.
+  const hasSnapshot = conflict.theirsContent !== undefined;
+  const [liveTheirs, setLiveTheirs] = useState<TheirsSnapshot | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [resolving, setResolving] = useState<ResolvedSide | null>(null);
+  const theirs: TheirsSnapshot | null = hasSnapshot
+    ? { version: conflict.theirsVersion, content: conflict.theirsContent, title: conflict.theirsTitle }
+    : liveTheirs;
 
   useEffect(() => {
+    if (hasSnapshot) return;
     let cancelled = false;
     remoteClient
       .getNote(conflict.noteId)
       .then((note) => {
-        if (!cancelled) setTheirs({ version: note.version, content: note.content });
+        if (!cancelled)
+          setLiveTheirs({ version: note.version, content: note.content, title: note.title });
       })
       .catch(() => {
         if (!cancelled) setLoadError(true);
@@ -54,7 +65,7 @@ function SyncConflictCard({
     return () => {
       cancelled = true;
     };
-  }, [remoteClient, conflict.noteId]);
+  }, [remoteClient, conflict.noteId, hasSnapshot]);
 
   const resolve = async (side: ResolvedSide) => {
     if (resolving) return;
@@ -81,6 +92,10 @@ function SyncConflictCard({
     }
   };
 
+  const theirsTitle = theirs?.title;
+  const titleChanged =
+    theirsTitle !== undefined && theirsTitle !== conflict.title && !conflict.isProtected;
+
   return (
     <article className="sync-conflict-card">
       <h3 className="sync-conflict-title">
@@ -98,16 +113,51 @@ function SyncConflictCard({
           <p>{t(locale, "loading")}</p>
         ) : (
           <>
+            {titleChanged ? (
+              <div className="revision-hunk conflict-title-diff">
+                <div className="revision-hunk-header">
+                  <span className="revision-hunk-range">{t(locale, "syncConflictTitleHeader")}</span>
+                </div>
+                <ol>
+                  <li className="removed">
+                    <span className="ln old" />
+                    <span className="ln new" />
+                    <span className="sign">−</span>
+                    <code>{theirsTitle || " "}</code>
+                  </li>
+                  <li className="added">
+                    <span className="ln old" />
+                    <span className="ln new" />
+                    <span className="sign">+</span>
+                    <code>{conflict.title || " "}</code>
+                  </li>
+                </ol>
+              </div>
+            ) : null}
             <div className="conflict-legend">
-              <span className="conflict-legend-remote">{t(locale, "syncConflictRemoteVersion")}</span>
-              <span className="conflict-legend-local">{t(locale, "syncConflictMineVersion")}</span>
+              <span className="conflict-legend-remote">
+                {t(
+                  locale,
+                  conflict.direction === "download"
+                    ? "syncConflictRemoteVersionOutdated"
+                    : "syncConflictRemoteVersion",
+                )}
+              </span>
+              <span className="conflict-legend-local">
+                {t(
+                  locale,
+                  conflict.direction === "download"
+                    ? "syncConflictMineVersionWinner"
+                    : "syncConflictMineVersion",
+                )}
+              </span>
             </div>
             <div className="revision-diff">
               <DiffView
                 oldContent={theirs.content}
                 newContent={conflict.mineContent}
                 locale={locale}
-                emptyHint={t(locale, "conflictNoDiff")}
+                emptyHint={titleChanged ? "" : t(locale, "conflictNoDiff")}
               />
             </div>
           </>
@@ -141,10 +191,13 @@ function SyncConflictCard({
 }
 
 /**
- * Lists notes whose edit was silently overwritten by a newer remote version
- * during the last sync (last-write-wins). Each card shows a GitHub-style diff
- * of the remote (kept) version versus the user's discarded edit, and lets the
- * user consciously choose which side to keep instead of losing data silently.
+ * Lists notes whose edit lost to last-write-wins during the last sync, in
+ * either push direction: an upload the remote rejected (a newer remote version
+ * won there) or a download the local database rejected (our newer edit won
+ * here and the remote edit will be overwritten). Each card shows a
+ * GitHub-style diff of the two diverging versions — both snapshotted at
+ * conflict-detection time — and lets the user consciously choose which side to
+ * keep instead of losing data silently.
  */
 export function SyncConflictsDialog({
   conflicts,

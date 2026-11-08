@@ -28,6 +28,25 @@ import {
 } from "./note-service-base.js";
 
 export class PlacementService extends NoteServiceBase {
+  /** External deletion is recoverable and never cascades through child placements. */
+  removeExternal(noteId: string, expectedVersion: number) {
+    return this.store.sqlite.transaction(() => {
+      this.assertNotSystemNote(noteId);
+      const note = this.get(noteId);
+      if (!note) throw new NotFoundError();
+      if (note.isProtected) throw new ConflictError("Cannot delete protected notes via ETAPI");
+      if (note.version !== expectedVersion)
+        throw new ConflictError("The note changed; read its current version before deleting", note.version);
+      const child = this.store.sqlite.prepare(
+        `SELECT 1 FROM placements child JOIN placements parent
+         ON child.parent_placement_id=parent.id WHERE parent.note_id=? LIMIT 1`,
+      ).get(noteId);
+      if (child) throw new ConflictError("Cannot delete a note with child placements via ETAPI");
+      const { undoId } = this.remove(noteId);
+      return { id: noteId, deleted: true, undoId };
+    })();
+  }
+
   remove(noteId: string) {
     this.assertNotSystemNote(noteId);
     if (!this.get(noteId)) throw new NotFoundError();

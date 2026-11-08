@@ -3,7 +3,8 @@ import type { NoteContent } from "@ygdria/shared";
 import { StaticCodeBlock } from "./code-highlighting.js";
 import { YgdriaEditor } from "./YgdriaEditor.js";
 import katex from "katex";
-export function StaticDocument({ document }: { document: NoteContent }) {
+import { activateNoteReference } from "./NoteReference.js";
+export function StaticDocument({ document, onNavigateNote }: { document: NoteContent; onNavigateNote?: (noteId: string) => void }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hideAll = () => rootRef.current?.querySelectorAll("[data-ygdria-redacted].is-revealed").forEach((element) => element.classList.remove("is-revealed"));
 
@@ -18,10 +19,13 @@ export function StaticDocument({ document }: { document: NoteContent }) {
 
   return (
     <div ref={rootRef} className="ygdria-document" onClick={(event) => {
+      if (activateNoteReference(event, onNavigateNote)) return;
       const redacted = (event.target as HTMLElement).closest<HTMLElement>("[data-ygdria-redacted]");
       const wasRevealed = redacted?.classList.contains("is-revealed");
       hideAll();
       if (redacted && !wasRevealed) redacted.classList.add("is-revealed");
+    }} onKeyDown={(event) => {
+      if (event.key === "Enter") activateNoteReference(event, onNavigateNote);
     }}>
       {(document.content ?? []).map((node: any, i) => (
         <Node node={node} key={i} />
@@ -69,7 +73,7 @@ function Node({ node }: { node: any }): React.ReactNode {
       readOnly
     />;
   if (node.type === "noteReference")
-    return <span className="note-reference">{node.attrs.title}</span>;
+    return <span className="note-reference" role="link" tabIndex={0} data-note-id={node.attrs?.noteId} data-note-title={node.attrs?.title}>{node.attrs?.title || node.attrs?.noteId}</span>;
   if (node.type === "image") return <img src={node.attrs.src} alt={node.attrs.alt || ""} />;
   if (node.type === "mathInline" || node.type === "mathBlock") {
     const displayMode = node.type === "mathBlock";

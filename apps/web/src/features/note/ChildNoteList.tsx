@@ -13,6 +13,7 @@ export function ChildNoteList({
   locale,
   onOpen,
   onMore,
+  onNavigateNote,
 }: {
   children: TreePlacement[];
   childrenByParent: Map<string | null, TreePlacement[]>;
@@ -20,6 +21,7 @@ export function ChildNoteList({
   locale: Locale;
   onOpen: (placement: TreePlacement) => void;
   onMore: (placement: TreePlacement, event: MouseEvent<HTMLButtonElement>) => void;
+  onNavigateNote?: (noteId: string) => void;
 }) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const allPlacements = useMemo(
@@ -71,7 +73,7 @@ export function ChildNoteList({
         </div>
         {expanded && (
           <div className="child-note-preview">
-            {previews.isLoading ? <p>{t(locale, "loading")}</p> : preview && preview.content && typeof preview.content === "object" ? <StaticDocument document={preview.content} /> : null}
+            {previews.isLoading ? <p>{t(locale, "loading")}</p> : preview && preview.content && typeof preview.content === "object" ? <StaticDocument document={preview.content} onNavigateNote={onNavigateNote} /> : null}
             {nested.length > 0 && <ul className="child-note-nested">{nested.map(renderItem)}</ul>}
           </div>
         )}

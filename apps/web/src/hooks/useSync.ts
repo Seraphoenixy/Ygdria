@@ -26,12 +26,20 @@ type AttachmentTransferClient = Pick<
   "hasAttachmentByHash" | "downloadAttachmentByHash" | "uploadAttachmentByHash" | "syncNoteContent" | "syncNoteContentBatch"
 >;
 
-/** A note whose local edit was rejected by last-write-wins during sync, so the
- * peer's version won. Captured so the user can consciously choose which side
- * to keep instead of silently losing the losing edit. */
+/** Which push direction produced the rejection: "upload" means the remote kept
+ * a newer version and our edit lost there; "download" means our newer local
+ * version rejected the peer's incoming change (which the next upload will
+ * overwrite on the remote). */
+export type SyncConflictDirection = "upload" | "download";
+
+/** A note whose edit lost to last-write-wins during sync. Captured so the user
+ * can consciously choose which side to keep instead of silently losing the
+ * losing edit. Both sides are snapshotted at detection time so the dialog
+ * always diffs the versions that actually diverged. */
 export type SyncConflict = {
   noteId: string;
   peerId: string;
+  direction: SyncConflictDirection;
   detectedAt: number;
   title: string;
   noteType: "text" | "code";
@@ -41,6 +49,10 @@ export type SyncConflict = {
   mineUpdatedAt: number;
   theirsUpdatedAt: number;
   theirsVersion: number;
+  /** Remote side snapshot taken when the conflict was detected. Optional so
+   * records persisted by older builds fall back to a live remote fetch. */
+  theirsTitle?: string;
+  theirsContent?: unknown;
 };
 
 const DESKTOP_ONBOARDING_COMPLETE_KEY = "ygdria.desktop-onboarding-complete";
@@ -499,13 +511,15 @@ export function useSync({
         );
       };
       const peer = remoteClient.peerId();
-      // Notes whose local edit the remote rejected via last-write-wins during
-      // this sync. Captured here (before the download phase can overwrite the
-      // losing local edit) so the panel can show exactly what was discarded.
-      const persistConflict = async (rejected: RejectedSyncChange[]) => {
+      // Edits rejected by last-write-wins during this sync, in either push
+      // direction. Captured here (upload rejections before the download phase
+      // can overwrite the losing local edit; download rejections before the
+      // next upload can overwrite the losing remote edit) so the panel can
+      // show exactly what was discarded.
+      const persistConflict = async (rejected: RejectedSyncChange[], direction: SyncConflictDirection) => {
         for (const change of rejected) {
           if (change.entityType !== "note") continue;
-          const conflict = await buildConflict(change, peer);
+          const conflict = await buildConflict(change, peer, direction);
           const current = syncConflictsByPeerRef.current;
           const byId = new Map((current[peer] ?? []).map((item) => [item.noteId, item]));
           byId.set(conflict.noteId, conflict);
@@ -519,14 +533,32 @@ export function useSync({
       const buildConflict = async (
         rejected: RejectedSyncChange,
         peerId: string,
+        direction: SyncConflictDirection,
       ): Promise<SyncConflict> => {
         const base = {
           noteId: rejected.entityId,
           peerId,
+          direction,
           detectedAt: Date.now(),
           theirsUpdatedAt: rejected.localUpdatedAt,
           theirsVersion: rejected.localVersion,
         };
+        // Snapshot the remote copy at detection time: it is the version that
+        // won (upload) or is about to be overwritten on the remote (download).
+        // Diffing against a live fetch at dialog-render time would silently
+        // re-base onto whatever the remote holds by then. A failed snapshot
+        // falls back to the dialog's live fetch.
+        let theirsTitle: string | undefined;
+        let theirsContent: unknown;
+        try {
+          const remoteNote = await remoteClient.getNote(rejected.entityId);
+          if (remoteNote) {
+            theirsTitle = typeof remoteNote.title === "string" ? remoteNote.title : undefined;
+            theirsContent = remoteNote.content ?? null;
+          }
+        } catch {
+          /* the dialog falls back to a live remote fetch */
+        }
         try {
           const note = await client.getNote(rejected.entityId);
           if (note) {
@@ -543,6 +575,8 @@ export function useSync({
               mineContent: note.isProtected ? null : note.content,
               mineVersion: typeof note.version === "number" ? note.version : 0,
               mineUpdatedAt,
+              ...(theirsTitle !== undefined ? { theirsTitle } : {}),
+              ...(theirsContent !== undefined ? { theirsContent } : {}),
             };
           }
         } catch {
@@ -556,6 +590,8 @@ export function useSync({
           mineContent: null,
           mineVersion: 0,
           mineUpdatedAt: 0,
+          ...(theirsTitle !== undefined ? { theirsTitle } : {}),
+          ...(theirsContent !== undefined ? { theirsContent } : {}),
         };
       };
       // Identity this device reports to the remote. The remote's own key for us
@@ -611,7 +647,12 @@ export function useSync({
           );
           setSyncItemCount((current) => ({ out: outgoing.changes.length, in: current.in }));
           const hydrated = await hydrateNoteContents(outgoing.changes, client);
-          await remoteClient.pushSyncChanges(hydrated, undefined, selfPeer, persistConflict);
+          await remoteClient.pushSyncChanges(
+            hydrated,
+            undefined,
+            selfPeer,
+            (rejected) => persistConflict(rejected, "upload"),
+          );
           await copyAttachments(outgoing.changes, client, remoteClient);
           await client.advanceSyncCursor(`out:${peer}`, outgoing.cursor);
           if (!outgoing.hasMore) break;
@@ -630,7 +671,15 @@ export function useSync({
           );
           setSyncItemCount((current) => ({ out: current.out, in: incoming.changes.length }));
           const hydrated = await hydrateNoteContents(incoming.changes, remoteClient);
-          await client.pushSyncChanges(hydrated, "remote");
+          // The local database also applies last-write-wins: a newer local note
+          // rejects the incoming remote change. Surface that divergence too —
+          // the next upload would otherwise overwrite the remote edit silently.
+          await client.pushSyncChanges(
+            hydrated,
+            "remote",
+            undefined,
+            (rejected) => persistConflict(rejected, "download"),
+          );
           await copyAttachments(incoming.changes, remoteClient, client, "remote");
           await client.advanceSyncCursor(`in:${peer}`, incoming.cursor);
           // Mirror the position back to the remote. Without this the server

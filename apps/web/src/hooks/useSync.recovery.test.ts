@@ -57,6 +57,9 @@ beforeEach(() => {
     peerId: () => "remote",
     advanceSyncCursor: vi.fn().mockResolvedValue({}),
     syncChanges: vi.fn().mockResolvedValue({ changes: [], cursor: 9, hasMore: false }),
+    getNote: vi
+      .fn()
+      .mockResolvedValue({ title: "Theirs", content: { type: "doc" }, version: 2, updatedAt: 20 }),
     pushSyncChanges: vi
       .fn()
       .mockResolvedValue({
@@ -94,6 +97,48 @@ describe("sync failure recovery", () => {
     await run();
     const stored = JSON.parse(window.localStorage.getItem("ygdria.sync.conflicts") ?? "{}");
     expect(stored.remote?.[0]?.noteId).toBe("n");
+    expect(stored.remote?.[0]).toMatchObject({
+      direction: "upload",
+      theirsTitle: "Theirs",
+      theirsContent: { type: "doc" },
+    });
+  });
+
+  it("persists a download-direction rejection with both side snapshots", async () => {
+    // A newer local note rejects the incoming remote change: the local push
+    // reports it as rejected and the remote edit must not be lost silently.
+    state.client.pushSyncChanges = vi
+      .fn()
+      .mockImplementation(async (_changes: any, _origin: any, _peer: any, persist: any) => {
+        const rejected = [
+          { entityType: "note", entityId: "n", localUpdatedAt: 30, localVersion: 3 },
+        ];
+        await persist(rejected);
+        return { applied: 0, rejected };
+      });
+    state.remote.syncChanges.mockResolvedValueOnce({
+      changes: [
+        {
+          changeId: 1,
+          entityType: "note",
+          entityId: "n",
+          changeKind: "updated",
+          createdAt: 2,
+          data: { id: "n" },
+        },
+      ],
+      cursor: 5,
+      hasMore: false,
+    });
+    await run();
+    const stored = JSON.parse(window.localStorage.getItem("ygdria.sync.conflicts") ?? "{}");
+    expect(stored.remote?.[0]).toMatchObject({
+      noteId: "n",
+      direction: "download",
+      theirsTitle: "Theirs",
+      theirsContent: { type: "doc" },
+      mineContent: {},
+    });
   });
 
   it("reconfirms an already applied cursor even if the next pull is empty", async () => {
