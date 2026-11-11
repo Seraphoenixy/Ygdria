@@ -113,13 +113,16 @@ jobs:
         run: |
           pnpm --filter @ygdria/mobile exec cap sync android
           node scripts/apply-android-icon.mjs
-          sed -i -E \
-            -e "s/versionName \"[^\"]+\"/versionName \"$VERSION\"/" \
-            apps/mobile/android/app/build.gradle
 
       - name: Build release APK (unsigned; signed below if secret present)
         working-directory: apps/mobile/android
-        run: ./gradlew assembleRelease
+        run: |
+          # The executable bit is not stored by Windows checkouts, so restore it
+          # explicitly before invoking the wrapper.
+          chmod +x ./gradlew
+          ./gradlew assembleRelease \
+            -PygdriaVersionName="$VERSION" \
+            -PygdriaVersionCode="$GITHUB_RUN_NUMBER"
 
       - name: Sign release APK
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
