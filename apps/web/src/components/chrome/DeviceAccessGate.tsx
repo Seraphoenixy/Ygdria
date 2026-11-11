@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { Capacitor } from "@capacitor/core";
 import { LockKeyhole } from "lucide-react";
 import { t, type Locale } from "../../lib/i18n";
 
@@ -26,7 +27,12 @@ export function DeviceAccessGate({
   const [serverUrl, setServerUrl] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [label, setLabel] = useState(t(locale, "deviceLabelBrowser"));
+  // On a native build this is a device, not a browser; the label is persisted
+  // server-side and later shown in the device list, so "Current browser" was
+  // both wrong and confusing there.
+  const [label, setLabel] = useState(() =>
+    t(locale, Capacitor.isNativePlatform() ? "deviceLabelDevice" : "deviceLabelBrowser"),
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
   const validPassword = password.length >= 8 && password.length <= 64;
@@ -60,7 +66,16 @@ export function DeviceAccessGate({
     setSubmitting(true);
     setError(undefined);
     void (waitingForClientMigration ? onCheckClientMigration!() : connecting ? onConnectExisting!(serverUrl.trim().replace(/\/$/, ""), password, label.trim()) : onSubmit(password, label.trim()))
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t(locale, "deviceAccessAuthFailed")))
+      .catch((reason: unknown) => {
+        const message = reason instanceof Error ? reason.message : "";
+        // The server's SRP failure arrives in English; keep the visible
+        // message localized rather than leaking the adapter wording.
+        setError(
+          /authentication failed|invalid credentials/i.test(message) || !message
+            ? t(locale, "deviceAccessAuthFailed")
+            : message,
+        );
+      })
       .finally(() => setSubmitting(false));
   };
 

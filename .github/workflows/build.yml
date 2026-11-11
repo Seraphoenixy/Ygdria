@@ -106,9 +106,11 @@ jobs:
       - name: Build web application
         run: pnpm --filter @ygdria/web build
 
-      - name: Create and sync Capacitor Android project
+      # apps/mobile/android is checked in. `cap add` would regenerate the
+      # platform and discard tracked Android customizations, so CI only syncs
+      # the built web assets and plugin metadata into the existing project.
+      - name: Sync Capacitor Android project
         run: |
-          pnpm --filter @ygdria/mobile exec cap add android
           pnpm --filter @ygdria/mobile exec cap sync android
           node scripts/apply-android-icon.mjs
           sed -i -E \

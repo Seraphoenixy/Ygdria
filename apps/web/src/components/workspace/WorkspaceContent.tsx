@@ -80,6 +80,8 @@ export interface WorkspaceContentProps {
   // Archive
   archivedNotes: { data?: Array<{ id: string; title: string; archivedAt: number; updatedAt: string }>; isLoading: boolean };
   treeData: TreePlacement[] | undefined;
+  /** True while the initial note-tree request is still in flight. */
+  treeIsLoading: boolean;
   archiveNote: { mutate: (params: { noteId: string; archived: boolean }) => void };
 
   // History
@@ -178,6 +180,7 @@ export function WorkspaceContent({
   openNote,
   archivedNotes,
   treeData,
+  treeIsLoading,
   archiveNote,
   history,
   attachments,
@@ -411,6 +414,7 @@ export function WorkspaceContent({
         <div className="document-scroll" data-tab-id={activeTab.id}>
           <NewTabSearch
             treeData={treeData}
+            loading={treeIsLoading}
             locale={locale}
             decryptedTitles={decryptedTitles}
             openNote={openNote}
@@ -451,6 +455,7 @@ export function WorkspaceContent({
         <div className="document-scroll" data-tab-id={activeTabId}>
           <NewTabSearch
             treeData={treeData}
+            loading={treeIsLoading}
             locale={locale}
             decryptedTitles={decryptedTitles}
             openNote={openNote}

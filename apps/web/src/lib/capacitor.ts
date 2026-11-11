@@ -1,7 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { StatusBar, Style } from "@capacitor/status-bar";
 import { Keyboard, KeyboardResize } from "@capacitor/keyboard";
-import { App } from "@capacitor/app";
 import { SplashScreen } from "@capacitor/splash-screen";
 import { Haptics, ImpactStyle } from "@capacitor/haptics";
 
@@ -49,22 +48,24 @@ export async function initCapacitor(): Promise<void> {
     /* not available */
   }
 
-  // Hide the native splash screen once the first paint is done.
+  // While the IME is open the phone layout is shorter and the bottom tab bar
+  // would sit directly above the keyboard, eating roughly 56dp of the editing
+  // area and separating the caret from the keyboard. Hide it (and reclaim the
+  // space it reserved under the document) for the duration of the IME.
   try {
-    await SplashScreen.hide();
+    const show = () => document.documentElement.classList.add("keyboard-open");
+    const hide = () => document.documentElement.classList.remove("keyboard-open");
+    await Keyboard.addListener("keyboardWillShow", show);
+    await Keyboard.addListener("keyboardDidShow", show);
+    await Keyboard.addListener("keyboardWillHide", hide);
+    await Keyboard.addListener("keyboardDidHide", hide);
   } catch {
     /* not available */
   }
 
-  // Android hardware back: navigate within the SPA instead of quitting.
+  // Hide the native splash screen once the first paint is done.
   try {
-    await App.addListener("backButton", ({ canGoBack }) => {
-      if (canGoBack && window.history.length > 1) {
-        window.history.back();
-      } else {
-        void App.minimizeApp();
-      }
-    });
+    await SplashScreen.hide();
   } catch {
     /* not available */
   }

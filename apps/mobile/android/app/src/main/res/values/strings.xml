@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Ygdria</string>
+    <string name="title_activity_main">Ygdria</string>
+    <string name="package_name">com.ygdria.app</string>
+    <string name="custom_url_scheme">com.ygdria.app</string>
+</resources>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Plus,
   Settings,
@@ -44,6 +44,14 @@ export function TabBar({
 }: TabBarProps) {
   const [dragId, setDragId] = useState<string>();
   const [overId, setOverId] = useState<string>();
+  const activeTabRef = useRef<HTMLDivElement>(null);
+
+  // On phones the strip scrolls horizontally. Without this, opening a fourth
+  // tab left the active tab (and its close button) clipped outside the viewport
+  // with no visual cue that more tabs existed to the right.
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTabId, tabs.length]);
 
   return (
     <div className="note-tabs" role="tablist" aria-label={t(locale, "notes")}>
@@ -76,6 +84,7 @@ export function TabBar({
             <div
               className={`note-tab ${activeTabId === tab.id ? "active" : ""} ${dragId === tab.id ? "dragging" : ""} ${overId === tab.id && dragId && dragId !== tab.id ? "drop-target" : ""}`}
               key={tab.id}
+              ref={activeTabId === tab.id ? activeTabRef : undefined}
               role="tab"
               aria-selected={activeTabId === tab.id}
               tabIndex={0}

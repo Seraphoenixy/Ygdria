@@ -4,10 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import type { TagStats } from "@ygdria/shared";
 import { YgdriaClient } from "@ygdria/api-client";
 import { t, type Locale } from "../../lib/i18n";
+import { isPhoneLayout } from "../../lib/mobileLayout";
 import type { TreePlacement } from "../../types/workspace";
 
 type NewTabSearchProps = {
   treeData: TreePlacement[] | undefined;
+  /** True while the initial note-tree request is still loading. */
+  loading?: boolean;
   locale: Locale;
   decryptedTitles: Map<string, string>;
   openNote: (noteId: string, isTrashed?: boolean, editing?: boolean, openInNewTab?: boolean, placementId?: string) => void;
@@ -28,7 +31,7 @@ type Row = { placement: TreePlacement; depth: number; path: string[] };
  * the ancestor branches visible so a match is always shown in its tree context,
  * exactly like the in-tree search box — but on a dedicated full-page surface.
  */
-export function NewTabSearch({ treeData, locale, decryptedTitles, openNote, createNewNote, creatingNote, client, onOpenTagSearch }: NewTabSearchProps) {
+export function NewTabSearch({ treeData, loading = false, locale, decryptedTitles, openNote, createNewNote, creatingNote, client, onOpenTagSearch }: NewTabSearchProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
   const didInit = useRef(false);
@@ -140,9 +143,12 @@ export function NewTabSearch({ treeData, locale, decryptedTitles, openNote, crea
     didInit.current = true;
   }, [rootIds]);
 
-  // Focus the input as soon as the page opens.
+  // Focus the input as soon as the page opens. On phones, however, this
+  // immediately raises the IME and turns the note home into a search screen
+  // that hides the tree; only focus on pointer/keyboard-first layouts. Tapping
+  // the field still focuses it on a phone.
   useEffect(() => {
-    inputRef.current?.focus();
+    if (!isPhoneLayout()) inputRef.current?.focus();
   }, []);
 
   // Reset keyboard selection whenever the result set changes.
@@ -200,11 +206,16 @@ export function NewTabSearch({ treeData, locale, decryptedTitles, openNote, crea
   };
 
   const showEmpty = rows.length === 0;
+  const phone = isPhoneLayout();
   const emptyMessage = isSearching
     ? t(locale, "searchNoResults")
-    : placements.length === 0
-      ? t(locale, "newTabNoNotes")
-      : t(locale, "searchNoResults");
+    : loading && placements.length === 0
+      // The first tree request is still in flight. Saying "no notes yet" here
+      // made a slow (but successful) cold start look like an empty vault.
+      ? t(locale, "loading")
+      : placements.length === 0
+        ? t(locale, phone ? "newTabNoNotesPhone" : "newTabNoNotes")
+        : t(locale, "searchNoResults");
 
   return (
     <div className="new-tab-search">
@@ -228,7 +239,9 @@ export function NewTabSearch({ treeData, locale, decryptedTitles, openNote, crea
             </button>
           )}
         </div>
-        <p className="nts-hint">{t(locale, "newTabSearchHint")}</p>
+        {/* Keyboard navigation hints are desktop-only; on a phone they are
+            both unreadable and unusable, and they steal vertical space. */}
+        {!phone && <p className="nts-hint">{t(locale, "newTabSearchHint")}</p>}
       </div>
 
       {!query && tagStats.data && tagStats.data.length > 0 && onOpenTagSearch && (

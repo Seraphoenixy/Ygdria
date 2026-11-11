@@ -69,6 +69,7 @@ import { useMobileGestures } from "../hooks/useMobileGestures";
 import { applyTheme } from "../lib/theme";
 import { saveRemoteCredential, clearRemoteCredential } from "../lib/credentialStorage";
 import { isPhoneLayout, isNativePhone } from "../lib/mobileLayout";
+import { registerAndroidBackHandler } from "../lib/androidBack";
 import { readClipboardText } from "../lib/clipboard";
 import { configureShareReceiver } from "../lib/shareReceiver";
 
@@ -882,6 +883,21 @@ export function App({
     noteData: note.data,
   });
 
+  // On phones the tree is an off-canvas drawer. Selecting a leaf note must
+  // reveal the document the user just picked; folders keep the drawer open so
+  // they can still be expanded and browsed. Desktop keeps its inline tree.
+  const handleSelectTreePlacement = (
+    placement: TreePlacement,
+    event: React.MouseEvent<HTMLElement>,
+  ) => {
+    selectTreePlacement(placement, event);
+    if (!isPhoneLayout()) return;
+    if (event.button === 1 || event.ctrlKey || event.metaKey) return;
+    const isContainer =
+      placement.isCalendar || (childrenByParent.get(placement.placementId)?.length ?? 0) > 0;
+    if (!isContainer) setTreeCollapsed(true);
+  };
+
   const {
     clearingExcessRevisions,
     revisionCleanupMessage,
@@ -1036,6 +1052,94 @@ export function App({
   // hook count would change when `deviceAccess`/`desktopOnboarding` transition
   // and React would throw "rendered more hooks than during the previous render".
   const showInspector = settingsOpen || Boolean(note.data);
+
+  // Android hardware back: consume it inside the app before minimizing the
+  // task. The handler is registered once and re-evaluated whenever the visible
+  // overlay/state changes (dialogs first, then drawers, then the editor, and
+  // finally the active tab). Without this, pressing back on the search page or
+  // in the note-tree drawer sent the whole app to the background.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    return registerAndroidBackHandler(() => {
+      if (revisionHistoryOpen) {
+        setRevisionHistoryOpen(false);
+        return true;
+      }
+      if (deleteConfirmation) {
+        setDeleteConfirmation(null);
+        return true;
+      }
+      if (purgeTrashConfirmation) {
+        setPurgeTrashConfirmation(false);
+        return true;
+      }
+      if (clearUnusedAttachmentsConfirmation) {
+        setClearUnusedAttachmentsConfirmation(false);
+        return true;
+      }
+      if (migrationDialogOpen) {
+        setMigrationDialogOpen(false);
+        return true;
+      }
+      if (showSyncConflicts) {
+        setShowSyncConflicts(false);
+        return true;
+      }
+      if (contextMenu) {
+        setContextMenu(null);
+        return true;
+      }
+      if (tabMenu) {
+        setTabMenu(null);
+        return true;
+      }
+      if (childNoteMenu) {
+        setChildNoteMenu(null);
+        return true;
+      }
+      if (!treeCollapsed && isPhoneLayout()) {
+        setTreeCollapsed(true);
+        return true;
+      }
+      if (showInspector && !inspectorCollapsed && isPhoneLayout()) {
+        setInspectorCollapsed(true);
+        return true;
+      }
+      if (editing) {
+        set({ editing: false });
+        return true;
+      }
+      if (activeTabId && !pinnedTabIds.has(activeTabId)) {
+        // Close the current view. When it was the only tab, open the notes
+        // home so back always lands somewhere usable instead of a blank shell.
+        const remaining = tabs.filter((tab) => tab.id !== activeTabId);
+        closeTab(activeTabId);
+        if (remaining.length === 0) openNewTab();
+        return true;
+      }
+      return false;
+    });
+  }, [
+    revisionHistoryOpen,
+    deleteConfirmation,
+    purgeTrashConfirmation,
+    clearUnusedAttachmentsConfirmation,
+    migrationDialogOpen,
+    showSyncConflicts,
+    contextMenu,
+    tabMenu,
+    childNoteMenu,
+    treeCollapsed,
+    showInspector,
+    inspectorCollapsed,
+    editing,
+    activeTabId,
+    tabs,
+    pinnedTabIds,
+    set,
+    closeTab,
+    openNewTab,
+  ]);
 
   // Escape closes whichever drawer is open (phone layout only).
   useEffect(() => {
@@ -1399,7 +1503,7 @@ export function App({
           collapsed={treeCollapsed}
           creatingNote={createNote.isPending}
           onCreateNote={(parentId, type) => void createNewNote(parentId, type)}
-          onSelectPlacement={selectTreePlacement}
+          onSelectPlacement={handleSelectTreePlacement}
           onContextMenu={(placement, x, y) => {
             setTabMenu(null);
             setContextMenu({ placement, x, y });
@@ -1487,6 +1591,7 @@ export function App({
             openNote={openNote}
             archivedNotes={archivedNotes}
             treeData={tree.data}
+            treeIsLoading={tree.isLoading}
             archiveNote={archiveNote}
             history={history}
             attachments={attachments}

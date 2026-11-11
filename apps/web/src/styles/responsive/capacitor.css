@@ -14,6 +14,16 @@ body.capacitor-native {
   overscroll-behavior-y: none;
 }
 
+/* While the soft keyboard is up, the fixed bottom tab bar would sit directly
+   above the IME and steal ~56dp from the editor. Hide it and drop the
+   reserved padding so the caret stays close to the keyboard. */
+html.phone.keyboard-open .mobile-tab-bar {
+  display: none;
+}
+html.phone.keyboard-open main:not(.device-access-shell) > .content {
+  padding-bottom: 0;
+}
+
 /* Authentication screens are not workspace grids. Keep the card centered even
    when an Android WebView reports a wide viewport (the `.phone` layout would
    otherwise still apply, which is fine — but the auth screen is its own shell
