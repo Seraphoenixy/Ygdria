@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+ygdria-mcp.ini
+*.log
+.DS_Store

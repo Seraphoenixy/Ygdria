@@ -1,0 +1,35 @@
+{
+  "name": "ygdria-mcp",
+  "version": "0.1.0",
+  "description": "A lightweight MCP to Ygdria ETAPI adapter",
+  "type": "module",
+  "bin": {
+    "ygdria-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "ygdria-mcp.example.ini"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "npm run build && node --test dist/client/etapi-client.test.js dist/config.test.js dist/server.test.js dist/tools/get-tree.test.js dist/tools/shared.test.js dist/tools/convenience.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  },
+  "license": "MIT"
+}

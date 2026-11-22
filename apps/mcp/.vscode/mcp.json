@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "ygdria": {
+      "command": "node",
+      "args": [
+        "D:\\project\\ygdria-mcp\\dist\\index.js"
+      ]
+    }
+  }
+}
