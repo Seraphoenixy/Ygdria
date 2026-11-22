@@ -40,8 +40,7 @@ export function failure(error: unknown): CallToolResult {
                     409: "Read current state and reconsider the change.",
                     422: "Read current content and regenerate unique edit targets.",
                   } as Record<number, string>
-                )[error.status] ??
-                "Correct the request using the error details.")
+                )[error.status] ?? "Correct the request using the error details.")
               : error instanceof EtapiNetworkError
                 ? "Check connectivity. Retry reads freely; retry creates or appends only with the same idempotency key within 30 days."
                 : "Correct parameters or local configuration using the message.",

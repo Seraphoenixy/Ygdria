@@ -3,10 +3,7 @@ import { z } from "zod";
 import type { EtapiClient } from "../client/etapi-client.js";
 import { failure, success } from "./shared.js";
 
-export function registerCreateNote(
-  server: McpServer,
-  client: EtapiClient,
-): void {
+export function registerCreateNote(server: McpServer, client: EtapiClient): void {
   server.registerTool(
     "create_note",
     {

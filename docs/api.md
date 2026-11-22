@@ -5,7 +5,7 @@
 所有应用 API 使用 `/api/v1` 前缀。认证有两层（详见 [认证、受保护笔记与同步边界](auth-and-sync.md)）：
 
 - `X-Ygdria-Local-Token`：本地共享令牌，由 `buildApp({ localToken })` 启用时强制校验；形态 A 默认不设置。
-- `Authorization: Bearer <deviceToken>`：独立服务始终启用。`/api/v1/health`、`/api/v1/auth/config`、`/api/v1/devices/initialize`、`/api/v1/auth/login/challenge`、`/api/v1/auth/login/verify`、`/api/v1/devices/pair` 为公开路径，其余 `/api/*` 需设备令牌。`/etapi/*` 可使用设备令牌或具有对应 scope 的短期 ETAPI 令牌；短期令牌的签发和完整接口见 [ETAPI：AI 与外部自动化](etapi.md)。设备令牌采用统一的 **主密码派生 + PAKE（SRP-6a）挑战响应** 模型签发，详见 [认证、受保护笔记与同步边界](auth-and-sync.md)。
+- `Authorization: Bearer <deviceToken>`：独立服务始终启用。`/api/v1/health`、`/api/v1/auth/config`、`/api/v1/devices/initialize`、`/api/v1/auth/login/challenge`、`/api/v1/auth/login/verify`、`/api/v1/devices/pair` 为公开路径，其余 `/api/*` 需设备令牌。`/etapi/*` 仅由桌面本机服务注册，需本机 loopback 来源、`X-Ygdria-External-Access: 1` 和桌面外部访问开关，不使用设备令牌或短期令牌；完整契约见 [ETAPI：AI 与外部自动化](etapi.md)。设备令牌采用统一的 **主密码派生 + PAKE（SRP-6a）挑战响应** 模型签发，详见 [认证、受保护笔记与同步边界](auth-and-sync.md)。
 - `X-Ygdria-Sync-Origin`：可选请求头，仅形态 A（桌面内嵌）有效。值为 `remote` 时，服务端跳过该请求的 `sync_change_log` 写入，避免远端拉取的变更在本地再次产生同步记录形成循环。形态 B 忽略此头部。
 
 主要资源：
@@ -143,7 +143,7 @@
 
 ## 2. ETAPI
 
-ETAPI 面向 AI、导入导出、自动化和外部脚本。它支持短期 scope 令牌、层级、笔记、搜索、tag、创建、更新和 placement 移动；完整契约和示例见 [ETAPI：AI 与外部自动化](etapi.md)。正文兼容接口：
+ETAPI 面向本机 AI、导入导出、自动化和外部脚本。桌面开关授权后，它支持层级、笔记、搜索、tag、创建、更新、删除和 placement 移动；完整契约和示例见 [ETAPI：AI 与外部自动化](etapi.md)。正文兼容接口：
 
 ```text
 GET /etapi/notes/:id/content?format=markdown   默认

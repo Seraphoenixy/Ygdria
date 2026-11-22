@@ -37,9 +37,7 @@ export async function treeOverview(
     (input.continuation.includeArchived !== input.includeArchived ||
       input.continuation.maxDepth !== input.maxDepth)
   )
-    throw new Error(
-      "Continuation requires the same includeArchived and maxDepth",
-    );
+    throw new Error("Continuation requires the same includeArchived and maxDepth");
   const pending = input.continuation?.pending.map((item) => ({ ...item })) ?? [
     { parentPlacementId: input.placementId, depth: 1 },
   ];
@@ -110,10 +108,7 @@ export async function treeOverview(
   };
 }
 
-export function registerConvenienceTools(
-  server: McpServer,
-  client: EtapiClient,
-) {
+export function registerConvenienceTools(server: McpServer, client: EtapiClient) {
   server.registerTool(
     "get_tree_overview",
     {
@@ -240,11 +235,7 @@ export function registerConvenienceTools(
     async ({ noteId, idempotencyKey, ...input }) => {
       try {
         return success(
-          await client.operateNote(
-            noteId,
-            { operation: "append", ...input },
-            idempotencyKey,
-          ),
+          await client.operateNote(noteId, { operation: "append", ...input }, idempotencyKey),
         );
       } catch (error) {
         return failure(error);
@@ -259,10 +250,7 @@ export function registerConvenienceTools(
       inputSchema: {
         noteId,
         addTags: z.array(z.string().trim().min(1).max(64)).max(20).default([]),
-        removeTags: z
-          .array(z.string().trim().min(1).max(64))
-          .max(20)
-          .default([]),
+        removeTags: z.array(z.string().trim().min(1).max(64)).max(20).default([]),
         expectedVersion,
         idempotencyKey: key.optional(),
       },
@@ -276,11 +264,7 @@ export function registerConvenienceTools(
     async ({ noteId, idempotencyKey, ...input }) => {
       try {
         return success(
-          await client.operateNote(
-            noteId,
-            { operation: "tags", ...input },
-            idempotencyKey,
-          ),
+          await client.operateNote(noteId, { operation: "tags", ...input }, idempotencyKey),
         );
       } catch (error) {
         return failure(error);

@@ -1,6 +1,6 @@
 # ETAPI：本机 AI 与外部访问
 
-ETAPI 供本机 MCP 和自动化工具读取、搜索、整理笔记，默认以 Markdown 交换正文，内部权威格式仍为 Tiptap JSON。
+ETAPI 供本机 MCP 和自动化工具读取、搜索、整理笔记，默认以 Markdown 交换正文，内部权威格式仍为 Tiptap JSON。MCP 适配器的安装与工具说明见 [`apps/mcp/README.md`](../apps/mcp/README.md)。
 
 ## 1. 一个开关
 

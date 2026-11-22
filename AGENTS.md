@@ -16,6 +16,7 @@
 - `apps/web`：React 工作区、TanStack Query/Zustand 状态、编辑器界面、客户端加密会话和桌面远端代理客户端。
 - `apps/desktop`：Electron 主进程、本地 Fastify、远端 IPC 代理、`safeStorage` 凭据存储及 SSRF/路径白名单防护。
 - `apps/mobile`：Capacitor 壳，复用 `apps/web` 的 SPA 和移动端原生集成。
+- `apps/mcp`：stdio MCP 适配器，只通过本机 ETAPI 的 HTTP 契约访问笔记，不直接依赖领域层或数据库。
 - `packages/domain`：笔记、树/clone、保存、搜索、附件、关系、回收站和受保护笔记等领域服务；`Devices` 是不依赖数据库的纯内存认证服务。
 - `packages/database`：SQLite（WAL + FTS5）、Drizzle、幂等迁移、备份恢复、doctor 及同步日志/游标/墓碑。
 - `packages/editor`：Tiptap/ProseMirror 编辑与渲染、Markdown 转换、代码高亮及正文查找替换。
@@ -27,6 +28,7 @@
 - 正文保存使用乐观并发（`expectedVersion`/`If-Match`），正文、修订和 FTS 投影应在同一 SQLite 事务内保持一致。受保护笔记由客户端加密，服务端仅处理密文，不进入 FTS 和普通修订路径。
 - 多端同步基于 `sync_change_log`、`sync_cursors`、`sync_tombstones` 的游标增量机制，并用墓碑防止旧数据复活；不要把它实现成 CRDT 或多人实时协作。
 - 独立服务的远端访问必须经 HTTPS 反向代理；桌面渲染进程不直接请求远端，也不得持有明文 `deviceToken`，远端调用由 Electron 主进程完成。
+- MCP 仍是独立 stdio 进程，只能调用 `/etapi/*` 并携带 `X-Ygdria-External-Access: 1`；不得 import `packages/domain` 或 `packages/database` 绕过 ETAPI。
 - TanStack Query 只管理服务端数据和请求状态；Zustand 只管理本地 UI 状态；Tiptap 的实时 ProseMirror 文档留在编辑器内部。
 
 ## 开发命令与编码规范
@@ -38,6 +40,7 @@ corepack pnpm install
 corepack pnpm --filter @ygdria/database migrate
 corepack pnpm dev:server       # 正常单端口运行
 corepack pnpm dev              # Vite 热更新；另需 dev:server
+corepack pnpm dev:mcp          # stdio MCP；由 MCP 客户端启动时通常不需要
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
@@ -54,4 +57,4 @@ corepack pnpm ygdria doctor
 
 ## 详细资料入口
 
-架构见 [`docs/architecture.md`](docs/architecture.md)，认证与同步边界见 [`docs/auth-and-sync.md`](docs/auth-and-sync.md)，数据模型见 [`docs/data-model.md`](docs/data-model.md)，运维命令见 [`docs/operations.md`](docs/operations.md)；API 与 ETAPI 细节见 `docs/api.md`、`docs/etapi.md` 和 `docs/etapi-ai.md`。
+架构见 [`docs/architecture.md`](docs/architecture.md)，认证与同步边界见 [`docs/auth-and-sync.md`](docs/auth-and-sync.md)，数据模型见 [`docs/data-model.md`](docs/data-model.md)，运维命令见 [`docs/operations.md`](docs/operations.md)；API 与 ETAPI 细节见 `docs/api.md`、`docs/etapi.md` 和 `docs/etapi-ai.md`，MCP 安装与工具说明见 [`apps/mcp/README.md`](apps/mcp/README.md)。

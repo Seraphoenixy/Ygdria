@@ -13,7 +13,11 @@ export function registerSearchByTag(server: McpServer, client: EtapiClient): voi
       inputSchema: {
         tag: z.string().min(1).describe("Exact tag to search for"),
         includeArchived: z.boolean().optional().default(false),
-        placementId: z.string().min(1).optional().describe("Optional placement root; includes this tree node and all descendants"),
+        placementId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Optional placement root; includes this tree node and all descendants"),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

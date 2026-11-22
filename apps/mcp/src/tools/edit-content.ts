@@ -3,10 +3,7 @@ import { z } from "zod";
 import { EtapiError, type EtapiClient } from "../client/etapi-client.js";
 import { failure, success, versionConflict } from "./shared.js";
 
-export function registerEditContent(
-  server: McpServer,
-  client: EtapiClient,
-): void {
+export function registerEditContent(server: McpServer, client: EtapiClient): void {
   server.registerTool(
     "edit_content",
     {
@@ -33,9 +30,7 @@ export function registerEditContent(
               oldText: z
                 .string()
                 .min(1)
-                .describe(
-                  "Exact, case- and newline-sensitive text from the current Markdown body",
-                ),
+                .describe("Exact, case- and newline-sensitive text from the current Markdown body"),
               newText: z.string(),
               expectedMatches: z.number().int().positive().optional(),
             }),
@@ -56,13 +51,9 @@ export function registerEditContent(
         const currentVersion = expectedVersion ?? version;
         if (
           !currentVersion ||
-          (expectedVersion !== undefined &&
-            version !== undefined &&
-            expectedVersion !== version)
+          (expectedVersion !== undefined && version !== undefined && expectedVersion !== version)
         )
-          throw new Error(
-            "Provide expectedVersion; legacy version must agree if supplied",
-          );
+          throw new Error("Provide expectedVersion; legacy version must agree if supplied");
         return success(
           await client.editContent(noteId, {
             expectedVersion: currentVersion,

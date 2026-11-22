@@ -135,11 +135,7 @@ test("idempotent create and append send keys without silently retrying", async (
     content: "",
     idempotencyKey: "create-key",
   });
-  await client.operateNote(
-    "note",
-    { operation: "append", text: "added" },
-    "append-key",
-  );
+  await client.operateNote("note", { operation: "append", text: "added" }, "append-key");
   assert.equal(calls.length, 2);
   assert.equal(calls[0]!.headers.get("idempotency-key"), "create-key");
   assert.equal(calls[1]!.headers.get("idempotency-key"), "append-key");
@@ -155,9 +151,7 @@ test("structured errors retain safe business diagnostics and redact 5xx details"
   const body = JSON.parse((result.content[0] as { text: string }).text);
   assert.equal(body.status, 422);
   assert.equal(body.details.error.diagnostics.actualMatches, 2);
-  const internal = failure(
-    new EtapiError(500, "failed", { secret: "internal" }),
-  );
+  const internal = failure(new EtapiError(500, "failed", { secret: "internal" }));
   assert.ok(!JSON.stringify(internal).includes("secret"));
 });
 
@@ -166,11 +160,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerConvenienceTools } from "./convenience.js";
 
-async function invoke(
-  client: EtapiClient,
-  name: string,
-  args: Record<string, unknown>,
-) {
+async function invoke(client: EtapiClient, name: string, args: Record<string, unknown>) {
   const server = new McpServer({ name: "test", version: "1" });
   registerConvenienceTools(server, client);
   const caller = new McpClient({ name: "test", version: "1" });
@@ -213,8 +203,7 @@ test("batch reads return partial results and metadata excludes body", async () =
 test("batch reads defer oversized notes without returning unbounded content", async () => {
   const client = new EtapiClient({
     baseUrl: "http://127.0.0.1:4318",
-    fetchImpl: async () =>
-      Response.json({ id: "large", version: 1, content: "x".repeat(5000) }),
+    fetchImpl: async () => Response.json({ id: "large", version: 1, content: "x".repeat(5000) }),
   });
   const result = await invoke(client, "get_notes", {
     noteIds: ["large", "next"],

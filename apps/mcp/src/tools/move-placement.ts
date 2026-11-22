@@ -24,9 +24,7 @@ export function registerMovePlacement(server: McpServer, client: EtapiClient): v
     },
     async ({ placementId, parentPlacementId, position }) => {
       try {
-        return success(
-          await client.movePlacement(placementId, { parentPlacementId, position }),
-        );
+        return success(await client.movePlacement(placementId, { parentPlacementId, position }));
       } catch (error) {
         return failure(error);
       }

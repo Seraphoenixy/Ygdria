@@ -71,7 +71,7 @@ corepack pnpm --filter @ygdria/desktop build
 corepack pnpm --filter @ygdria/desktop dist:win
 ```
 
-安装版会把 Web 界面与本地 API 一并打包；笔记数据库保存在当前 Windows 用户的应用数据目录，而不是安装目录。
+安装版会把 Web 界面、本地 API 与单文件 MCP bundle（`resources/mcp/index.js`）一并打包；笔记数据库保存在当前 Windows 用户的应用数据目录，而不是安装目录。
 
 Windows 桌面客户端只允许一个运行实例；再次打开时会聚焦已有窗口。内嵌 API 固定监听 `127.0.0.1:4318`，以保持本地界面与 ETAPI 的固定地址。若启动时该端口被占用，应用会显示“重试 / 退出”提示；关闭占用端口的程序后选择“重试”，不会自动切换端口。
 

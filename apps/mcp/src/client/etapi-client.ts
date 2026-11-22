@@ -132,12 +132,8 @@ export class EtapiClient {
     return this.request("/etapi/tags");
   }
 
-  private async search(
-    params: Record<string, string>,
-  ): Promise<SearchNotesResponse> {
-    const response = await this.request<unknown>(
-      `/etapi/search?${new URLSearchParams(params)}`,
-    );
+  private async search(params: Record<string, string>): Promise<SearchNotesResponse> {
+    const response = await this.request<unknown>(`/etapi/search?${new URLSearchParams(params)}`);
     const rawItems = Array.isArray(response)
       ? response
       : Array.isArray(asRecord(response).items)
@@ -161,9 +157,7 @@ export class EtapiClient {
     return { items };
   }
 
-  private treeParams(
-    input: Record<string, string | number | boolean | undefined>,
-  ) {
+  private treeParams(input: Record<string, string | number | boolean | undefined>) {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(input))
       if (value !== undefined) params.set(key, String(value));
@@ -213,10 +207,7 @@ export class EtapiClient {
     return this.request(`/etapi/tree/resolve?${this.treeParams(input)}`);
   }
 
-  async getNote(
-    noteId: string,
-    format: NoteFormat = "markdown",
-  ): Promise<Note> {
+  async getNote(noteId: string, format: NoteFormat = "markdown"): Promise<Note> {
     const params = new URLSearchParams({ format });
     const response = await this.request<unknown>(
       `/etapi/notes/${encodeURIComponent(noteId)}?${params}`,
@@ -239,14 +230,11 @@ export class EtapiClient {
     input: Record<string, unknown>,
     idempotencyKey?: string,
   ): Promise<unknown> {
-    return this.request(
-      `/etapi/notes/${encodeURIComponent(noteId)}/operations`,
-      {
-        method: "POST",
-        json: input,
-        headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {},
-      },
-    );
+    return this.request(`/etapi/notes/${encodeURIComponent(noteId)}/operations`, {
+      method: "POST",
+      json: input,
+      headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {},
+    });
   }
 
   createNote(input: CreateNoteInput): Promise<unknown> {
@@ -265,11 +253,14 @@ export class EtapiClient {
     });
   }
 
-  replaceContent(
-    noteId: string,
-    version: number,
-    content: string,
-  ): Promise<unknown> {
+  deleteNote(noteId: string, expectedVersion: number): Promise<unknown> {
+    return this.request(`/etapi/notes/${encodeURIComponent(noteId)}`, {
+      method: "DELETE",
+      headers: { "If-Match": String(expectedVersion) },
+    });
+  }
+
+  replaceContent(noteId: string, version: number, content: string): Promise<unknown> {
     return this.request(`/etapi/notes/${encodeURIComponent(noteId)}/content`, {
       method: "PUT",
       headers: {
@@ -287,17 +278,11 @@ export class EtapiClient {
     });
   }
 
-  movePlacement(
-    placementId: string,
-    input: MovePlacementInput,
-  ): Promise<unknown> {
-    return this.request(
-      `/etapi/placements/${encodeURIComponent(placementId)}`,
-      {
-        method: "PATCH",
-        json: input,
-      },
-    );
+  movePlacement(placementId: string, input: MovePlacementInput): Promise<unknown> {
+    return this.request(`/etapi/placements/${encodeURIComponent(placementId)}`, {
+      method: "PATCH",
+      json: input,
+    });
   }
 
   private async request<T>(
@@ -361,11 +346,7 @@ export class EtapiClient {
     }
 
     if (!response.ok) {
-      throw new EtapiError(
-        response.status,
-        statusMessage(response.status),
-        payload,
-      );
+      throw new EtapiError(response.status, statusMessage(response.status), payload);
     }
 
     return payload as T;

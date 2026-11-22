@@ -3,10 +3,7 @@ import { z } from "zod";
 import { EtapiError, type EtapiClient } from "../client/etapi-client.js";
 import { failure, success, versionConflict } from "./shared.js";
 
-export function registerReplaceContent(
-  server: McpServer,
-  client: EtapiClient,
-): void {
+export function registerReplaceContent(server: McpServer, client: EtapiClient): void {
   server.registerTool(
     "replace_content",
     {
@@ -36,16 +33,10 @@ export function registerReplaceContent(
         const currentVersion = expectedVersion ?? version;
         if (
           !currentVersion ||
-          (expectedVersion !== undefined &&
-            version !== undefined &&
-            expectedVersion !== version)
+          (expectedVersion !== undefined && version !== undefined && expectedVersion !== version)
         )
-          throw new Error(
-            "Provide expectedVersion; legacy version must agree if supplied",
-          );
-        return success(
-          await client.replaceContent(noteId, currentVersion, content),
-        );
+          throw new Error("Provide expectedVersion; legacy version must agree if supplied");
+        return success(await client.replaceContent(noteId, currentVersion, content));
       } catch (error) {
         if (error instanceof EtapiError && error.status === 409) {
           return versionConflict(client, noteId);

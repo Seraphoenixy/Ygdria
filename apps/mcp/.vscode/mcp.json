@@ -2,9 +2,7 @@
   "mcpServers": {
     "ygdria": {
       "command": "node",
-      "args": [
-        "D:\\project\\ygdria-mcp\\dist\\index.js"
-      ]
+      "args": ["D:\\projects\\Ygdria\\apps\\mcp\\dist\\index.js"]
     }
   }
 }

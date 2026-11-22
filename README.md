@@ -54,7 +54,7 @@ Ygdria 不是多人实时协作工具，也不使用 CRDT：它的同步模型�
 - **全文检索（SQLite FTS5）**：对正文与 tag 进行搜索，可随时在线重建索引或只读校验。
 - **附件**：文件存储适配器、共享附件与清理任务，支持按哈希分片上传/下载。
 - **增量同步**：`sync_change_log` / `sync_cursors` / `sync_tombstones` 三表协同，客户端用游标拉取增量并按 last-write-wins 时间戳合并，删除以墓碑表达避免旧数据复活。
-- **面向 AI 的 ETAPI**：可签发的短期作用域令牌，让本机 AI 工具在受控权限下读取、搜索与编辑笔记，默认只读、15 分钟有效。
+- **面向 AI 的 ETAPI**：本机 AI 工具与自动化可通过桌面「AI 与外部访问」开关读取、搜索与编辑笔记；MCP 适配器位于 `apps/mcp`。
 - **多端形态**：同一份 Web 前端同时用于浏览器、Electron 桌面（Windows 安装包）与 Capacitor 移动端（Android / iOS）。
 - **深色模式**：浅色 / 深色 / 跟随系统三档，由「设置 → 外观」切换；首帧前写入 `data-theme` 属性避免闪烁，深色样式完全由设计令牌驱动。
 - **标签系统**：为笔记添加 `tags` 属性，服务端聚合 `GET /api/v1/tags` 提供按使用次数排序的标签统计，并支持按标签检索。
@@ -80,7 +80,7 @@ Ygdria 不是多人实时协作工具，也不使用 CRDT：它的同步模型�
        ├─ React SPA（apps/web/dist）                          ← 公开
        ├─ /api/v1/health、/ready、/auth/config、/devices/initialize、/auth/login/*、/devices/pair  ← 公开
        ├─ /api/v1        REST（受保护：本地令牌 + Bearer deviceToken）
-       └─ /etapi         AI 与自动化（受保护：deviceToken 或短期 scope 令牌）
+       └─ /etapi         AI 与自动化（受保护：本机 loopback + 桌面外部访问开关）
              │
              ▼
        NoteService（domain） / AttachmentService / Devices
@@ -167,7 +167,7 @@ corepack pnpm --filter @ygdria/web build:electron
 corepack pnpm --filter @ygdria/desktop dist:win
 ```
 
-安装版把 Web 界面与本地 API 一并打包；笔记数据库保存在当前用户的应用数据目录，而非安装目录。Windows 客户端一次只允许运行一个实例：再次启动会唤醒已有窗口。它固定使用 `127.0.0.1:4318` 供本地界面与 ETAPI 使用；若该端口已被占用，应用会提示关闭占用程序后重试，不会改用其他端口。
+安装版把 Web 界面、本地 API 与单文件 MCP bundle（`resources/mcp/index.js`）一并打包；笔记数据库保存在当前用户的应用数据目录，而非安装目录。Windows 客户端一次只允许运行一个实例：再次启动会唤醒已有窗口。它固定使用 `127.0.0.1:4318` 供本地界面与 ETAPI 使用；若该端口已被占用，应用会提示关闭占用程序后重试，不会改用其他端口。
 
 ### 方式四：Linux 独立服务包
 
@@ -229,11 +229,11 @@ CI 生成的 `linux-x64` 独立服务包内嵌 Node 24 运行时，目标服务�
 
 ## AI 与自动化（ETAPI）
 
-ETAPI 让本机 AI 工具和外部自动化在**受控权限**下读取、搜索与编辑笔记，默认以 Markdown 作为交换格式（内部由 Ygdria 转换为 Tiptap JSON）。
+ETAPI 让本机 AI 工具和外部自动化在用户授权的范围内读取、搜索与编辑笔记，默认以 Markdown 作为交换格式（内部由 Ygdria 转换为 Tiptap JSON）。
 
-- 仅由**桌面应用的本机 loopback 服务**提供；在「设置 → 安全 → AI 与外部访问令牌」中创建短期令牌（默认只读、15 分钟）。
-- 令牌只可访问 `/etapi/*`，不能访问 `/api/v1/*`；只在服务端内存保存 SHA-256 摘要。
-- 面向 AI 的精简调用说明见 [`docs/etapi-ai.md`](docs/etapi-ai.md)；管理员与集成人员视角见 [`docs/etapi.md`](docs/etapi.md)。
+- 仅由**桌面应用的本机 loopback 服务**提供，在「设置 → 安全 → AI 与外部访问」中开启；不需要访问令牌。
+- 服务端校验实际 loopback socket、Host 和本机原生客户端请求头，拒绝浏览器请求；外部请求不能访问 `/api/v1/*`。
+- [`apps/mcp`](apps/mcp/README.md) 提供 stdio MCP 适配器；面向 AI 的精简调用说明见 [`docs/etapi-ai.md`](docs/etapi-ai.md)，管理员与集成人员视角见 [`docs/etapi.md`](docs/etapi.md)。
 
 ---
 
@@ -294,7 +294,8 @@ corepack pnpm ygdria restore <dir> [restore-root]
 | --- | --- |
 | [运行与维护](docs/operations.md) | 安装依赖、启动应用、构建前端、迁移数据库、运行 FTS 或 doctor、设备配对、桌面端打包、备份与恢复。 |
 | [API 与内容格式](docs/api.md) | 对接 REST、ETAPI、设备管理、受保护笔记、自动化脚本或导入导出。 |
-| [ETAPI：AI 与外部自动化](docs/etapi.md) | 给 AI 签发短期令牌，读取笔记层级、正文与 tag，并安全地创建和编辑笔记。 |
+| [ETAPI：AI 与外部自动化](docs/etapi.md) | 通过桌面开关授权本机 AI 工具，读取笔记层级、正文与 tag，并安全地创建和编辑笔记。 |
+| [MCP 适配器](apps/mcp/README.md) | 在本机 MCP 客户端中接入 Ygdria，使用搜索、树浏览和受限写入工具。 |
 | [认证与同步](docs/auth-and-sync.md) | 部署形态 A/B、设备认证、端到端加密、桌面端远端代理、多端访问与同步边界。 |
 | [附件协议](docs/attachment-protocol.md) | 实现文件存储适配器、共享附件或清理任务。 |
 

@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  McpServer,
-  ResourceTemplate,
-} from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EtapiClient } from "./client/etapi-client.js";
 import { loadConfig, type Config } from "./config.js";
 import { registerCreateNote } from "./tools/create-note.js";
+import { registerDeleteNote } from "./tools/delete-note.js";
 import { registerEditContent } from "./tools/edit-content.js";
 import { registerGetNote } from "./tools/get-note.js";
 import { registerTreeNavigation } from "./tools/get-tree.js";
@@ -38,6 +36,7 @@ export function createServer(config: Config): McpServer {
   registerGetNote(server, client);
 
   registerCreateNote(server, client);
+  registerDeleteNote(server, client);
   registerUpdateNote(server, client);
   registerEditContent(server, client);
   registerReplaceContent(server, client);
@@ -59,9 +58,7 @@ export function createServer(config: Config): McpServer {
       }
       const note = await client.getNote(noteId, "markdown");
       const text =
-        typeof note.content === "string"
-          ? note.content
-          : JSON.stringify(note.content, null, 2);
+        typeof note.content === "string" ? note.content : JSON.stringify(note.content, null, 2);
       return {
         contents: [
           {
@@ -84,10 +81,7 @@ async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-) {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     // stdout is reserved for MCP JSON-RPC messages.

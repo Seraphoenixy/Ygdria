@@ -17,12 +17,12 @@ Ygdria 是单用户、自托管的个人知识库。生产或本地正常使用�
        ├─ /api/v1/auth/login/{challenge,verify}                 ← 公开（SRP-6a 挑战/响应）
        ├─ /api/v1/devices/pair                                   ← 公开（一次性配对）
        ├─ /api/v1        REST（受保护：本地令牌 + Bearer deviceToken）
-       └─ /etapi         AI 与自动化（受保护：deviceToken 或短期 scope 令牌）
+       └─ /etapi         AI 与自动化（受保护：loopback + 桌面外部访问开关）
              │
              ▼
    ┌─────────────── 设备认证层（onRequest hook）───────────────┐
    │ • 形态 B 强制启用；形态 A 默认关闭（loopback 即信任边界）   │
-   │ • /api 校验 deviceToken；/etapi 也接受短期 scope 令牌         │
+   │ • /api 校验 deviceToken；/etapi 校验本机来源与桌面开关        │
    │ • Devices（纯内存）只保留 sha256(token)，5 天滑动闲置超时    │
    │ • 公开路径白名单见 auth-and-sync.md §2.2                    │
    └─────────────────────────────────────────────────────────┘
@@ -51,7 +51,7 @@ Drizzle / better-sqlite3 → SQLite（WAL + FTS5）
 同一份 `buildApp` 代码支持两种部署形态，仅由启动参数区分（详见 [认证、受保护笔记与同步边界](auth-and-sync.md)）：
 
 - **形态 A（桌面内嵌）**：Electron 主进程启动 Fastify，监听 loopback；Renderer 经 `contextIsolation` + `sandbox` 访问本地 API，数据库位于用户应用数据目录。默认不启用设备认证——loopback 即信任边界。
-- **形态 B（独立服务器）**：`apps/server/src/index.ts` 直接运行；多端（手机、远程浏览器、第二台桌面）经反向代理 HTTPS 连接。设备认证强制启用。
+- **形态 B（独立服务器）**：`apps/server/src/index.ts` 直接运行；多端（手机、远程浏览器、第二台桌面）经反向代理 HTTPS 连接。设备认证强制启用，不注册 ETAPI。
 
 ## 1.2 桌面端远端代理（形态 A → 形态 B）
 
@@ -95,6 +95,7 @@ packages/api-client 浏览器与移动端共用的 HTTP 请求封装（携带本
 apps/web         React 用户界面、ProtectedClientSession（端到端加密）、客户端主密码派生与 SRP 客户端逻辑、RemoteProxyClient（桌面端 IPC 代理）
 apps/desktop     Electron 主进程：本地 Fastify 内嵌、远端代理 IPC、safeStorage 凭据存储、路径白名单与 SSRF 防护
 apps/mobile      Capacitor 壳（Android/iOS）：复用 apps/web 的 SPA（webDir: ../web/dist），集成原生状态栏/深色、键盘 resize、Android 返回键、安全凭据存储（capacitor-secure-storage-plugin）与移动端笔记树抽屉；原生工程经 cap sync 纳入。移动端的唯一服务地址统一为设置中的「与 Linux 服务端同步的地址」`settings.syncServerUrl`（启动时把遗留的 `ygdria.api` 一次性并入），deviceToken 经 capacitor-secure-storage-plugin 安全存储。
+apps/mcp         stdio MCP 适配器：只通过本机 ETAPI HTTP 契约访问笔记，不直接依赖 domain 或 database
 ```
 
 依赖方向必须保持为：

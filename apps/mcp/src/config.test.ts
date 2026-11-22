@@ -6,10 +6,9 @@ import { join } from "node:path";
 import { loadConfig, parseIni } from "./config.js";
 
 test("defaults to loopback without tokens or write settings", () => {
-  assert.deepEqual(
-    loadConfig({ YGDRIA_CONFIG_FILE: join(tmpdir(), "ygdria-no-config.ini") }),
-    { baseUrl: "http://127.0.0.1:4318" },
-  );
+  assert.deepEqual(loadConfig({ YGDRIA_CONFIG_FILE: join(tmpdir(), "ygdria-no-config.ini") }), {
+    baseUrl: "http://127.0.0.1:4318",
+  });
 });
 test("reads an optional URL and ignores retired credential settings", () => {
   const dir = mkdtempSync(join(tmpdir(), "ygdria-config-"));

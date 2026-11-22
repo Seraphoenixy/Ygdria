@@ -4,6 +4,30 @@
 
 每个请求添加 `X-Ygdria-External-Access: 1`，MCP 服务会自动处理。只支持本机原生客户端，不支持网页或远程直接调用。
 
+## MCP 客户端
+
+Ygdria 自带 stdio MCP 适配器，源码与工具列表见 [`apps/mcp/README.md`](../apps/mcp/README.md)。在主仓库构建后，把 MCP 客户端指向 `apps/mcp/dist/index.js`：
+
+```powershell
+corepack pnpm install
+corepack pnpm --filter @ygdria/mcp build
+```
+
+```json
+{
+  "mcpServers": {
+    "ygdria": {
+      "command": "node",
+      "args": ["D:/projects/Ygdria/apps/mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+MCP 始终注册全部工具，是否允许执行由桌面「AI 与外部访问」开关决定；关闭后调用立即返回 403，不需要令牌或重启 MCP。
+
+Windows 安装包会把单文件 bundle 放到 `<安装目录>/resources/mcp/index.js`，已内置运行依赖。客户端可继续用 `node` 启动该文件；若本机没有 Node.js，可在支持环境变量的客户端中用 `ELECTRON_RUN_AS_NODE=1` 调用应用自带的 `Ygdria.exe`。
+
 用户授权整理、归类、生成或编辑任务后，可连续完成范围内的必要操作，无需逐项确认。替换已有内容前读取内容和版本；发生 409 时基于最新状态重新判断。创建和追加使用幂等键；未携带键的创建不能在网络异常后盲目重试。受保护笔记不可读取或修改。ETAPI 不提供永久删除或清空回收站能力。
 
 ## 读取接口

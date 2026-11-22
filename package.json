@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "corepack pnpm --filter @ygdria/web dev",
     "dev:server": "corepack pnpm --filter @ygdria/server dev",
+    "dev:mcp": "corepack pnpm --filter @ygdria/mcp dev",
     "typecheck": "corepack pnpm -r typecheck",
     "test": "node --test scripts/node-security.test.mjs && corepack pnpm -r test",
     "build": "corepack pnpm -r build",

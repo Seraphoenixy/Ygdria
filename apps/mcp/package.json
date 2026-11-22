@@ -1,7 +1,7 @@
 {
-  "name": "ygdria-mcp",
+  "name": "@ygdria/mcp",
   "version": "0.1.0",
-  "description": "A lightweight MCP to Ygdria ETAPI adapter",
+  "description": "MCP server for Ygdria ETAPI",
   "type": "module",
   "bin": {
     "ygdria-mcp": "dist/index.js"
@@ -13,10 +13,11 @@
     "ygdria-mcp.example.ini"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/index.bundle.js",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/index.bundle.js",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "npm run build && node --test dist/client/etapi-client.test.js dist/config.test.js dist/server.test.js dist/tools/get-tree.test.js dist/tools/shared.test.js dist/tools/convenience.test.js",
+    "test": "tsc -p tsconfig.json && node --test dist/client/etapi-client.test.js dist/config.test.js dist/server.test.js dist/tools/get-tree.test.js dist/tools/shared.test.js dist/tools/convenience.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
@@ -27,9 +28,10 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "tsx": "^4.20.0",
-    "typescript": "^5.8.0"
+    "@types/node": "^24.0.0",
+    "esbuild": "0.28.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
   },
-  "license": "MIT"
+  "license": "Apache-2.0"
 }

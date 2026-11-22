@@ -13,7 +13,13 @@ test("tree navigation exposes only placement-ID based tools", async () => {
   try {
     const names = (await client.listTools()).tools.map((tool) => tool.name);
     assert.ok(!names.includes("get_tree"));
-    for (const name of ["list_tree_roots", "get_tree_node", "list_tree_children", "get_tree_subtree", "resolve_tree_nodes"]) {
+    for (const name of [
+      "list_tree_roots",
+      "get_tree_node",
+      "list_tree_children",
+      "get_tree_subtree",
+      "resolve_tree_nodes",
+    ]) {
       assert.ok(names.includes(name));
     }
   } finally {

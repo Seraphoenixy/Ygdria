@@ -9,6 +9,43 @@ function mockFetch(
     handler(String(input), init ?? {})) as typeof fetch;
 }
 
+test("deleteNote sends an encoded DELETE target with version and external access header", async () => {
+  const client = new EtapiClient({
+    baseUrl: "http://127.0.0.1:4318",
+    fetchImpl: mockFetch((url, init) => {
+      assert.equal(url, "http://127.0.0.1:4318/etapi/notes/note%2F1");
+      assert.equal(init.method, "DELETE");
+      assert.equal((init.headers as Record<string, string>)["If-Match"], "7");
+      assert.equal((init.headers as Record<string, string>)["X-Ygdria-External-Access"], "1");
+      assert.equal(init.body, undefined);
+      return Response.json({ id: "note/1", deleted: true, undoId: "undo-1" });
+    }),
+  });
+  assert.deepEqual(await client.deleteNote("note/1", 7), {
+    id: "note/1",
+    deleted: true,
+    undoId: "undo-1",
+  });
+});
+
+test("deleteNote preserves server errors without retrying the deletion", async () => {
+  let calls = 0;
+  const client = new EtapiClient({
+    baseUrl: "http://127.0.0.1:4318",
+    fetchImpl: mockFetch(() => {
+      calls++;
+      return Response.json({ error: "Note has children" }, { status: 409 });
+    }),
+  });
+  await assert.rejects(client.deleteNote("note-1", 1), (error: unknown) => {
+    assert.ok(error instanceof EtapiError);
+    assert.equal(error.status, 409);
+    assert.deepEqual(error.details, { error: "Note has children" });
+    return true;
+  });
+  assert.equal(calls, 1);
+});
+
 test("search uses local ETAPI headers without credentials and filters protected results", async () => {
   let capturedUrl = "";
   let capturedInit: RequestInit = {};
@@ -34,24 +71,10 @@ test("search uses local ETAPI headers without credentials and filters protected 
 
   const result = await client.searchNotes("a query");
 
-  assert.equal(
-    capturedUrl,
-    "http://127.0.0.1:4318/etapi/search?q=a+query&includeArchived=false",
-  );
-  assert.equal(
-    (capturedInit.headers as Record<string, string>).Authorization,
-    undefined,
-  );
-  assert.equal(
-    (capturedInit.headers as Record<string, string>)[
-      "X-Ygdria-External-Access"
-    ],
-    "1",
-  );
-  assert.equal(
-    (capturedInit.headers as Record<string, string>)["X-Ygdria-Local-Token"],
-    undefined,
-  );
+  assert.equal(capturedUrl, "http://127.0.0.1:4318/etapi/search?q=a+query&includeArchived=false");
+  assert.equal((capturedInit.headers as Record<string, string>).Authorization, undefined);
+  assert.equal((capturedInit.headers as Record<string, string>)["X-Ygdria-External-Access"], "1");
+  assert.equal((capturedInit.headers as Record<string, string>)["X-Ygdria-Local-Token"], undefined);
   assert.deepEqual(
     result.items.map((item) => item.noteId),
     ["visible"],
@@ -63,9 +86,7 @@ test("search normalizes HTML snippets to plain text", async () => {
     baseUrl: "http://127.0.0.1:4318",
     fetchImpl: mockFetch(() =>
       Response.json({
-        items: [
-          { noteId: "note-1", snippet: "A <mark>match</mark> &amp; more" },
-        ],
+        items: [{ noteId: "note-1", snippet: "A <mark>match</mark> &amp; more" }],
       }),
     ),
   });
@@ -158,10 +179,7 @@ test("editContent sends atomic literal edits as JSON", async () => {
     dryRun: true,
   });
 
-  assert.equal(
-    capturedUrl,
-    "http://127.0.0.1:4318/etapi/notes/note%2Fid/content",
-  );
+  assert.equal(capturedUrl, "http://127.0.0.1:4318/etapi/notes/note%2Fid/content");
   assert.equal(capturedInit.method, "PATCH");
   assert.equal(
     (capturedInit.headers as Record<string, string>)["Content-Type"],

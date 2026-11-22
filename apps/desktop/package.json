@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "corepack pnpm --filter @ygdria/web dev:electron",
     "build": "corepack pnpm --filter @ygdria/web build:electron",
-    "dist:win": "corepack pnpm --filter @ygdria/desktop build && set \"PATH=%CD%\\scripts;%PATH%\" && electron-builder --win --publish never",
+    "dist:win": "corepack pnpm --filter @ygdria/mcp build && corepack pnpm --filter @ygdria/desktop build && set \"PATH=%CD%\\scripts;%PATH%\" && electron-builder --win --publish never",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -35,6 +35,10 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "../mcp/dist/index.bundle.js",
+        "to": "mcp/index.js"
       },
       {
         "from": "../../assets/icons/ygdria-forest.ico",
