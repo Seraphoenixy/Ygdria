@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   decodeStoredContent,
+  getMaxChangeId,
   recordChange,
   replaceNoteLinks,
   NEXT_CHANGE_LOG_ID_SQL,
@@ -8,8 +9,11 @@ import {
   type ContentCodec,
   type SqliteDatabase,
 } from "@ygdria/database";
-import { orderSyncChanges, SYNC_MAX_CLOCK_SKEW_MS, SYNC_SNAPSHOT_EXPIRED, attachmentIdsFromSerializedDocument, CALENDAR_NOTE_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
+import { orderSyncChanges, SYNC_MAX_CLOCK_SKEW_MS, SYNC_SNAPSHOT_EXPIRED, attachmentIdsFromSerializedDocument, CALENDAR_NOTE_ID, CALENDAR_PLACEMENT_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
 import { isSensitiveSettingKey } from "../http/settings.js";
+
+const SYSTEM_NOTE_IDS = new Set([SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID]);
+const SYSTEM_PLACEMENT_IDS = new Set([SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_PLACEMENT_ID, CALENDAR_PLACEMENT_ID]);
 
 export type SyncSqlite = SqliteDatabase;
 
@@ -356,6 +360,13 @@ export function fullSnapshotChanges(sqlite: SyncSqlite) {
   let id = 0;
   for (const row of sqlite.prepare("SELECT id,updated_at updatedAt FROM notes ORDER BY created_at,id").all() as Array<{ id: string; updatedAt: number }>)
     changes.push({ id: ++id, entityType: "note", entityId: row.id, changeKind: "updated", createdAt: row.updatedAt });
+  const purgedNotes = sqlite.prepare(
+    `SELECT t.entity_id entityId, t.deleted_at deletedAt FROM sync_tombstones t
+     WHERE t.entity_type='note' AND NOT EXISTS (SELECT 1 FROM notes WHERE id=t.entity_id)
+     ORDER BY t.entity_id`,
+  ).all() as Array<{ entityId: string; deletedAt: number }>;
+  for (const row of purgedNotes)
+    changes.push({ id: ++id, entityType: "note", entityId: row.entityId, changeKind: "deleted", createdAt: row.deletedAt });
   const pending = new Map((sqlite.prepare("SELECT id,parent_placement_id parentPlacementId,updated_at updatedAt FROM placements WHERE parent_placement_id IS NULL OR parent_placement_id != ?").all(SYSTEM_TRASH_PLACEMENT_ID) as Array<{ id: string; parentPlacementId: string | null; updatedAt: number }>).map((row) => [row.id, row]));
   while (pending.size) {
     let progressed = false;
@@ -453,9 +464,7 @@ export class SnapshotCache {
       fullSnapshotChanges(sqlite),
       true,
     );
-    const maxChangeId = (
-      sqlite.prepare("SELECT COALESCE(MAX(id),0) id FROM sync_change_log").get() as { id: number }
-    ).id;
+    const maxChangeId = getMaxChangeId(sqlite);
     const serializedBytes = Buffer.byteLength(JSON.stringify(changes));
     const maxBytes = this.options.maxBytes ?? 256 * 1024 * 1024;
     if (serializedBytes > maxBytes)
@@ -581,7 +590,10 @@ export function rebuildSyncBaseline(sqlite: SyncSqlite) {
 export function removeNoteFromSearchIndex(sqlite: SyncSqlite, noteId: string) {
   sqlite
     .prepare(
-      "INSERT INTO notes_fts(notes_fts,rowid,title,plain_text,properties_json) SELECT 'delete',rowid,title,plain_text,properties_json FROM notes WHERE id=? AND is_protected=0 AND deleted_at IS NULL",
+      `INSERT INTO notes_fts(notes_fts,rowid,title,plain_text,properties_json)
+       SELECT 'delete',n.rowid,n.title,n.plain_text,n.properties_json FROM notes n
+       JOIN notes_fts_docsize fts ON fts.id=n.rowid
+       WHERE n.id=? AND n.is_protected=0 AND n.deleted_at IS NULL`,
     )
     .run(noteId);
 }
@@ -698,8 +710,18 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
   let applied = 0;
   const rejected: RejectedSyncChange[] = [];
   const attachmentCleanupCandidates = new Set<string>();
-  const logChange = (entityType: string, entityId: string, changeKind: ChangeKind) => {
-    if (recordOutbound) recordChange(sqlite, entityType, entityId, changeKind);
+  type NoteAttachments = Pick<NoteRow, "content_data" | "is_protected" | "type"> & { content_codec: ContentCodec };
+  const collectAttachments = (note: NoteAttachments | undefined) => {
+    if (!note || note.is_protected || note.type === "code") return;
+    try {
+      for (const id of attachmentIdsFromStoredContent(note.content_data, note.content_codec))
+        attachmentCleanupCandidates.add(id);
+    } catch {
+      // Keep attachments when their source content cannot be decoded.
+    }
+  };
+  const logChange = (entityType: string, entityId: string, changeKind: ChangeKind, createdAt?: number) => {
+    if (recordOutbound) recordChange(sqlite, entityType, entityId, changeKind, createdAt);
   };
   const ordered = orderSyncChanges(changes);
   // Clock arbitration: a record claiming to be from further in the future than
@@ -734,49 +756,57 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
       }
       if (change.entityType === "note") {
         if (change.changeKind === "deleted") {
-          const accepts = noteWouldAcceptSyncUpdate(sqlite, change.entityId, timestamp);
-          if (accepts) removeNoteFromSearchIndex(sqlite, change.entityId);
+          if (SYSTEM_NOTE_IDS.has(change.entityId) || !noteWouldAcceptSyncUpdate(sqlite, change.entityId, timestamp)) continue;
           const existing = sqlite
             .prepare("SELECT deleted_at deletedAt FROM notes WHERE id=?")
             .get(change.entityId) as { deletedAt: number | null } | undefined;
-          if (existing && existing.deletedAt !== null && accepts) {
-            // The peer no longer has this note (it purged its trash) and the note
-            // is already in our trash, so hard-delete it locally to keep the two
-            // databases as consistent as possible. Safe: the note is already
-            // trashed here, so no user-visible content is lost, and a later
-            // restore from the peer would re-insert it via the note upsert below.
-            sqlite.prepare("DELETE FROM notes WHERE id=?").run(change.entityId);
-            logChange("note", change.entityId, "deleted");
-            applied += 1;
-            continue;
-          }
-          if (existing && accepts) {
-            // Active locally: the peer deleted it but we still have it live (a
-            // conflict, e.g. we restored after the peer trashed). Soft-delete to
-            // trash so it stays recoverable rather than silently destroying
-            // possibly-restored content.
-            const result = sqlite
-              .prepare(
-                "UPDATE notes SET deleted_at=?,updated_at=?,version=version+1 WHERE id=? AND updated_at < ?",
-              )
-              .run(timestamp, timestamp, change.entityId, timestamp);
-            if (result.changes) {
-              const hasTrashPlacement = sqlite
-                .prepare("SELECT 1 FROM placements WHERE note_id=? AND parent_placement_id=?")
-                .get(change.entityId, SYSTEM_TRASH_PLACEMENT_ID);
-              if (!hasTrashPlacement) {
-                const position = (
-                  sqlite
-                    .prepare("SELECT COALESCE(MAX(position),-1)+1 p FROM placements WHERE parent_placement_id=?")
-                    .get(SYSTEM_TRASH_PLACEMENT_ID) as { p: number }
-                ).p;
-                sqlite
-                  .prepare("INSERT OR IGNORE INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) VALUES (?,?,?,?,?,?)")
-                  .run(randomUUID(), change.entityId, SYSTEM_TRASH_PLACEMENT_ID, position, timestamp, timestamp);
-              }
-              logChange("note", change.entityId, "deleted");
+          if (!existing || existing.deletedAt !== null) {
+            if (existing) {
+              const deleted = sqlite.prepare(
+                "DELETE FROM notes WHERE id=? RETURNING content_data,content_codec,is_protected,type",
+              ).get(change.entityId) as NoteAttachments;
+              collectAttachments(deleted);
+            }
+            // Keep the source timestamp, including when the note is already absent.
+            // A stale create arriving after the deletion must still be rejected.
+            const recorded = sqlite.prepare(
+              `INSERT INTO sync_tombstones(entity_type,entity_id,deleted_at,change_log_id)
+               VALUES ('note',?,?,NULL)
+               ON CONFLICT(entity_type,entity_id) DO UPDATE SET deleted_at=excluded.deleted_at, change_log_id=NULL
+               WHERE excluded.deleted_at > sync_tombstones.deleted_at OR ?`,
+            ).run(change.entityId, timestamp, existing ? 1 : 0);
+            if (existing || recorded.changes) {
+              logChange("note", change.entityId, "deleted", timestamp);
               applied += 1;
             }
+            continue;
+          }
+          removeNoteFromSearchIndex(sqlite, change.entityId);
+          // Active locally: the peer deleted it but we still have it live (a
+          // conflict, e.g. we restored after the peer trashed). Soft-delete to
+          // trash so it stays recoverable rather than silently destroying
+          // possibly-restored content.
+          const result = sqlite
+            .prepare(
+              "UPDATE notes SET deleted_at=?,updated_at=?,version=version+1 WHERE id=? AND updated_at < ?",
+            )
+            .run(timestamp, timestamp, change.entityId, timestamp);
+          if (result.changes) {
+            const hasTrashPlacement = sqlite
+              .prepare("SELECT 1 FROM placements WHERE note_id=? AND parent_placement_id=?")
+              .get(change.entityId, SYSTEM_TRASH_PLACEMENT_ID);
+            if (!hasTrashPlacement) {
+              const position = (
+                sqlite
+                  .prepare("SELECT COALESCE(MAX(position),-1)+1 p FROM placements WHERE parent_placement_id=?")
+                  .get(SYSTEM_TRASH_PLACEMENT_ID) as { p: number }
+              ).p;
+              sqlite
+                .prepare("INSERT OR IGNORE INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+                .run(randomUUID(), change.entityId, SYSTEM_TRASH_PLACEMENT_ID, position, timestamp, timestamp);
+            }
+            logChange("note", change.entityId, "deleted");
+            applied += 1;
           }
           continue;
         }
@@ -798,18 +828,11 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           if (local) rejected.push({ entityType: "note", entityId: String(d.id), localUpdatedAt: local.updatedAt, localVersion: local.version });
           continue;
         }
-        if (acceptsUpdate) {
-          const previous = sqlite
-            .prepare("SELECT content_data contentData,content_codec contentCodec,is_protected isProtected,type FROM notes WHERE id=?")
-            .get(String(d.id)) as { contentData: Buffer; contentCodec: ContentCodec; isProtected: number; type: string } | undefined;
-          if (previous && !previous.isProtected && previous.type !== "code") {
-            try {
-              for (const attachmentId of attachmentIdsFromStoredContent(previous.contentData, previous.contentCodec))
-                attachmentCleanupCandidates.add(attachmentId);
-            } catch { /* conservative cleanup helper will retain data on invalid documents */ }
-          }
-        }
-        if (acceptsUpdate) removeNoteFromSearchIndex(sqlite, String(d.id));
+        const previous = sqlite
+          .prepare("SELECT content_data,content_codec,is_protected,type FROM notes WHERE id=?")
+          .get(String(d.id)) as NoteAttachments | undefined;
+        collectAttachments(previous);
+        removeNoteFromSearchIndex(sqlite, String(d.id));
         // The anti-resurrection guard mirrors the `relation` and `setting`
         // branches: a note that was permanently deleted here leaves a tombstone,
         // and a peer carrying an older copy must not be able to re-create it.
@@ -903,21 +926,22 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
         }
         const d = capRecord(change.data as Record<string, unknown> | null);
         if (!d || typeof d.noteId !== "string" || typeof d.updatedAt !== "number") continue;
+        // System placements have immutable note_id and parent_placement_id enforced by
+        // `placements_system_cannot_be_moved` (BEFORE UPDATE OF note_id, parent_placement_id).
+        // Even an identical value in SET triggers that abort, so only update position/updated_at.
+        const updateLocation = SYSTEM_PLACEMENT_IDS.has(String(d.id))
+          ? ""
+          : "note_id=excluded.note_id,parent_placement_id=excluded.parent_placement_id,";
         const result = sqlite
           .prepare(
-            "INSERT INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM notes WHERE id=?) AND NOT EXISTS(SELECT 1 FROM sync_tombstones WHERE entity_type='placement' AND entity_id=? AND deleted_at>=?) ON CONFLICT(id) DO UPDATE SET note_id=excluded.note_id,parent_placement_id=excluded.parent_placement_id,position=excluded.position,updated_at=excluded.updated_at WHERE excluded.updated_at > placements.updated_at",
+            `INSERT INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at)
+             SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM notes WHERE id=?)
+               AND NOT EXISTS(SELECT 1 FROM sync_tombstones WHERE entity_type='placement' AND entity_id=? AND deleted_at>=?)
+             ON CONFLICT(id) DO UPDATE SET ${updateLocation}position=excluded.position,updated_at=excluded.updated_at
+             WHERE excluded.updated_at > placements.updated_at`,
           )
-          .run(
-            d.id,
-            d.noteId,
-            d.parentPlacementId ?? null,
-            d.position,
-            d.createdAt,
-            d.updatedAt,
-            d.noteId,
-            d.id,
-            d.updatedAt,
-          );
+          .run(d.id, d.noteId, d.parentPlacementId ?? null, d.position, d.createdAt, d.updatedAt,
+            d.noteId, d.id, d.updatedAt);
         if (result.changes) {
           logChange("placement", String(d.id), "updated");
           applied += 1;

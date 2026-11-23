@@ -230,6 +230,29 @@ const MIGRATIONS: Migration[] = [
       ); CREATE INDEX IF NOT EXISTS etapi_receipts_created_idx ON etapi_receipts(created_at);`);
     },
   },
+  // Version 17 was used by an unreleased provenance-table draft. Keep its number
+  // free so databases that tried that draft can still run this migration.
+  {
+    version: 18,
+    description: "Recover permanent note tombstones from retained sync history",
+    checksum: "51b8ac5f2947d06e",
+    up(sqlite) {
+      sqlite.exec(`
+        INSERT INTO sync_tombstones (entity_type, entity_id, deleted_at, change_log_id)
+        SELECT 'note', l.entity_id, l.created_at, l.id
+        FROM sync_change_log l
+        JOIN (
+          SELECT entity_id, MAX(id) id FROM sync_change_log
+          WHERE entity_type='note' GROUP BY entity_id
+        ) latest ON latest.id=l.id
+        WHERE l.change_kind='deleted'
+          AND NOT EXISTS (SELECT 1 FROM notes WHERE id=l.entity_id)
+        ON CONFLICT (entity_type, entity_id) DO UPDATE SET
+          deleted_at=MAX(sync_tombstones.deleted_at, excluded.deleted_at),
+          change_log_id=excluded.change_log_id;
+      `);
+    },
+  },
 ];
 
 /** The supported migration history begins at v11. Older migration records are

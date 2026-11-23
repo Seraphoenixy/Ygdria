@@ -5,6 +5,8 @@ import {
   getChangesSince,
   hasChangesAfter,
   getMaxChangeId,
+  canResumeChangeLog,
+  isLocalSyncCursor,
   advanceCursor,
   getCursor,
   pruneChangeLog,
@@ -51,7 +53,8 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     const peerId = query.peerId;
     if (validPeerId(peerId)) {
       const key = cursorKey(req.device?.id, peerId);
-      if (isPeerRebaselineRequired(sqlite, key)) throw new SyncRebaselineRequiredError(key);
+      if (isPeerRebaselineRequired(sqlite, key) || (req.device && !canResumeChangeLog(sqlite, cursorId)))
+        throw new SyncRebaselineRequiredError(key);
       touchPeerActivity(sqlite, key);
     }
     const requestedLimit = Number(query.limit ?? 200);
@@ -268,8 +271,11 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     if (!validPeerId(body.peerId) || !Number.isSafeInteger(cursor) || cursor < 0)
       throw httpError(400, "peerId and cursor (non-negative integer) are required");
     const key = cursorKey(req.device?.id, body.peerId);
-    if (isPeerRebaselineRequired(sqlite, key) && !canCompletePeerRebaseline(sqlite, key, cursor))
-      throw new SyncRebaselineRequiredError(key);
+    if (
+      (req.device && !canResumeChangeLog(sqlite, cursor)) ||
+      (!isLocalSyncCursor(key) && isPeerRebaselineRequired(sqlite, key) &&
+        !canCompletePeerRebaseline(sqlite, key, cursor))
+    ) throw new SyncRebaselineRequiredError(key);
     if (body.snapshotSession) snapshotCache.confirm(body.snapshotSession, cursor);
     const result = advanceCursor(sqlite, key, cursor);
     clearPeerRebaseline(sqlite, key);
@@ -290,9 +296,10 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     const peerId = (req.query as { peerId?: string }).peerId;
     if (!validPeerId(peerId)) throw httpError(400, "peerId is required");
     const key = cursorKey(req.device?.id, peerId);
-    // Tell the client up front that it must re-baseline, so it switches to the
-    // snapshot flow immediately instead of discovering it on the first pull.
-    if (isPeerRebaselineRequired(sqlite, key)) throw new SyncRebaselineRequiredError(key);
+    // Older builds could gate local in:/out: positions. Those positions have
+    // no peer snapshot to acknowledge at this endpoint.
+    if (!isLocalSyncCursor(key) && isPeerRebaselineRequired(sqlite, key))
+      throw new SyncRebaselineRequiredError(key);
     touchPeerActivity(sqlite, key);
     const cursor = getCursor(sqlite, key);
     return cursor

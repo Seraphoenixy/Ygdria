@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { pbkdf2Sync, randomBytes } from "node:crypto";
+import { pbkdf2Sync, randomBytes, randomUUID } from "node:crypto";
 import * as srpClient from "secure-remote-password/client.js";
 import * as srpServer from "secure-remote-password/server.js";
 import {
@@ -589,23 +589,53 @@ describe("device auth (SRP-6a)", () => {
     await localApp.close();
   });
 
-  it("isolates sync cursors between authenticated devices", async () => {
+  it("isolates sync cursors and rejects pruned history after re-authentication", async () => {
     const localApp = buildDeviceApp();
-    const first = await initialize(localApp);
-    const second = await srpLogin(localApp, MASTER_PASSWORD, first.accessSalt, "第二设备");
-    const peerId = "https://sync.example.test";
-    const firstAdvance = await localApp.inject({
-      method: "POST", url: "/api/v1/sync/advance",
-      headers: { authorization: `Bearer ${first.deviceToken}` },
-      payload: { peerId, cursor: 7 },
-    });
-    expect(firstAdvance.statusCode).toBe(200);
-    const secondCursor = await localApp.inject({
-      method: "GET", url: `/api/v1/sync/cursor?peerId=${encodeURIComponent(peerId)}`,
-      headers: { authorization: `Bearer ${second.deviceToken}` },
-    });
-    expect(secondCursor.json()).toMatchObject({ peerId, lastAdvanceId: 0 });
-    await localApp.close();
+    try {
+      const first = await initialize(localApp);
+      const second = await srpLogin(localApp, MASTER_PASSWORD, first.accessSalt, "第二设备");
+      const peerId = "https://sync.example.test";
+      const firstHeaders = { authorization: `Bearer ${first.deviceToken}` };
+      const secondHeaders = { authorization: `Bearer ${second.deviceToken}` };
+      const changes = await localApp.inject({ url: "/api/v1/sync/changes", headers: firstHeaders });
+      const head = changes.json().maxChangeId;
+      expect(head).toBeGreaterThan(0);
+      const firstAdvance = await localApp.inject({
+        method: "POST", url: "/api/v1/sync/advance",
+        headers: firstHeaders, payload: { peerId, cursor: head },
+      });
+      expect(firstAdvance.statusCode).toBe(200);
+      const secondCursor = await localApp.inject({
+        url: `/api/v1/sync/cursor?peerId=${encodeURIComponent(peerId)}`, headers: secondHeaders,
+      });
+      expect(secondCursor.json()).toMatchObject({ peerId, lastAdvanceId: 0 });
+
+      const stalePull = await localApp.inject({
+        url: `/api/v1/sync/changes?peerId=${encodeURIComponent(peerId)}&cursor=0`,
+        headers: secondHeaders,
+      });
+      const staleAdvance = await localApp.inject({
+        method: "POST", url: "/api/v1/sync/advance",
+        headers: secondHeaders, payload: { peerId, cursor: 0 },
+      });
+      for (const response of [stalePull, staleAdvance]) {
+        expect(response.statusCode).toBe(409);
+        expect(response.json().error.code).toBe("SYNC_REBASELINE_REQUIRED");
+      }
+      const snapshotSession = randomUUID();
+      const snapshot = await localApp.inject({
+        url: `/api/v1/sync/snapshot?peerId=${encodeURIComponent(peerId)}&session=${snapshotSession}`,
+        headers: secondHeaders,
+      });
+      expect(snapshot.json()).toMatchObject({ maxChangeId: head, hasMore: false });
+      const recovered = await localApp.inject({
+        method: "POST", url: "/api/v1/sync/advance",
+        headers: secondHeaders, payload: { peerId, cursor: head, snapshotSession },
+      });
+      expect(recovered.statusCode, recovered.body).toBe(200);
+    } finally {
+      await localApp.close();
+    }
   });
 
   it("derives different accessSecrets from different salts (no key reuse)", () => {

@@ -166,9 +166,7 @@ export class PlacementService extends NoteServiceBase {
   purge(noteId: string) {
     this.assertNotSystemNote(noteId);
     this.store.sqlite.transaction(() => {
-      const result = this.store.sqlite.prepare("DELETE FROM notes WHERE id=?").run(noteId);
-      if (!result.changes) throw new NotFoundError();
-      recordChange(this.store.sqlite, "note", noteId, "deleted", now());
+      if (!this.purgeNoteRow(noteId)) throw new NotFoundError();
       this.queueUnreferencedAttachmentCleanup();
     })();
     // The storage adapter owns physical files. The durable job records cleanup intent;
@@ -188,14 +186,21 @@ export class PlacementService extends NoteServiceBase {
         .all(SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, before ?? null, before ?? null) as IdRow[]
     ).map((row) => row.id as string);
     this.store.sqlite.transaction(() => {
-      for (const noteId of noteIds) {
-        this.store.sqlite.prepare("DELETE FROM notes WHERE id=?").run(noteId);
-        recordChange(this.store.sqlite, "note", noteId, "deleted", now());
-      }
+      for (const noteId of noteIds) this.purgeNoteRow(noteId);
       this.queueUnreferencedAttachmentCleanup();
     })();
     return { count: noteIds.length, attachmentStorageKeys: [] };
   }
+  private purgeNoteRow(noteId: string): boolean {
+    const deleted = this.store.sqlite
+      .prepare("DELETE FROM notes WHERE id=? RETURNING updated_at updatedAt")
+      .get(noteId) as { updatedAt: number } | undefined;
+    if (!deleted) return false;
+    // A purge must sort after the trashed state even if both happen in one tick.
+    recordChange(this.store.sqlite, "note", noteId, "deleted", Math.max(now(), deleted.updatedAt + 1));
+    return true;
+  }
+
   tree() {
     const rows = this.store.sqlite
       .prepare(

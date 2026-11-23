@@ -15,7 +15,8 @@
  *
  * So nothing here deletes on age alone. Change-log rows and tombstones are only
  * removed once every still-active peer has provably consumed them, and cleanup
- * jobs are only removed once they have completed.
+ * jobs are only removed once they have completed. Permanent note tombstones are
+ * also needed by full snapshots, so they are kept after their log entries age out.
  */
 
 import type Database from "better-sqlite3";
@@ -67,7 +68,8 @@ function count(sqlite: Database.Database, sql: string, ...params: unknown[]): nu
 }
 
 /**
- * Delete tombstones that every active peer has already replicated.
+ * Delete non-note tombstones that every active peer has already replicated.
+ * A full snapshot replays explicit permanent note deletions for returning peers.
  *
  * While any active peer still holds an incremental cursor, a tombstone is
  * prunable only when all three hold:
@@ -98,20 +100,17 @@ export function pruneSyncTombstones(
     return sqlite
       .prepare(
         `DELETE FROM sync_tombstones
-          WHERE change_log_id IS NOT NULL
+          WHERE entity_type <> 'note' AND change_log_id IS NOT NULL
             AND change_log_id <= ?
             AND deleted_at <= ?`,
       )
       .run(boundary, now - minRetentionMs).changes;
   }
-  // No active cursor remains. If every remaining peer is gated behind a
-  // snapshot re-baseline, pruning is still safe: a gated peer can never resume
-  // incrementally, and when it rebuilds from the snapshot it receives current
-  // truth (the deleted entity is absent), so it cannot resurrect anything. The
-  // retention floor is still applied as defence in depth.
+  // No active cursor remains. Gated peers must request a fresh snapshot.
+  // Keep permanent note tombstones so that snapshot can convey their deletions.
   if (countRebaselineRequired(sqlite) > 0) {
     return sqlite
-      .prepare("DELETE FROM sync_tombstones WHERE deleted_at <= ?")
+      .prepare("DELETE FROM sync_tombstones WHERE entity_type <> 'note' AND deleted_at <= ?")
       .run(now - minRetentionMs).changes;
   }
   // "Nobody is listening" is not evidence that everybody has heard, and a
@@ -206,7 +205,7 @@ export function collectSyncMaintenanceStats(
   // Tombstones old enough that only the acknowledgement rule still holds them.
   const ageEligibleTombstones = count(
     sqlite,
-    "SELECT COUNT(*) c FROM sync_tombstones WHERE deleted_at <= ?",
+    "SELECT COUNT(*) c FROM sync_tombstones WHERE entity_type <> 'note' AND deleted_at <= ?",
     now - tombstoneMinRetentionMs,
   );
   // Mirrors pruneSyncTombstones exactly, so the report can never promise a
@@ -215,7 +214,7 @@ export function collectSyncMaintenanceStats(
     boundary !== null && boundary > 0
       ? count(
           sqlite,
-          "SELECT COUNT(*) c FROM sync_tombstones WHERE change_log_id IS NOT NULL AND change_log_id <= ? AND deleted_at <= ?",
+          "SELECT COUNT(*) c FROM sync_tombstones WHERE entity_type <> 'note' AND change_log_id IS NOT NULL AND change_log_id <= ? AND deleted_at <= ?",
           boundary,
           now - tombstoneMinRetentionMs,
         )

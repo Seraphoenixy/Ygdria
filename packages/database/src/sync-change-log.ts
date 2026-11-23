@@ -34,6 +34,12 @@ export function recordChange(
       "INSERT INTO sync_change_log (entity_type, entity_id, change_kind, created_at) VALUES (?,?,?,?)",
     )
     .run(entityType, entityId, changeKind, createdAt);
+  if (entityType === "note" && changeKind === "deleted") {
+    sqlite.prepare(
+      `UPDATE sync_tombstones SET deleted_at=?, change_log_id=last_insert_rowid()
+       WHERE entity_type='note' AND entity_id=? AND NOT EXISTS (SELECT 1 FROM notes WHERE id=?)`,
+    ).run(createdAt, entityId, entityId);
+  }
 }
 
 /** Record a batch of changes atomically. */
@@ -67,12 +73,30 @@ export function getChangesSince(
     .all(cursorId, limit) as SyncChange[];
 }
 
-/** Get the current maximum change id (for initial cursor setup). */
+/** Get the change-log high-water mark, including acknowledged rows since pruned. */
 export function getMaxChangeId(sqlite: Database.Database): number {
   const row = sqlite
-    .prepare("SELECT COALESCE(MAX(id),0) maxId FROM sync_change_log")
+    .prepare(`
+      SELECT MAX(
+        COALESCE((SELECT seq FROM sqlite_sequence WHERE name='sync_change_log'), 0),
+        COALESCE((SELECT id FROM sync_change_log ORDER BY id DESC LIMIT 1), 0)
+      ) maxId
+    `)
     .get() as { maxId: number };
   return row.maxId;
+}
+
+/** A newly authenticated device can still be carrying a cursor from pruned history. */
+export function canResumeChangeLog(sqlite: Database.Database, cursor: number): boolean {
+  const head = getMaxChangeId(sqlite);
+  const { oldest } = sqlite.prepare("SELECT MIN(id) oldest FROM sync_change_log").get() as {
+    oldest: number | null;
+  };
+  return cursor >= (oldest === null ? head : oldest - 1) && cursor <= head;
+}
+
+export function isLocalSyncCursor(peerId: string): boolean {
+  return peerId.startsWith("in:") || peerId.startsWith("out:");
 }
 
 export type PeerCursor = {
@@ -164,7 +188,8 @@ export type PeerExpiryOptions = {
  * On top of dropping the cursor, each expired peer is recorded in
  * `sync_rebaseline_required` so its identity and the gate are not lost. The
  * peer may no longer resume incrementally; it must re-baseline from the
- * snapshot, and the server enforces that on every later pull/push.
+ * snapshot. Local in:/out: positions survive inactivity: the device needs
+ * them to keep its offline edits and resume from its last received update.
  */
 export function expireInactivePeers(
   sqlite: Database.Database,
@@ -176,12 +201,12 @@ export function expireInactivePeers(
   const cutoff = now - maxInactiveMs;
   const expired = (
     sqlite
-      .prepare("SELECT peer_id peerId FROM sync_cursors WHERE COALESCE(last_active_at,advanced_at) < ?")
+      .prepare("SELECT peer_id peerId FROM sync_cursors WHERE peer_id NOT LIKE 'in:%' AND peer_id NOT LIKE 'out:%' AND COALESCE(last_active_at,advanced_at) < ?")
       .all(cutoff) as Array<{ peerId: string }>
   ).map((row) => row.peerId);
   if (expired.length === 0) return [];
   sqlite
-    .prepare("DELETE FROM sync_cursors WHERE COALESCE(last_active_at,advanced_at) < ?")
+    .prepare("DELETE FROM sync_cursors WHERE peer_id NOT LIKE 'in:%' AND peer_id NOT LIKE 'out:%' AND COALESCE(last_active_at,advanced_at) < ?")
     .run(cutoff);
   const gate = sqlite.prepare(
     "INSERT OR IGNORE INTO sync_rebaseline_required (peer_id, reason, created_at) VALUES (?,?,?)",
@@ -244,10 +269,12 @@ export function countRebaselineRequired(sqlite: Database.Database): number {
 }
 
 /** Lowest cursor position that still has to be preserved for an active peer,
- * or null when no active peer exists (in which case nothing may be pruned). */
+ * or null when no active peer exists (in which case nothing may be pruned).
+ * Inbound cursors (`in:*`) track a remote server's change-log IDs rather than
+ * this database's own `sync_change_log`, so they must never drive pruning. */
 export function activeSyncBoundary(sqlite: Database.Database): number | null {
   const row = sqlite
-    .prepare("SELECT MIN(last_advance_id) minId FROM sync_cursors")
+    .prepare("SELECT MIN(last_advance_id) minId FROM sync_cursors WHERE peer_id NOT LIKE 'in:%'")
     .get() as { minId: number | null };
   return row.minId ?? null;
 }

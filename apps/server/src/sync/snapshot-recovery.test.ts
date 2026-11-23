@@ -61,6 +61,116 @@ describe("snapshot recovery", () => {
   });
 });
 
+describe("snapshot permanent note deletions", () => {
+  it("replays a purge after log pruning without deleting unrelated or newer local notes", async () => {
+    const clock = vi.spyOn(Date, "now");
+    const start = Date.now();
+    const headers = { "x-ygdria-local-token": "snapshot-test", "x-ygdria-sync-origin": "remote" };
+    const client = buildApp({ databaseUrl: ":memory:", localToken: "snapshot-test" });
+    await client.ready();
+    clock.mockReturnValue(start + 1_000);
+    const server = buildApp({ databaseUrl: ":memory:" });
+    const sessions: string[] = [];
+    type SnapshotChange = { entityType: string; entityId: string; changeKind: string; data: unknown };
+    async function downloadSnapshot(peerId: string, source = server) {
+      const session = randomUUID();
+      sessions.push(session);
+      const changes: SnapshotChange[] = [];
+      let cursor = 0;
+      for (;;) {
+        const response = await source.inject({
+          url: `/api/v1/sync/snapshot?session=${session}&peerId=${peerId}&cursor=${cursor}&limit=3`,
+        });
+        expect(response.statusCode, response.body).toBe(200);
+        const page = response.json();
+        changes.push(...page.changes);
+        const applied = await client.inject({
+          method: "POST",
+          url: "/api/v1/sync/push",
+          headers,
+          payload: { changes: page.changes },
+        });
+        expect(applied.statusCode, applied.body).toBe(200);
+        if (!page.hasMore) return { changes, maxChangeId: page.maxChangeId };
+        cursor = page.cursor;
+      }
+    }
+    const trash = (app: typeof client, id: string) => app.inject({
+      url: `/api/v1/trash/${id}`, headers,
+    });
+    try {
+      const create = async (title: string) => (await server.inject({
+        method: "POST", url: "/api/v1/notes", payload: { title },
+      })).json();
+      const purged = await create("Replicated in trash");
+      const active = await create("Still active on client");
+      const edited = await create("Edited offline");
+      const firstServerOnly = await create("From the first server");
+      const local = (await client.inject({
+        method: "POST", url: "/api/v1/notes", headers, payload: { title: "Local only" },
+      })).json();
+      const original = await downloadSnapshot("first");
+      const stale = original.changes.find((change) => change.entityId === purged.id && change.entityType === "note");
+      expect(stale).toBeDefined();
+
+      clock.mockReturnValue(start + 2_000);
+      expect((await server.inject({ method: "DELETE", url: `/api/v1/notes/${purged.id}` })).statusCode).toBe(200);
+      await downloadSnapshot("first");
+      expect((await trash(client, purged.id)).statusCode).toBe(200);
+      for (const id of [purged.id, active.id, edited.id]) {
+        expect((await server.inject({ method: "DELETE", url: `/api/v1/notes/${id}/permanent` })).statusCode).toBe(200);
+      }
+      const head = (await server.inject({ url: "/api/v1/sync/changes" })).json().maxChangeId;
+      expect((await server.inject({
+        method: "POST", url: "/api/v1/sync/advance", payload: { peerId: "caught-up", cursor: head },
+      })).statusCode).toBe(200);
+      expect((await server.inject({ url: "/api/v1/sync/changes" })).json().changes).toEqual([]);
+
+      clock.mockReturnValue(start + 3_000);
+      const edit = await client.inject({
+        method: "PATCH", url: `/api/v1/notes/${edited.id}`, headers,
+        payload: { title: "New local edit", expectedVersion: edited.version },
+      });
+      expect(edit.statusCode, edit.body).toBe(200);
+
+      const recovered = await downloadSnapshot("returning");
+      expect(recovered.maxChangeId).toBe(head);
+      expect(recovered.changes).toContainEqual(expect.objectContaining({
+        entityType: "note", entityId: purged.id, changeKind: "deleted", data: null,
+      }));
+      expect((await trash(client, purged.id)).statusCode).toBe(404);
+      expect((await trash(client, active.id)).statusCode).toBe(200);
+      expect((await client.inject({ url: `/api/v1/notes/${edited.id}`, headers })).json().title)
+        .toBe("New local edit");
+      expect((await client.inject({
+        method: "POST", url: "/api/v1/sync/advance", headers,
+        payload: { peerId: "in:remote", cursor: recovered.maxChangeId },
+      })).statusCode).toBe(200);
+      const pending = (await client.inject({ url: "/api/v1/sync/changes", headers })).json().changes;
+      expect(pending).toContainEqual(expect.objectContaining({ entityId: local.id, entityType: "note" }));
+      await downloadSnapshot("returning");
+      expect((await trash(client, active.id)).statusCode).toBe(200);
+      const replay = await client.inject({
+        method: "POST", url: "/api/v1/sync/push", headers, payload: { changes: [stale] },
+      });
+      expect(replay.statusCode, replay.body).toBe(200);
+      expect(replay.json().applied).toBe(0);
+      expect((await client.inject({ url: `/api/v1/notes/${purged.id}`, headers })).statusCode).toBe(404);
+      const secondServer = buildApp({ databaseUrl: ":memory:" });
+      try {
+        await downloadSnapshot("switch", secondServer);
+        expect((await client.inject({ url: `/api/v1/notes/${firstServerOnly.id}`, headers })).json().title)
+          .toBe("From the first server");
+      } finally {
+        await secondServer.close();
+      }
+    } finally {
+      for (const session of sessions) snapshotCache.release(session);
+      await Promise.all([client.close(), server.close()]);
+    }
+  });
+});
+
 describe("snapshot resource lifecycle", () => {
   it("releases bodies only after the client confirms the snapshot cursor", async () => {
     const app = buildApp({ databaseUrl: ":memory:" });

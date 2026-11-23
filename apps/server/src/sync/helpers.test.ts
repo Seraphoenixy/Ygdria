@@ -3,6 +3,7 @@ import { applyMigrations, createDatabase, getCoalescedChangesSince } from "@ygdr
 import { NoteService, RelationService } from "@ygdria/domain";
 import {
   CALENDAR_NOTE_ID,
+  CALENDAR_PLACEMENT_ID,
   SYSTEM_ROOT_NOTE_ID,
   SYSTEM_ROOT_PLACEMENT_ID,
   SYSTEM_TRASH_NOTE_ID,
@@ -374,6 +375,32 @@ describe("cross-device attachment deletion", () => {
     ).toBeUndefined();
   });
 
+  it("queues attachment cleanup when a snapshot permanently deletes a trashed note", () => {
+    const peer = freshDb();
+    try {
+      insertAttachment(peer, ORPHAN_ID, "attachments/orphan");
+      const notes = new NoteService(peer);
+      const note = notes.create({ title: "Attachment in trash" });
+      notes.remove(note.id);
+      const content = JSON.stringify({
+        type: "doc",
+        content: [{ type: "image", attrs: { src: `/api/v1/attachments/${ORPHAN_ID}` } }],
+      });
+      peer.sqlite.prepare("UPDATE notes SET content_data=?,content_codec='identity' WHERE id=?")
+        .run(Buffer.from(content), note.id);
+      applySyncChanges(peer.sqlite, [{
+        changeId: 1, entityType: "note", entityId: note.id, changeKind: "deleted",
+        data: null, createdAt: Date.now() + 1_000,
+      }], false);
+      expect(peer.sqlite.prepare("SELECT 1 FROM notes WHERE id=?").get(note.id)).toBeUndefined();
+      expect(peer.sqlite.prepare("SELECT 1 FROM attachments WHERE id=?").get(ORPHAN_ID)).toBeUndefined();
+      expect(peer.sqlite.prepare("SELECT 1 FROM storage_cleanup_jobs WHERE storage_key=?")
+        .get("attachments/orphan")).toBeDefined();
+    } finally {
+      peer.sqlite.close();
+    }
+  });
+
   it("retains a still-referenced attachment despite a peer deletion change", () => {
     const peerB = freshDb();
     const notesB = new NoteService(peerB);
@@ -621,5 +648,32 @@ describe("incremental tree dependencies", () => {
       expect(target.sqlite.prepare("SELECT parent_placement_id parent FROM placements WHERE id=?").get(childPlacement)).toEqual({parent:folderPlacement});
       expect(target.sqlite.pragma("foreign_key_check")).toEqual([]);
     } finally {source.sqlite.close();target.sqlite.close();}
+  });
+
+  it("applies a newer server snapshot onto an existing client without triggering system-placement move aborts", () => {
+    const server = freshDb();
+    const client = freshDb();
+    try {
+      const serverNotes = new NoteService(server);
+      const created = serverNotes.create({ title: "From server" });
+      // Exercise the update of both system placements and unindexed system notes.
+      const newerAt = Date.now() + 10_000;
+      server.sqlite.prepare("UPDATE notes SET updated_at=? WHERE id IN (?,?,?)").run(
+        newerAt, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID,
+      );
+      server.sqlite.prepare("UPDATE placements SET updated_at=? WHERE id IN (?,?,?)").run(
+        newerAt,
+        SYSTEM_ROOT_PLACEMENT_ID,
+        SYSTEM_TRASH_PLACEMENT_ID,
+        CALENDAR_PLACEMENT_ID,
+      );
+      const snapshot = resolveChangeEntities(server.sqlite, "", fullSnapshotChanges(server.sqlite), true);
+      expect(() => applySyncChanges(client.sqlite, snapshot, false)).not.toThrow();
+      const noteRow = client.sqlite.prepare("SELECT title FROM notes WHERE id=?").get(created.id) as { title: string } | undefined;
+      expect(noteRow?.title).toBe("From server");
+    } finally {
+      server.sqlite.close();
+      client.sqlite.close();
+    }
   });
 });

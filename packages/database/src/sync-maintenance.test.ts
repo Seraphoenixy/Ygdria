@@ -279,6 +279,21 @@ describe("change log pruning", () => {
     const survivingMin = Math.min(...listPeerCursors(sqlite).map((p) => p.lastAdvanceId));
     expect(survivingMin).toBeGreaterThanOrEqual(changeLogIds(sqlite)[0] - 1);
   });
+
+  it("ignores inbound in:* cursors when computing activeSyncBoundary, pruning, and expiring peers", () => {
+    const sqlite = freshDb();
+    const ids = seedChanges(sqlite, 4);
+    syncTo(sqlite, "in:https://remote.example", 999999, NOW - 200 * DAY);
+
+    expect(activeSyncBoundary(sqlite)).toBeNull();
+    expect(pruneChangeLog(sqlite, { now: NOW, maxInactiveMs: 90 * DAY })).toBe(0);
+    expect(changeLogIds(sqlite)).toEqual(expect.arrayContaining(ids));
+    expect(getCursor(sqlite, "in:https://remote.example")?.lastAdvanceId).toBe(999999);
+    syncTo(sqlite, "out:https://remote.example", ids[0], NOW - 200 * DAY);
+    expect(pruneChangeLog(sqlite, { now: NOW, maxInactiveMs: 90 * DAY })).toBeGreaterThan(0);
+    expect(changeLogIds(sqlite)).toEqual(ids.slice(1));
+    expect(getCursor(sqlite, "out:https://remote.example")?.lastAdvanceId).toBe(ids[0]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -296,6 +311,28 @@ describe("tombstone pruning", () => {
     expect(tombstone.changeLogId).toBe(ids[ids.length - 1] + 1);
     recordChange(sqlite, "setting", "theme", "deleted", NOW);
     expect(getMaxChangeId(sqlite)).toBe(tombstone.changeLogId);
+  });
+
+  it("retains permanent note tombstones for snapshots after all peers acknowledged the log", () => {
+    const sqlite = freshDb();
+    const [head] = seedChanges(sqlite, 1);
+    sqlite.prepare(
+      "INSERT INTO sync_tombstones (entity_type,entity_id,deleted_at,change_log_id) VALUES ('note','purged',?,?)",
+    ).run(NOW - 400 * DAY, head);
+    syncTo(sqlite, "caught-up", head);
+    const options = { now: NOW, tombstoneMinRetentionMs: 0 };
+
+    expect(collectSyncMaintenanceStats(sqlite, options).tombstones.prunableRows).toBe(0);
+    const result = runSyncDataMaintenance(sqlite, options);
+    expect(result.removedChangeLogRows).toBeGreaterThan(0);
+    expect(result.removedTombstones).toBe(0);
+    expect(tombstoneCount(sqlite)).toBe(1);
+    expect(getMaxChangeId(sqlite)).toBe(head);
+
+    const expired = runSyncDataMaintenance(sqlite, { ...options, now: NOW + 400 * DAY });
+    expect(expired.expiredPeers).toEqual(["caught-up"]);
+    expect(expired.removedTombstones).toBe(0);
+    expect(tombstoneCount(sqlite)).toBe(1);
   });
 
   it("keeps a tombstone until every peer has crossed its boundary", () => {
@@ -826,6 +863,6 @@ describe("upgrading a v11 database", () => {
     expect(getCursor(sqlite, "desktop")).toMatchObject({ lastAdvanceId: 3 });
     expect(
       sqlite.prepare("SELECT COUNT(*) c FROM schema_migrations").get(),
-    ).toEqual({ c: 6 });
+    ).toEqual({ c: 7 });
   });
 });

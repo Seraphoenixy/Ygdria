@@ -130,9 +130,9 @@
 
 `push` 按 `updatedAt` / `createdAt` 时间戳逐记录合并；同一时间戳冲突时按确定性 JSON 序列化顺序选择。`sync_tombstones` 表用于过滤已删除实体，避免旧变更复活数据。**敏感设置不参与同步**：`auth_*`、`protected_session_*`、`server_access_password_*` 前缀的 settings 键既不出现在 `/sync/changes` 的返回中，也无法通过 `/sync/push` 修改——这些键只能通过 `/devices/initialize`、`/protected-session/setup`、`/protected-session/change-password` 等专用端点变更。这避免任何已认证设备通过同步通道覆盖认证材料导致账户接管。
 
-每个 peer 在 `sync_cursors` 表中维护独立的游标记录，游标为 `0` 表示无历史同步。客户端首次同步应从 0 开始拉取全量变更日志作为基线。
+每个 peer 在 `sync_cursors` 表中维护独立的游标记录，游标为 `0` 表示无历史同步。客户端首次同步从快照建立基线。重新认证后，服务端仍会检查旧游标所在的日志区间。
 
-当增量变更日志因过期被 `pruneChangeLog` 修剪、无法从旧游标补拉时，`GET /api/v1/sync/snapshot` 提供全量状态快照作为兜底基线（按 `cursor` 分页，可选 `metadataOnly` 仅取元数据）；迁移到一处增量日志已被清空的空白服务器时，客户端应先调用 `POST /api/v1/sync/rebuild` 重建基线游标，再从 `0` 重新拉取。
+当增量变更日志因过期被 `pruneChangeLog` 修剪、无法从旧游标补拉时，`GET /api/v1/sync/snapshot` 提供全量状态快照作为兜底基线（按 `cursor` 分页，可选 `metadataOnly` 仅取元数据）。快照中的 `note / deleted` 记录来自永久删除墓碑，使用相同的 `push` 合并规则；迁移到一处增量日志已被清空的空白服务器时，客户端应先调用 `POST /api/v1/sync/rebuild` 重建基线游标，再从 `0` 重新拉取。
 
 ## 1.3 健康检查与就绪探针
 
