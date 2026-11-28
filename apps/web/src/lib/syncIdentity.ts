@@ -4,8 +4,7 @@
  * The server keys a sync peer by `device id + peerId`, so it needs a value that
  * survives reloads. Without one, every request would look like a brand new peer
  * and the server could never tell an active device from an abandoned one — the
- * cursor would never advance, the change log would never be pruned, and
- * tombstones would accumulate forever.
+ * cursor would never advance and the change history would not be bounded.
  *
  * The value is opaque and local-only: it is a random identifier, never derived
  * from user content, and it is never sent anywhere except as the peer key of

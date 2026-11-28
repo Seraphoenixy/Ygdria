@@ -306,31 +306,25 @@ export const PLACEMENT_DELETION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 // ---------------------------------------------------------------------------
 // Sync data maintenance
 // ---------------------------------------------------------------------------
-// Replication metadata (change log, cursors, tombstones) and the durable
+// Replication metadata (change log, cursors, compatibility tombstones) and the durable
 // attachment cleanup queue are append-mostly tables. They must be bounded
 // without ever weakening the guarantees that depend on them:
 //
 //   * a cursor may only be discarded once the peer is provably stale, because
 //     discarding it forces that peer back onto the full snapshot baseline;
-//   * a tombstone may only be discarded once every peer that could still push
-//     a stale copy has advanced past the change-log entry that carried the
-//     deletion — never on age alone;
+//   * a permanent deletion remains in the change log as its receipt; the
+//     compatibility tombstone table stays empty and protocol-2 snapshots use
+//     entity absence to reconcile removals;
 //   * a cleanup job may only be discarded after it has completed, so retries
 //     and orphan rescans keep working exactly as before.
 
 /**
  * How long a sync peer may stay silent before it stops holding back change-log
- * and tombstone pruning. An expired peer's cursor is dropped in the same
+ * pruning. An expired peer's cursor is dropped in the same
  * transaction that lets pruning move past it, so its next sync starts from the
  * snapshot baseline instead of silently resuming from a pruned position.
  */
 export const SYNC_PEER_MAX_INACTIVE_MS = 90 * 24 * 60 * 60 * 1000;
-/**
- * Extra grace period a tombstone must reach before it becomes prunable. This
- * is a defence-in-depth floor layered on top of the acknowledgement boundary —
- * age alone never authorises deleting a tombstone.
- */
-export const SYNC_TOMBSTONE_MIN_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** Audit window for completed attachment cleanup jobs (30 days). */
 export const STORAGE_CLEANUP_JOB_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -384,18 +378,13 @@ export type SyncMaintenanceStats = {
   };
   tombstones: {
     rows: number;
-    /** Tombstones every active peer has acknowledged and that are old enough. */
+    /** Compatibility rows maintenance can remove immediately. */
     prunableRows: number;
-    /** Legacy rows with no recorded boundary; these are never pruned. */
+    /** Legacy rows with no recorded boundary; maintenance removes them. */
     withoutBoundary: number;
     /** Peers currently gated behind a snapshot re-baseline. */
     rebaselineRequiredPeers: number;
-    /**
-     * Tombstones that are retained specifically because a re-baseline-gated
-     * peer has not yet completed its snapshot. Zero means pruning proceeds
-     * safely under the gate (gated peers rebuild from current truth, so
-     * incremental resurrection is impossible).
-     */
+    /** Retained compatibility tombstones. Always zero after migration v21. */
     retainedForRebaseline: number;
   };
   peers: {
@@ -431,6 +420,7 @@ export type SyncMaintenanceStats = {
     tombstoneWarnRows: number;
     storageCleanupWarnPending: number;
     peerMaxInactiveMs: number;
+    /** Legacy response field; always zero because tombstone age is ignored. */
     tombstoneMinRetentionMs: number;
     storageJobRetentionMs: number;
   };

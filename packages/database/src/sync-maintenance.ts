@@ -1,23 +1,6 @@
-/**
- * Bounded maintenance for replication metadata.
- *
- * Four tables grow with usage and never shrink on their own: `sync_change_log`,
- * `sync_cursors`, `sync_tombstones`, and `storage_cleanup_jobs`. Each one backs
- * a guarantee that must survive the cleanup:
- *
- *   * change log      — offline devices catch up incrementally from it;
- *   * cursors         — a missing cursor is the signal that forces a device
- *                       back onto the full snapshot baseline;
- *   * tombstones      — they stop an out-of-date peer from resurrecting a
- *                       permanently deleted entity;
- *   * cleanup jobs    — they guarantee an attachment file is eventually removed
- *                       from disk, with retries.
- *
- * So nothing here deletes on age alone. Change-log rows and tombstones are only
- * removed once every still-active peer has provably consumed them, and cleanup
- * jobs are only removed once they have completed. Permanent note tombstones are
- * also needed by full snapshots, so they are kept after their log entries age out.
- */
+/** Replication metadata retention. Incremental history is protected by peer
+ * acknowledgements; retired history and deletions require protocol-2 snapshots.
+ * Local upload cursors retain pending mutations even after remote peer expiry. */
 
 import type Database from "better-sqlite3";
 import {
@@ -26,12 +9,16 @@ import {
   STORAGE_CLEANUP_JOB_WARN_PENDING,
   SYNC_CHANGE_LOG_WARN_ROWS,
   SYNC_PEER_MAX_INACTIVE_MS,
-  SYNC_TOMBSTONE_MIN_RETENTION_MS,
   SYNC_TOMBSTONE_WARN_ROWS,
   type SyncMaintenanceStats,
   type SyncMaintenanceWarning,
 } from "@ygdria/shared";
-import { activeSyncBoundary, countRebaselineRequired, expireInactivePeers } from "./sync-change-log.js";
+import {
+  activeSyncBoundary,
+  compactUnobservedHistory,
+  countRebaselineRequired,
+  expireInactivePeers,
+} from "./sync-change-log.js";
 
 // The report shape lives in @ygdria/shared so the HTTP client can describe the
 // status endpoint without pulling in SQLite. Re-exported here because this
@@ -41,8 +28,7 @@ export type { SyncMaintenanceStats, SyncMaintenanceWarning };
 export type SyncMaintenanceOptions = {
   /** Silence window after which a peer stops holding back pruning. */
   peerMaxInactiveMs?: number;
-  /** Minimum tombstone age, applied *in addition to* the acknowledgement
-   *  boundary. Never sufficient on its own. */
+  /** Legacy compatibility field. Tombstone age is ignored. */
   tombstoneMinRetentionMs?: number;
   /** Audit window for completed attachment cleanup jobs. */
   storageJobRetentionMs?: number;
@@ -67,55 +53,22 @@ function count(sqlite: Database.Database, sql: string, ...params: unknown[]): nu
   return row?.c ?? 0;
 }
 
-/**
- * Delete non-note tombstones that every active peer has already replicated.
- * A full snapshot replays explicit permanent note deletions for returning peers.
- *
- * While any active peer still holds an incremental cursor, a tombstone is
- * prunable only when all three hold:
- *   1. it records the change-log position that carried the deletion;
- *   2. every remaining cursor has advanced past that position;
- *   3. it is older than the configured floor (defence in depth).
- *
- * When no active cursor remains there are two very different situations:
- *
- *   * every remaining peer is gated behind a snapshot re-baseline — the server
- *     refuses their incremental pulls and pushes outright, and the snapshot
- *     they must rebuild from is current truth with the deleted entity absent.
- *     Nothing can resurrect, so age-eligible tombstones are prunable;
- *   * no peer is known at all — nothing is pruned. "Nobody is listening" is not
- *     evidence that everybody has heard.
- */
+/** Remove all compatibility tombstones immediately. Deletion events in the
+ * change log remain the durable receipt. */
 export function pruneSyncTombstones(
   sqlite: Database.Database,
-  options: SyncMaintenanceOptions = {},
+  _options: SyncMaintenanceOptions = {},
 ): number {
-  const now = options.now ?? Date.now();
-  const minRetentionMs = options.tombstoneMinRetentionMs ?? SYNC_TOMBSTONE_MIN_RETENTION_MS;
-  const boundary = activeSyncBoundary(sqlite);
-  if (boundary !== null && boundary > 0) {
-    // At least one active peer still holds an incremental cursor: a tombstone
-    // is prunable only once every such peer has advanced past its boundary AND
-    // the retention floor has elapsed.
-    return sqlite
+  // Permanent deletion is represented by sync_change_log. The tombstone table
+  // contains no information needed after that row exists and is always removed.
+  const removed = sqlite.prepare("DELETE FROM sync_tombstones").run().changes;
+  if (removed > 0)
+    sqlite
       .prepare(
-        `DELETE FROM sync_tombstones
-          WHERE entity_type <> 'note' AND change_log_id IS NOT NULL
-            AND change_log_id <= ?
-            AND deleted_at <= ?`,
+        "UPDATE sync_metadata_state SET tombstones_pruned=1,generation=generation+1 WHERE id=1",
       )
-      .run(boundary, now - minRetentionMs).changes;
-  }
-  // No active cursor remains. Gated peers must request a fresh snapshot.
-  // Keep permanent note tombstones so that snapshot can convey their deletions.
-  if (countRebaselineRequired(sqlite) > 0) {
-    return sqlite
-      .prepare("DELETE FROM sync_tombstones WHERE entity_type <> 'note' AND deleted_at <= ?")
-      .run(now - minRetentionMs).changes;
-  }
-  // "Nobody is listening" is not evidence that everybody has heard, and a
-  // returning device may still hold a stale copy — keep the tombstones.
-  return 0;
+      .run();
+  return removed;
 }
 
 /**
@@ -166,7 +119,16 @@ export function runSyncDataMaintenance(
         .run(boundary).changes;
     }
     result.removedTombstones = pruneSyncTombstones(sqlite, options);
+    result.removedChangeLogRows += compactUnobservedHistory(sqlite, {
+      now: options.now,
+      maxInactiveMs: options.peerMaxInactiveMs,
+    });
     result.removedStorageCleanupJobs = pruneCompletedStorageCleanupJobs(sqlite, options);
+    sqlite
+      .prepare(
+        "DELETE FROM sync_peer_objects WHERE NOT EXISTS(SELECT 1 FROM notes WHERE id=sync_peer_objects.entity_id)",
+      )
+      .run();
     result.rebaselineRequiredPeers = countRebaselineRequired(sqlite);
   };
   if (sqlite.inTransaction) run();
@@ -185,8 +147,6 @@ export function collectSyncMaintenanceStats(
 ): SyncMaintenanceStats {
   const now = options.now ?? Date.now();
   const peerMaxInactiveMs = options.peerMaxInactiveMs ?? SYNC_PEER_MAX_INACTIVE_MS;
-  const tombstoneMinRetentionMs =
-    options.tombstoneMinRetentionMs ?? SYNC_TOMBSTONE_MIN_RETENTION_MS;
   const storageJobRetentionMs = options.storageJobRetentionMs ?? STORAGE_CLEANUP_JOB_RETENTION_MS;
   const inactiveCutoff = now - peerMaxInactiveMs;
   const boundary = activeSyncBoundary(sqlite);
@@ -202,26 +162,8 @@ export function collectSyncMaintenanceStats(
   const pageSize = Number(sqlite.pragma("page_size", { simple: true }) ?? 0);
   const freelistPages = Number(sqlite.pragma("freelist_count", { simple: true }) ?? 0);
 
-  // Tombstones old enough that only the acknowledgement rule still holds them.
-  const ageEligibleTombstones = count(
-    sqlite,
-    "SELECT COUNT(*) c FROM sync_tombstones WHERE entity_type <> 'note' AND deleted_at <= ?",
-    now - tombstoneMinRetentionMs,
-  );
-  // Mirrors pruneSyncTombstones exactly, so the report can never promise a
-  // deletion the maintenance pass would refuse to make.
-  const tombstonePrunableRows =
-    boundary !== null && boundary > 0
-      ? count(
-          sqlite,
-          "SELECT COUNT(*) c FROM sync_tombstones WHERE entity_type <> 'note' AND change_log_id IS NOT NULL AND change_log_id <= ? AND deleted_at <= ?",
-          boundary,
-          now - tombstoneMinRetentionMs,
-        )
-      : rebaselineRequired > 0
-        ? ageEligibleTombstones
-        : 0;
-
+  const ageEligibleTombstones = count(sqlite, "SELECT COUNT(*) c FROM sync_tombstones");
+  const tombstonePrunableRows = ageEligibleTombstones;
   const stats: SyncMaintenanceStats = {
     capturedAt: now,
     changeLog: {
@@ -242,10 +184,7 @@ export function collectSyncMaintenanceStats(
         "SELECT COUNT(*) c FROM sync_tombstones WHERE change_log_id IS NULL",
       ),
       rebaselineRequiredPeers: rebaselineRequired,
-      // Old enough to go, but still held back because some peer has neither
-      // acknowledged the deletion nor been gated into a snapshot re-baseline.
-      // This is the number to look at when the tombstone table stops shrinking.
-      retainedForRebaseline: ageEligibleTombstones - tombstonePrunableRows,
+      retainedForRebaseline: 0,
     },
     peers: {
       total: count(sqlite, "SELECT COUNT(*) c FROM sync_cursors"),
@@ -261,15 +200,17 @@ export function collectSyncMaintenanceStats(
       ),
       rebaselineRequired,
       boundary,
-      oldestActivityAt:
-        (
-          sqlite
-            .prepare("SELECT MIN(COALESCE(last_active_at,advanced_at)) oldest FROM sync_cursors")
-            .get() as { oldest: number | null }
-        ).oldest,
+      oldestActivityAt: (
+        sqlite
+          .prepare("SELECT MIN(COALESCE(last_active_at,advanced_at)) oldest FROM sync_cursors")
+          .get() as { oldest: number | null }
+      ).oldest,
     },
     storageCleanupJobs: {
-      pending: count(sqlite, "SELECT COUNT(*) c FROM storage_cleanup_jobs WHERE completed_at IS NULL"),
+      pending: count(
+        sqlite,
+        "SELECT COUNT(*) c FROM storage_cleanup_jobs WHERE completed_at IS NULL",
+      ),
       failing: count(
         sqlite,
         "SELECT COUNT(*) c FROM storage_cleanup_jobs WHERE completed_at IS NULL AND attempts >= ?",
@@ -297,7 +238,7 @@ export function collectSyncMaintenanceStats(
       tombstoneWarnRows: SYNC_TOMBSTONE_WARN_ROWS,
       storageCleanupWarnPending: STORAGE_CLEANUP_JOB_WARN_PENDING,
       peerMaxInactiveMs,
-      tombstoneMinRetentionMs,
+      tombstoneMinRetentionMs: 0,
       storageJobRetentionMs,
     },
     warnings: [],

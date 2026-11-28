@@ -27,6 +27,7 @@ import {
   Devices,
 } from "@ygdria/domain";
 import { MaintenanceRunner } from "./maintenance.js";
+import { registerRetentionScheduler } from "./retention.js";
 import { EtapiAccess } from "./security/etapi-access.js";
 import { isPulledRemoteWrite } from "./http/errors.js";
 import { registerDeviceAuthHook } from "./http/auth-hook.js";
@@ -60,6 +61,7 @@ export function buildApp(
     enableDeviceAuth?: boolean;
     /** Register the optional ETAPI surface; user access remains off until enabled in settings. */
     enableEtapi?: boolean;
+    maintenanceIntervalMs?: number;
   } = {},
 ) {
   // `buildApp()` is also used by local/test hosts that historically expose
@@ -94,6 +96,8 @@ export function buildApp(
   );
   const attachments = new AttachmentService(store, attachmentStorage);
   const maintenance = new MaintenanceRunner(options.databaseUrl ?? "ygdria.db", store.sqlite);
+  if (options.maintenanceIntervalMs !== 0)
+    registerRetentionScheduler(app, store.sqlite, notes, attachments, options.maintenanceIntervalMs);
   const origin = options.origin ?? "http://localhost:5173";
   const webDist = options.webDist ?? resolve(import.meta.dirname, "../../web/dist");
   const allowedOrigins = new Set([origin]);
@@ -138,6 +142,7 @@ export function buildApp(
       "X-Ygdria-Import",
       "X-Ygdria-Local-Token",
       "X-Ygdria-Sync-Origin",
+      "X-Ygdria-Sync-Protocol",
     ],
   });
 
@@ -172,6 +177,7 @@ export function buildApp(
     protectedSessionReauth,
   });
   registerSyncRoutes(app, {
+    notes,
     sqlite: store.sqlite,
     attachmentRoot,
     recordOutbound: (req) => !pulledRemoteWrite(req),

@@ -306,9 +306,6 @@ export function useNotes({
       if (updated?.version != null) {
         autoSaveVersionRef.current = Math.max(autoSaveVersionRef.current, updated.version);
       }
-      const { revisionLimit } = readSettings();
-      if (Number.isInteger(revisionLimit) && revisionLimit >= 0)
-        void client.clearExcessRevisions(revisionLimit);
     },
     onError: (error, request) => {
       // The note was modified elsewhere (another device via sync, or a second

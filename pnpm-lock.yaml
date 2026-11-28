@@ -142,6 +142,10 @@ importers:
       zod:
         specifier: ^3.24.4
         version: 3.25.76
+    devDependencies:
+      '@ygdria/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
 
   apps/web:
     dependencies:

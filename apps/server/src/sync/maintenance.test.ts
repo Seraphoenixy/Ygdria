@@ -33,14 +33,20 @@ describe("sync maintenance endpoints", () => {
 
     // advancedAt === null is the existing signal the web client uses to switch
     // from /sync/changes to /sync/snapshot.
-    expect(res.json()).toMatchObject({ peerId: "never-seen", lastAdvanceId: 0, advancedAt: null, lastActiveAt: null });
+    expect(res.json()).toMatchObject({
+      peerId: "never-seen",
+      lastAdvanceId: 0,
+      advancedAt: null,
+      lastActiveAt: null,
+    });
     // Reading a cursor must not create one.
     const status = await app.inject({ method: "GET", url: "/api/v1/maintenance/sync-status" });
     expect(status.json().peers.some((p: any) => p.peerId === "never-seen")).toBe(false);
   });
 
   it("records liveness when a peer advances and when it merely reads", async () => {
-    const head = (await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0" })).json().maxChangeId;
+    const head = (await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0" })).json()
+      .maxChangeId;
     const advanced = await app.inject({
       method: "POST",
       url: "/api/v1/sync/advance",
@@ -49,7 +55,9 @@ describe("sync maintenance endpoints", () => {
     expect(advanced.json()).toMatchObject({ peerId: "desktop", lastAdvanceId: head });
     expect(advanced.json().lastActiveAt).toBeGreaterThan(0);
 
-    const cursor = (await app.inject({ method: "GET", url: "/api/v1/sync/cursor?peerId=desktop" })).json();
+    const cursor = (
+      await app.inject({ method: "GET", url: "/api/v1/sync/cursor?peerId=desktop" })
+    ).json();
     expect(cursor).toMatchObject({ peerId: "desktop", lastAdvanceId: head });
     // A caught-up device never advances again; reading is what keeps it alive.
     expect(cursor.lastActiveAt).toBeGreaterThanOrEqual(cursor.advancedAt);
@@ -57,25 +65,43 @@ describe("sync maintenance endpoints", () => {
 
   it("keeps the snapshot baseline complete after the change log is pruned", async () => {
     const note = (
-      await app.inject({ method: "POST", url: "/api/v1/notes", payload: { title: "Survives pruning" } })
+      await app.inject({
+        method: "POST",
+        url: "/api/v1/notes",
+        payload: { title: "Survives pruning" },
+      })
     ).json();
 
     // A single peer that is fully caught up lets /advance prune the whole log.
-    const head = (await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0" })).json().maxChangeId;
-    await app.inject({ method: "POST", url: "/api/v1/sync/advance", payload: { peerId: "desktop", cursor: head } });
+    const head = (await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0" })).json()
+      .maxChangeId;
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/sync/advance",
+      payload: { peerId: "desktop", cursor: head },
+    });
 
-    const incremental = (await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0" })).json();
+    const incremental = (
+      await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0" })
+    ).json();
     expect(incremental.changes).toHaveLength(0);
 
     // Offline recovery is untouched: the note is still reachable in full.
     const snapshot = (
-      await app.inject({ method: "GET", url: "/api/v1/sync/snapshot?cursor=0&limit=500&metadataOnly=1" })
+      await app.inject({
+        method: "GET",
+        url: "/api/v1/sync/snapshot?cursor=0&limit=500&metadataOnly=1",
+      })
     ).json();
-    expect(snapshot.changes.some((c: any) => c.entityType === "note" && c.entityId === note.id)).toBe(true);
+    expect(
+      snapshot.changes.some((c: any) => c.entityType === "note" && c.entityId === note.id),
+    ).toBe(true);
   });
 
   it("reports capacity and peer state read-only", async () => {
-    const before = (await app.inject({ method: "GET", url: "/api/v1/maintenance/sync-status" })).json();
+    const before = (
+      await app.inject({ method: "GET", url: "/api/v1/maintenance/sync-status" })
+    ).json();
 
     expect(before.stats).toMatchObject({
       changeLog: expect.any(Object),
@@ -90,7 +116,9 @@ describe("sync maintenance endpoints", () => {
     expect(desktop).toMatchObject({ expired: false });
 
     // Calling it again changes nothing.
-    const after = (await app.inject({ method: "GET", url: "/api/v1/maintenance/sync-status" })).json();
+    const after = (
+      await app.inject({ method: "GET", url: "/api/v1/maintenance/sync-status" })
+    ).json();
     expect(after.stats.changeLog.rows).toBe(before.stats.changeLog.rows);
     expect(after.peers).toHaveLength(before.peers.length);
   });
@@ -102,7 +130,8 @@ describe("sync maintenance endpoints", () => {
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    const task = (await app.inject({ method: "GET", url: "/api/v1/maintenance/status" })).json().task;
+    const task = (await app.inject({ method: "GET", url: "/api/v1/maintenance/status" })).json()
+      .task;
     expect(task.status).toBe("succeeded");
     expect(task.result).toMatchObject({
       expiredSyncPeers: 0,
@@ -111,7 +140,9 @@ describe("sync maintenance endpoints", () => {
       syncWarnings: [],
     });
 
-    const status = (await app.inject({ method: "GET", url: "/api/v1/maintenance/sync-status" })).json();
+    const status = (
+      await app.inject({ method: "GET", url: "/api/v1/maintenance/sync-status" })
+    ).json();
     expect(status.lastRun).not.toBeNull();
     expect(status.lastRun.capturedAt).toBeGreaterThan(0);
     // The active peer kept its cursor through a full maintenance pass.
@@ -146,12 +177,18 @@ describe("peer liveness and the re-baseline gate", () => {
   /** Pretend the peer has said nothing for `ms`. */
   const silence = (peerId: string, ms: number) => {
     const at = Date.now() - ms;
-    db.prepare("UPDATE sync_cursors SET advanced_at=?,last_active_at=? WHERE peer_id=?").run(at, at, peerId);
+    db.prepare("UPDATE sync_cursors SET advanced_at=?,last_active_at=? WHERE peer_id=?").run(
+      at,
+      at,
+      peerId,
+    );
   };
   const register = async (peerId: string, cursor = 0) =>
     app.inject({ method: "POST", url: "/api/v1/sync/advance", payload: { peerId, cursor } });
   const head = async () =>
-    (await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0&metadataOnly=1" })).json().maxChangeId;
+    (
+      await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0&metadataOnly=1" })
+    ).json().maxChangeId;
 
   it("keeps a pull-only peer alive", async () => {
     await register("puller", await head());
@@ -189,7 +226,9 @@ describe("peer liveness and the re-baseline gate", () => {
     await register("reader", await head());
 
     silence("reader", 200 * DAY);
-    expect((await app.inject({ method: "GET", url: "/api/v1/sync/cursor?peerId=reader" })).statusCode).toBe(200);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v1/sync/cursor?peerId=reader" })).statusCode,
+    ).toBe(200);
     expect(getCursor(db, "reader")!.lastActiveAt).toBeGreaterThan(Date.now() - 60_000);
 
     silence("reader", 200 * DAY);
@@ -204,7 +243,10 @@ describe("peer liveness and the re-baseline gate", () => {
   });
 
   it("still refuses to invent a cursor for an unknown or unnamed peer", async () => {
-    const anonymous = await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0&metadataOnly=1" });
+    const anonymous = await app.inject({
+      method: "GET",
+      url: "/api/v1/sync/changes?cursor=0&metadataOnly=1",
+    });
     expect(anonymous.statusCode).toBe(200);
     const unknown = await app.inject({
       method: "GET",
@@ -226,7 +268,9 @@ describe("peer liveness and the re-baseline gate", () => {
     expect(isPeerRebaselineRequired(db, "gated")).toBe(true);
 
     // The gate is visible to operators even though the cursor row is gone.
-    const status = (await app.inject({ method: "GET", url: "/api/v1/maintenance/sync-status" })).json();
+    const status = (
+      await app.inject({ method: "GET", url: "/api/v1/maintenance/sync-status" })
+    ).json();
     expect(status.peers).toContainEqual(
       expect.objectContaining({ peerId: "gated", expired: true, rebaselineRequired: true }),
     );
@@ -234,7 +278,10 @@ describe("peer liveness and the re-baseline gate", () => {
   });
 
   it("refuses an incremental pull from a gated peer", async () => {
-    const res = await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0&peerId=gated" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/sync/changes?cursor=0&peerId=gated",
+    });
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error.code).toBe(SYNC_REBASELINE_REQUIRED);
@@ -259,7 +306,9 @@ describe("peer liveness and the re-baseline gate", () => {
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error.code).toBe(SYNC_REBASELINE_REQUIRED);
-    expect(db.prepare("SELECT COUNT(*) c FROM settings WHERE key='gated-write'").get()).toEqual({ c: 0 });
+    expect(db.prepare("SELECT COUNT(*) c FROM settings WHERE key='gated-write'").get()).toEqual({
+      c: 0,
+    });
   });
 
   it("tells a gated peer to re-baseline as soon as it reads its cursor", async () => {
@@ -289,12 +338,19 @@ describe("peer liveness and the re-baseline gate", () => {
 
     // Normal incremental sync is back, on a fresh cursor at the snapshot head.
     expect(
-      (await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0&metadataOnly=1&peerId=gated" }))
-        .statusCode,
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/v1/sync/changes?cursor=0&metadataOnly=1&peerId=gated",
+        })
+      ).statusCode,
     ).toBe(200);
     const cursor = await app.inject({ method: "GET", url: "/api/v1/sync/cursor?peerId=gated" });
     expect(cursor.statusCode).toBe(200);
-    expect(cursor.json()).toMatchObject({ peerId: "gated", lastAdvanceId: snapshot.json().maxChangeId });
+    expect(cursor.json()).toMatchObject({
+      peerId: "gated",
+      lastAdvanceId: snapshot.json().maxChangeId,
+    });
   });
 
   it("does not let a gated peer bypass the snapshot with /advance", async () => {
@@ -319,8 +375,12 @@ describe("peer liveness and the re-baseline gate", () => {
     ).json();
     // Capture the note exactly as a peer would have replicated it, then age it
     // so the copy is unambiguously older than the deletion.
-    const pulled = (await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0&limit=500" })).json();
-    const replica = pulled.changes.find((c: any) => c.entityType === "note" && c.entityId === note.id);
+    const pulled = (
+      await app.inject({ method: "GET", url: "/api/v1/sync/changes?cursor=0&limit=500" })
+    ).json();
+    const replica = pulled.changes.find(
+      (c: any) => c.entityType === "note" && c.entityId === note.id,
+    );
     expect(replica).toBeDefined();
     replica.createdAt = Date.now() - 60_000;
     replica.data.updatedAt = Date.now() - 60_000;
@@ -330,13 +390,26 @@ describe("peer liveness and the re-baseline gate", () => {
     await app.inject({ method: "DELETE", url: `/api/v1/notes/${note.id}/permanent` });
     expect(db.prepare("SELECT COUNT(*) c FROM notes WHERE id=?").get(note.id)).toEqual({ c: 0 });
     expect(
-      db.prepare("SELECT COUNT(*) c FROM sync_tombstones WHERE entity_type='note' AND entity_id=?").get(note.id),
-    ).toEqual({ c: 1 });
+      db
+        .prepare("SELECT COUNT(*) c FROM sync_tombstones WHERE entity_type='note' AND entity_id=?")
+        .get(note.id),
+    ).toEqual({ c: 0 });
+    expect(
+      db
+        .prepare(
+          "SELECT change_kind kind FROM sync_change_log WHERE entity_type='note' AND entity_id=? ORDER BY id DESC LIMIT 1",
+        )
+        .get(note.id),
+    ).toEqual({ kind: "deleted" });
 
     // It comes back and pushes its stale copy with no peerId at all — the
-    // oldest possible client, entirely outside the gate. The tombstone still
-    // wins: gating is the first line of defence, not the only one.
-    const res = await app.inject({ method: "POST", url: "/api/v1/sync/push", payload: { changes: [replica] } });
+    // oldest possible client, entirely outside the gate. The change-log
+    // deletion boundary still rejects stale resurrection.
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/sync/push",
+      payload: { changes: [replica] },
+    });
 
     expect(res.statusCode).toBe(200);
     expect(res.json().applied).toBe(0);

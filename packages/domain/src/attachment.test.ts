@@ -123,4 +123,38 @@ describe("AttachmentService", () => {
     expect(service.countUnusedAttachments()).toBe(2);
     expect(service.clearUnusedAttachments().count).toBe(2);
   });
+  it("keeps an upload whose file has moved but whose metadata is not committed", async () => {
+    adapter.files.set("tmp/in-flight", "pending");
+    let moved!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { moved = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const move = adapter.moveToStorage.bind(adapter);
+    adapter.moveToStorage = async (source, key) => { move(source, key); moved(); await gate; };
+    const upload = service.addAttachment({ noteId: firstNoteId, attachmentId: "pending", filename: "pending.txt", tempFilePath: "tmp/in-flight" });
+    await started;
+    try {
+      expect((await service.cleanOrphanFiles()).deletedKeys).toEqual([]);
+      expect(adapter.files.has("attachments/pending")).toBe(true);
+    } finally { release(); }
+    expect((await upload).id).toBe("pending");
+  });
+
+  it("retries failed deletes and reactivates a completed job when a storage key is reused", async () => {
+    adapter.files.set("tmp/retry", "retry");
+    const attachment = await service.addAttachment({ noteId: firstNoteId, attachmentId: "reused", filename: "retry.txt", tempFilePath: "tmp/retry" });
+    service.clearUnusedAttachments();
+    const remove = adapter.deleteStorageFile.bind(adapter);
+    adapter.deleteStorageFile = () => { throw new Error("storage unavailable"); };
+    expect((await service.runStorageCleanup()).deletedKeys).toEqual([]);
+    expect(db.sqlite.prepare("SELECT attempts,completed_at FROM storage_cleanup_jobs WHERE storage_key=?").get(attachment.storageKey))
+      .toEqual({ attempts: 1, completed_at: null });
+    adapter.deleteStorageFile = remove;
+    expect((await service.runStorageCleanup()).deletedKeys).toEqual([attachment.storageKey]);
+    adapter.files.set("tmp/reused", "retry");
+    await service.addAttachment({ noteId: firstNoteId, attachmentId: "reused", filename: "retry.txt", tempFilePath: "tmp/reused" });
+    service.clearUnusedAttachments();
+    expect((await service.runStorageCleanup()).deletedKeys).toEqual([attachment.storageKey]);
+  });
+
 });

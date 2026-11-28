@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { applyMigrations, createDatabase, getCoalescedChangesSince } from "@ygdria/database";
+import {
+  applyMigrations,
+  createDatabase,
+  getCoalescedChangesSince,
+  recordChange,
+} from "@ygdria/database";
 import { NoteService, RelationService } from "@ygdria/domain";
 import {
   CALENDAR_NOTE_ID,
@@ -386,16 +391,32 @@ describe("cross-device attachment deletion", () => {
         type: "doc",
         content: [{ type: "image", attrs: { src: `/api/v1/attachments/${ORPHAN_ID}` } }],
       });
-      peer.sqlite.prepare("UPDATE notes SET content_data=?,content_codec='identity' WHERE id=?")
+      peer.sqlite
+        .prepare("UPDATE notes SET content_data=?,content_codec='identity' WHERE id=?")
         .run(Buffer.from(content), note.id);
-      applySyncChanges(peer.sqlite, [{
-        changeId: 1, entityType: "note", entityId: note.id, changeKind: "deleted",
-        data: null, createdAt: Date.now() + 1_000,
-      }], false);
+      applySyncChanges(
+        peer.sqlite,
+        [
+          {
+            changeId: 1,
+            entityType: "note",
+            entityId: note.id,
+            changeKind: "deleted",
+            data: null,
+            createdAt: Date.now() + 1_000,
+          },
+        ],
+        false,
+      );
       expect(peer.sqlite.prepare("SELECT 1 FROM notes WHERE id=?").get(note.id)).toBeUndefined();
-      expect(peer.sqlite.prepare("SELECT 1 FROM attachments WHERE id=?").get(ORPHAN_ID)).toBeUndefined();
-      expect(peer.sqlite.prepare("SELECT 1 FROM storage_cleanup_jobs WHERE storage_key=?")
-        .get("attachments/orphan")).toBeDefined();
+      expect(
+        peer.sqlite.prepare("SELECT 1 FROM attachments WHERE id=?").get(ORPHAN_ID),
+      ).toBeUndefined();
+      expect(
+        peer.sqlite
+          .prepare("SELECT 1 FROM storage_cleanup_jobs WHERE storage_key=?")
+          .get("attachments/orphan"),
+      ).toBeDefined();
     } finally {
       peer.sqlite.close();
     }
@@ -511,15 +532,10 @@ describe("cross-device relation sync", () => {
     sync(peerA, peerB, { id: 0 });
     expect(peerB.sqlite.prepare("SELECT 1 FROM relations WHERE id=?").get(R)).toBeDefined();
 
-    // B deletes the edge; the AFTER DELETE trigger writes a tombstone with a
-    // timestamp far newer than OLD.
+    // B deletes the edge. The change-log row is the only deletion receipt.
     peerB.sqlite.prepare("DELETE FROM relations WHERE id=?").run(R);
-    const tombstone = peerB.sqlite
-      .prepare(
-        "SELECT deleted_at deletedAt FROM sync_tombstones WHERE entity_type='relation' AND entity_id=?",
-      )
-      .get(R) as { deletedAt: number };
-    expect(tombstone.deletedAt).toBeGreaterThan(OLD);
+    recordChange(peerB.sqlite, "relation", R, "deleted", OLD + 1);
+    expect(peerB.sqlite.prepare("SELECT COUNT(*) c FROM sync_tombstones").get()).toEqual({ c: 0 });
 
     // A replays the old creation change. The guard must reject resurrection.
     applySyncChanges(
@@ -546,17 +562,33 @@ describe("cross-device relation sync", () => {
   });
 });
 
-
 describe("soft-deleted note sync", () => {
-  const read = (peer: ReturnType<typeof freshDb>, id: string) => peer.sqlite.prepare("SELECT title,deleted_at deletedAt,updated_at updatedAt FROM notes WHERE id=?").get(id);
+  const read = (peer: ReturnType<typeof freshDb>, id: string) =>
+    peer.sqlite
+      .prepare("SELECT title,deleted_at deletedAt,updated_at updatedAt FROM notes WHERE id=?")
+      .get(id);
   const assertTrash = (peer: ReturnType<typeof freshDb>, id: string) => {
-    expect(peer.sqlite.prepare("SELECT id FROM placements WHERE note_id=? AND parent_placement_id=?").all(id, SYSTEM_TRASH_PLACEMENT_ID)).toHaveLength(1);
-    expect(peer.sqlite.prepare("SELECT id FROM placements WHERE note_id=? AND (parent_placement_id IS NULL OR parent_placement_id != ?)").all(id, SYSTEM_TRASH_PLACEMENT_ID)).toHaveLength(0);
-    expect(peer.sqlite.prepare("SELECT rowid FROM notes_fts WHERE notes_fts MATCH 'Recoverable'").all()).toHaveLength(0);
+    expect(
+      peer.sqlite
+        .prepare("SELECT id FROM placements WHERE note_id=? AND parent_placement_id=?")
+        .all(id, SYSTEM_TRASH_PLACEMENT_ID),
+    ).toHaveLength(1);
+    expect(
+      peer.sqlite
+        .prepare(
+          "SELECT id FROM placements WHERE note_id=? AND (parent_placement_id IS NULL OR parent_placement_id != ?)",
+        )
+        .all(id, SYSTEM_TRASH_PLACEMENT_ID),
+    ).toHaveLength(0);
+    expect(
+      peer.sqlite.prepare("SELECT rowid FROM notes_fts WHERE notes_fts MATCH 'Recoverable'").all(),
+    ).toHaveLength(0);
   };
 
   it("transfers a note first seen in trash and keeps repeated delivery recoverable", () => {
-    const a = freshDb(); const b = freshDb(); const service = new NoteService(a);
+    const a = freshDb();
+    const b = freshDb();
+    const service = new NoteService(a);
     const note = service.create({ title: "Recoverable" });
     service.remove(note.id);
     sync(a, b, { id: 0 });
@@ -568,13 +600,16 @@ describe("soft-deleted note sync", () => {
   });
 
   it("includes trash in a pruned-log snapshot and reconciles an existing active copy", () => {
-    const a = freshDb(); const b = freshDb(); const empty = freshDb();
-    const service = new NoteService(a); const note = service.create({ title: "Recoverable" });
+    const a = freshDb();
+    const b = freshDb();
+    const empty = freshDb();
+    const service = new NoteService(a);
+    const note = service.create({ title: "Recoverable" });
     sync(a, b, { id: 0 });
     service.remove(note.id);
     a.sqlite.prepare("DELETE FROM sync_change_log").run();
     const changes = resolveChangeEntities(a.sqlite, "", fullSnapshotChanges(a.sqlite), true);
-    expect(changes.find(c => c.entityId === note.id)?.data?.deletedAt).toBeTypeOf("number");
+    expect(changes.find((c) => c.entityId === note.id)?.data?.deletedAt).toBeTypeOf("number");
     for (const target of [b, empty]) {
       applySyncChanges(target.sqlite, changes, false);
       expect(read(target, note.id)).toEqual(read(a, note.id));
@@ -583,12 +618,16 @@ describe("soft-deleted note sync", () => {
   });
 
   it("does not replace a newer local restore with an older trash state", () => {
-    const a = freshDb(); const b = freshDb(); const service = new NoteService(a);
+    const a = freshDb();
+    const b = freshDb();
+    const service = new NoteService(a);
     const note = service.create({ title: "Recoverable" });
     sync(a, b, { id: 0 });
     service.remove(note.id);
     const changes = resolveChangeEntities(a.sqlite, "", fullSnapshotChanges(a.sqlite), true);
-    b.sqlite.prepare("UPDATE notes SET updated_at=?,deleted_at=NULL WHERE id=?").run(Date.now()+10000, note.id);
+    b.sqlite
+      .prepare("UPDATE notes SET updated_at=?,deleted_at=NULL WHERE id=?")
+      .run(Date.now() + 10000, note.id);
     applySyncChanges(b.sqlite, changes, false);
     expect((read(b, note.id) as { deletedAt: number | null }).deletedAt).toBeNull();
   });
@@ -599,6 +638,32 @@ describe("LWW clock arbitration", () => {
     vi.useRealTimers();
   });
 
+  it("never merges system notes or reports them as conflicts", () => {
+    const source = freshDb();
+    const target = freshDb();
+    // Give the source system notes a newer timestamp than the receiver's
+    // locally provisioned copies, which is exactly the state a full snapshot
+    // produces when the two databases were initialized at different times.
+    source.sqlite
+      .prepare("UPDATE notes SET updated_at=updated_at+60000 WHERE id IN (?,?,?)")
+      .run(SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID);
+    source.sqlite
+      .prepare("UPDATE notes SET title='Remote root' WHERE id=?")
+      .run(SYSTEM_ROOT_NOTE_ID);
+    const changes = resolveChangeEntities(source.sqlite, "", fullSnapshotChanges(source.sqlite), true)
+      .filter((change) =>
+        [SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID].includes(change.entityId),
+      );
+    expect(changes).toHaveLength(3);
+    const result = applySyncChanges(target.sqlite, changes, false);
+    expect(result.rejected).toEqual([]);
+    expect(
+      target.sqlite
+        .prepare("SELECT title FROM notes WHERE id=?")
+        .get(SYSTEM_ROOT_NOTE_ID),
+    ).toEqual({ title: "Root" });
+  });
+
   it("caps incoming records that claim to be from the future", () => {
     const a = freshDb();
     const b = freshDb();
@@ -606,14 +671,21 @@ describe("LWW clock arbitration", () => {
     const note = service.create({ title: "Time traveller" });
     // The sending device's clock runs a year ahead.
     const future = Date.now() + 365 * 24 * 60 * 60 * 1000;
-    a.sqlite.prepare("UPDATE notes SET created_at=?,updated_at=? WHERE id=?").run(future, future, note.id);
+    a.sqlite
+      .prepare("UPDATE notes SET created_at=?,updated_at=? WHERE id=?")
+      .run(future, future, note.id);
 
-    const [change] = resolveChangeEntities(a.sqlite, "", [
-      { id: 1, entityType: "note", entityId: note.id, changeKind: "updated", createdAt: future },
-    ], true);
+    const [change] = resolveChangeEntities(
+      a.sqlite,
+      "",
+      [{ id: 1, entityType: "note", entityId: note.id, changeKind: "updated", createdAt: future }],
+      true,
+    );
     applySyncChanges(b.sqlite, [change], false);
 
-    const stored = b.sqlite.prepare("SELECT updated_at FROM notes WHERE id=?").get(note.id) as { updated_at: number };
+    const stored = b.sqlite.prepare("SELECT updated_at FROM notes WHERE id=?").get(note.id) as {
+      updated_at: number;
+    };
     expect(stored.updated_at).toBeLessThanOrEqual(Date.now() + 6 * 60 * 1000);
     expect(stored.updated_at).toBeGreaterThan(Date.now());
 
@@ -622,32 +694,61 @@ describe("LWW clock arbitration", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 6 * 60 * 1000);
     service.update(note.id, { title: "Honest edit", expectedVersion: 1 });
-    const [later] = resolveChangeEntities(a.sqlite, "", [
-      { id: 2, entityType: "note", entityId: note.id, changeKind: "updated", createdAt: Date.now() },
-    ], true);
+    const [later] = resolveChangeEntities(
+      a.sqlite,
+      "",
+      [
+        {
+          id: 2,
+          entityType: "note",
+          entityId: note.id,
+          changeKind: "updated",
+          createdAt: Date.now(),
+        },
+      ],
+      true,
+    );
     applySyncChanges(b.sqlite, [later], false);
-    const title = b.sqlite.prepare("SELECT title FROM notes WHERE id=?").get(note.id) as { title: string };
+    const title = b.sqlite.prepare("SELECT title FROM notes WHERE id=?").get(note.id) as {
+      title: string;
+    };
     expect(title.title).toBe("Honest edit");
   });
 });
 
 describe("incremental tree dependencies", () => {
   it("syncs a child moved into a new folder whose latest change was reordered later", () => {
-    const source=freshDb(), target=freshDb();const notes=new NoteService(source);
+    const source = freshDb(),
+      target = freshDb();
+    const notes = new NoteService(source);
     try {
-      const child=notes.create({title:"existing child"});
-      const childPlacement=notes.tree().find(p=>p.noteId===child.id)!.placementId;
-      const cursor={id:0};sync(source,target,cursor);
-      const folder=notes.create({title:"new folder"});
-      const folderPlacement=notes.tree().find(p=>p.noteId===folder.id)!.placementId;
-      notes.movePlacement(childPlacement,folderPlacement,0);
-      notes.movePlacement(folderPlacement,SYSTEM_ROOT_PLACEMENT_ID,0);
-      const changes=resolveChangeEntities(source.sqlite,"",getCoalescedChangesSince(source.sqlite,cursor.id,500));
-      expect(changes.findIndex(c=>c.entityId===childPlacement)).toBeLessThan(changes.findIndex(c=>c.entityId===folderPlacement));
-      expect(()=>applySyncChanges(target.sqlite,changes,false)).not.toThrow();
-      expect(target.sqlite.prepare("SELECT parent_placement_id parent FROM placements WHERE id=?").get(childPlacement)).toEqual({parent:folderPlacement});
+      const child = notes.create({ title: "existing child" });
+      const childPlacement = notes.tree().find((p) => p.noteId === child.id)!.placementId;
+      const cursor = { id: 0 };
+      sync(source, target, cursor);
+      const folder = notes.create({ title: "new folder" });
+      const folderPlacement = notes.tree().find((p) => p.noteId === folder.id)!.placementId;
+      notes.movePlacement(childPlacement, folderPlacement, 0);
+      notes.movePlacement(folderPlacement, SYSTEM_ROOT_PLACEMENT_ID, 0);
+      const changes = resolveChangeEntities(
+        source.sqlite,
+        "",
+        getCoalescedChangesSince(source.sqlite, cursor.id, 500),
+      );
+      expect(changes.findIndex((c) => c.entityId === childPlacement)).toBeLessThan(
+        changes.findIndex((c) => c.entityId === folderPlacement),
+      );
+      expect(() => applySyncChanges(target.sqlite, changes, false)).not.toThrow();
+      expect(
+        target.sqlite
+          .prepare("SELECT parent_placement_id parent FROM placements WHERE id=?")
+          .get(childPlacement),
+      ).toEqual({ parent: folderPlacement });
       expect(target.sqlite.pragma("foreign_key_check")).toEqual([]);
-    } finally {source.sqlite.close();target.sqlite.close();}
+    } finally {
+      source.sqlite.close();
+      target.sqlite.close();
+    }
   });
 
   it("applies a newer server snapshot onto an existing client without triggering system-placement move aborts", () => {
@@ -658,18 +759,22 @@ describe("incremental tree dependencies", () => {
       const created = serverNotes.create({ title: "From server" });
       // Exercise the update of both system placements and unindexed system notes.
       const newerAt = Date.now() + 10_000;
-      server.sqlite.prepare("UPDATE notes SET updated_at=? WHERE id IN (?,?,?)").run(
-        newerAt, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID,
+      server.sqlite
+        .prepare("UPDATE notes SET updated_at=? WHERE id IN (?,?,?)")
+        .run(newerAt, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID);
+      server.sqlite
+        .prepare("UPDATE placements SET updated_at=? WHERE id IN (?,?,?)")
+        .run(newerAt, SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_PLACEMENT_ID, CALENDAR_PLACEMENT_ID);
+      const snapshot = resolveChangeEntities(
+        server.sqlite,
+        "",
+        fullSnapshotChanges(server.sqlite),
+        true,
       );
-      server.sqlite.prepare("UPDATE placements SET updated_at=? WHERE id IN (?,?,?)").run(
-        newerAt,
-        SYSTEM_ROOT_PLACEMENT_ID,
-        SYSTEM_TRASH_PLACEMENT_ID,
-        CALENDAR_PLACEMENT_ID,
-      );
-      const snapshot = resolveChangeEntities(server.sqlite, "", fullSnapshotChanges(server.sqlite), true);
       expect(() => applySyncChanges(client.sqlite, snapshot, false)).not.toThrow();
-      const noteRow = client.sqlite.prepare("SELECT title FROM notes WHERE id=?").get(created.id) as { title: string } | undefined;
+      const noteRow = client.sqlite
+        .prepare("SELECT title FROM notes WHERE id=?")
+        .get(created.id) as { title: string } | undefined;
       expect(noteRow?.title).toBe("From server");
     } finally {
       server.sqlite.close();

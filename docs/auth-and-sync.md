@@ -1,5 +1,9 @@
 # 认证、受保护笔记与同步
 
+同步历史压缩后，远端同步请求需要携带 `X-Ygdria-Sync-Protocol: 2`。旧协议返回 426；未知设备和被重置设备在完整快照被服务端交付并确认前，不能提交增量写入或任意推进游标。客户端明确永久删除时立即清除兼容墓碑，删除事件保留在变更日志；后续设备通过协议 2 权威快照的缺席笔记完成对账。
+
+协议 2 本地客户端记录远端笔记来源。完整快照缺席的已同步笔记会被移除；若缺席笔记还有待上传修改，先以新标识复制正文、保护状态和修订，再删除旧标识。未上传的新笔记保留原标识；基线压缩后，缺席且未确认的创建也按压缩代次复制，避免“上传成功但确认丢失”的旧标识重新进入远端。附件仍由引用检测决定是否删除。
+
 本页集中说明身份认证、设备凭据、受保护笔记的端到端加密模型，以及多实例/多端访问时的同步机制。相关端点见 [API 与内容格式](api.md)；环境变量与初始化操作见 [运行与维护](operations.md)。
 
 ## 1. 两种运行形态
@@ -213,19 +217,19 @@ Ygdria 提供**基于游标的增量同步**，不是 CRDT，也不做细粒度�
 
 ### 5.1 变更日志与游标
 
-- 服务端在 `sync_change_log` 表中按自增 `id` 有序记录每次实体变更（`entityType` / `entityId` / `changeKind` / `createdAt`）。每条 mutation（创建/更新/删除）写一行；删除额外写 `sync_tombstones` 墓碑。
+- 服务端在 `sync_change_log` 表中按自增 `id` 有序记录每次实体变更（`entityType` / `entityId` / `changeKind` / `createdAt`）。每条 mutation（创建/更新/删除）写一行；删除事件是唯一的永久删除凭证，不再额外保留墓碑。
 - 每个 peer 在 `sync_cursors` 表中维护独立的游标行：`peerId → lastAdvanceId`。客户端分页拉取 `?cursor=N&limit=M`，服务端返回 `{ cursor, hasMore, changes, maxChangeId }`；客户端在成功应用后调用 `/sync/advance` 把游标推进到返回的 `cursor`。
 - 客户端首次连接时先拉取快照。已建立的会话按游标增量拉取。服务端发现游标落在已裁剪的区间或超出日志高水位时返回 `SYNC_REBASELINE_REQUIRED`，设备重新登录后也适用。
 - 桌面的 `in:<peer>` 跟踪远端的日志位置，`out:<peer>` 跟踪本地已上传的位置。只有后者参与本地日志裁剪，两者都保留以支持长时间离线。裁剪后日志高水位仍保持不变。
 
-### 5.2 合并语义（LWW + 墓碑）
+### 5.2 合并语义（LWW + 删除日志）
 
 - **时钟仲裁**：LWW 依据各设备本地时钟，存在偏移风险。接收端在应用变更时，把声称比本机时间超前超过 `SYNC_MAX_CLOCK_SKEW_MS`（5 分钟）的时间戳钳制到「本机时间 + 容忍值」。正常设备不受影响；时钟跑快的设备无法铸出永久压制后续正常编辑的时间戳。钳制是确定性的，被钳制记录的重放仍然幂等。
 
 - `push` 对每类实体按主键合并：保留 `updatedAt`（或 `createdAt`）更大者；时间戳相同时用确定性 JSON 序列化顺序打破平局。
-- 删除由 `sync_tombstones` 表记录：数据库触发器在 `placements`/`notes`/`relations`/`attachments` 删除时写墓碑，插入时清除对应墓碑（撤销/恢复借此表达）。
-- `push` 在应用变更前先用墓碑过滤掉已删除的活实体；变更应用后也会更新对应的墓碑或清除被复活实体的墓碑。
-- **`relations` 已接入同步**（2026-08-02 实现）：创建/删除关系会在 `sync_change_log` 写 `entity_type='relation'` 变更；`applySyncChanges` 对 `relation` 分支使用 `INSERT OR IGNORE` 幂等写入，并以 `NOT EXISTS sync_tombstones(entity_type='relation' AND deleted_at >= created_at)` 拒绝已被对端删除的关系“复活”（与 `setting` 分支同构）。快照与基线重建均包含 relations。关系无 `updated_at`，语义不可变。
+- 永久删除由 `sync_change_log` 的 `deleted` 事件记录，同一事务立即清除 `sync_tombstones` 兼容行。v21 已移除墓碑写入触发器；维护任务也会清空旧版本遗留墓碑并推进压缩代次。
+- `push` 按实体当前状态与 last-write-wins 时间戳合并；变更应用后写入对应删除事件。协议 2 完整快照以笔记缺席表示永久删除，由本地副本执行快照对账。
+- **`relations` 已接入同步**（2026-08-02 实现）：创建/删除关系会在 `sync_change_log` 写 `entity_type='relation'` 变更；`applySyncChanges` 对 `relation` 分支使用 `INSERT OR IGNORE` 幂等写入，并以删除事件边界拒绝已被对端删除的关系“复活”。快照与基线重建均包含 relations。关系无 `updated_at`，语义不可变。
 - **敏感设置不参与同步**：`auth_*`、`protected_session_*`、`server_access_password_*` 前缀的 settings 键在 `writeSetting` / `deleteSetting` 时不写入变更日志；`/sync/changes` 不返回其值或墓碑；`/sync/push` 拒绝修改这些键。这避免任何已认证设备通过同步通道覆盖认证材料（否则可导致账户接管）。
 - 附件文件二进制内容**不进变更日志**：变更日志只携带 `attachment` 的元数据（`contentHash` / `filename`）。客户端在同步时根据 `contentHash` 调用 `GET /api/v1/attachments/by-hash/:hash` 下载、`POST /api/v1/attachments/by-hash/:hash` 上传，按哈希去重。
 - **永久删除（清空回收站）也会同步**：`purge` / `purgeTrash` 把被删笔记写入 `sync_change_log`（`deleted`）。只有笔记已从发送端数据库永久清理时，接收端才收到无正文的 `note` + `deleted` 并分流：本地该笔记已在回收站则硬删本地（依赖 `ON DELETE CASCADE` 级联）让两端库一致；本地仍在使用则软删（移回收站、可恢复），避免静默销毁已恢复内容。详见 [数据模型 §5](data-model.md#5-删除回收站与永久删除)。
@@ -266,7 +270,7 @@ Ygdria 提供**基于游标的增量同步**，不是 CRDT，也不做细粒度�
 - 尚未永久清理的笔记在增量同步和全量快照中都传输完整笔记状态（包括 `deletedAt`、正文和附件引用），使用普通笔记状态合并路径。软删除日志在输出时解析为当前状态，不能与永久清理的无正文删除事件混用。
 - 接收端保留回收站中的笔记、移除旧的活动树位置并创建本地回收站位置；重复传输不会把软删除误当成永久清理。全量快照包含回收站笔记，但不复制各端自行生成的回收站位置。
 - 状态仍按 `updatedAt` 合并，较新的本地恢复不会被较旧的软删除覆盖；永久清理的笔记通过现有快照的 `note / deleted` 记录显式传输，接收端沿用增量同步的删除规则。缺少某条笔记的快照不会触发删除，切换同步服务器时也适用。
-- 永久删除的笔记墓碑保留在 `sync_tombstones`，仅含实体 ID、删除时间及日志边界，增量日志裁剪后仍可通过快照传播。升级会从仍留存的删除日志补齐缺失墓碑。若旧版已经同时清理了墓碑和日志，无法从快照恢复该删除记录。
+- 永久删除只保留 `sync_change_log` 中的删除事件，不保留笔记墓碑。增量日志仍在时，删除事件直接传播；日志裁剪后，协议 2 快照通过笔记缺席传播并触发本地对账。
 
 ### 5.7 故障恢复与快照资源
 

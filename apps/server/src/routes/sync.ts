@@ -17,7 +17,7 @@ import {
   clearPeerRebaseline,
   type SqliteDatabase,
 } from "@ygdria/database";
-import { NotFoundError } from "@ygdria/domain";
+import { NotFoundError, type NoteService } from "@ygdria/domain";
 import { validPeerId, cursorKey } from "../security/srp-sessions.js";
 import { httpError, SyncRebaselineRequiredError } from "../http/errors.js";
 import {
@@ -30,6 +30,7 @@ import {
 } from "../sync/helpers.js";
 
 export interface SyncRouteDeps {
+  notes: NoteService;
   sqlite: SqliteDatabase;
   attachmentRoot: string;
   /** Whether to record outbound sync changes for writes from this peer. */
@@ -38,6 +39,21 @@ export interface SyncRouteDeps {
 
 export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
   const { sqlite, attachmentRoot, recordOutbound } = deps;
+  const compacted = () => Boolean((sqlite.prepare("SELECT tombstones_pruned value FROM sync_metadata_state WHERE id=1").get() as { value: number }).value);
+  app.addHook("preHandler", async (req) => {
+    if (req.device && req.url.startsWith("/api/v1/sync/") && compacted() && req.headers["x-ygdria-sync-protocol"] !== "2")
+      throw httpError(426, "Sync client upgrade required: authoritative snapshot protocol 2");
+  });
+  app.post("/api/v1/sync/reconcile", async (req) => {
+    if (req.device) throw httpError(403, "Snapshot reconciliation requires the local replica");
+    const body = req.body as { peerId?: string; presentIds?: string[]; recoverySuffix?: string; generation?: number };
+    if (!validPeerId(body?.peerId) || !Array.isArray(body.presentIds) || body.presentIds.length > 100_000 ||
+        body.presentIds.some((id) => typeof id !== "string" || id.length > 2048) ||
+        typeof body.recoverySuffix !== "string" || body.recoverySuffix.length > 80 ||
+        !Number.isSafeInteger(body.generation ?? 0) || (body.generation ?? 0) < 0)
+      throw httpError(400, "Invalid snapshot manifest");
+    return deps.notes.reconcileRemoteNotes(body.peerId, body.presentIds, body.recoverySuffix, body.generation ?? 0);
+  });
 
   /**
    * Incremental sync: return all changes since the given cursorId.
@@ -154,12 +170,18 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     const nextCursor = cursor + changes.length;
     const hasMore = nextCursor < all.length;
     const maxChangeId = session?.maxChangeId ?? getMaxChangeId(sqlite);
+    if (req.device && compacted() && validPeerId(query.peerId)) {
+      const key = cursorKey(req.device.id, query.peerId);
+      if (!getCursor(sqlite, key))
+        sqlite.prepare("INSERT OR IGNORE INTO sync_rebaseline_required(peer_id,reason,created_at) VALUES(?,'unknown-peer',?)").run(key, Date.now());
+    }
     if (!hasMore) {
       if (session) session.delivered = true;
       if (validPeerId(query.peerId))
         markPeerSnapshotCompleted(sqlite, cursorKey(req.device?.id, query.peerId), maxChangeId);
     }
-    return { cursor: nextCursor, hasMore, changes, maxChangeId };
+    const { generation } = sqlite.prepare("SELECT generation FROM sync_metadata_state WHERE id=1").get() as { generation: number };
+    return { cursor: nextCursor, hasMore, changes, maxChangeId, authoritative: true, generation };
   });
 
   app.get("/api/v1/sync/notes/:id/content", async (req) => {
@@ -271,6 +293,8 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     if (!validPeerId(body.peerId) || !Number.isSafeInteger(cursor) || cursor < 0)
       throw httpError(400, "peerId and cursor (non-negative integer) are required");
     const key = cursorKey(req.device?.id, body.peerId);
+    if (req.device && compacted() && !getCursor(sqlite, key))
+      sqlite.prepare("INSERT OR IGNORE INTO sync_rebaseline_required(peer_id,reason,created_at) VALUES(?,'unknown-peer',?)").run(key, Date.now());
     if (
       (req.device && !canResumeChangeLog(sqlite, cursor)) ||
       (!isLocalSyncCursor(key) && isPeerRebaselineRequired(sqlite, key) &&
@@ -317,7 +341,7 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
   /** Apply a peer's metadata changes using last-write-wins timestamps. Binary
    * attachments are deliberately transferred separately by hash. */
   app.post("/api/v1/sync/push", { bodyLimit: 16 * 1024 * 1024 }, async (req) => {
-    const body = req.body as { changes?: SyncEntityChange[]; peerId?: string };
+    const body = req.body as { changes?: SyncEntityChange[]; peerId?: string; sourcePeer?: string };
     if (!Array.isArray(body?.changes) || body.changes.length > 500)
       throw httpError(400, "changes must contain at most 500 entries");
     if (Buffer.byteLength(JSON.stringify(body)) > 16 * 1024 * 1024)
@@ -328,11 +352,19 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps) {
     const peerId = body.peerId;
     if (validPeerId(peerId)) {
       const key = cursorKey(req.device?.id, peerId);
+      if (req.device && compacted() && !getCursor(sqlite, key))
+        sqlite.prepare("INSERT OR IGNORE INTO sync_rebaseline_required(peer_id,reason,created_at) VALUES(?,'unknown-peer',?)").run(key, Date.now());
       if (isPeerRebaselineRequired(sqlite, key)) throw new SyncRebaselineRequiredError(key);
       touchPeerActivity(sqlite, key);
     }
     const serializedBytes = Buffer.byteLength(JSON.stringify(body));
     const { applied, rejected } = applySyncChanges(sqlite, body.changes, recordOutbound(req));
+    if (!req.device && validPeerId(body.sourcePeer)) {
+      const remember = sqlite.prepare("INSERT INTO sync_peer_objects(peer_id,entity_id) SELECT ?,? WHERE EXISTS(SELECT 1 FROM notes WHERE id=?) ON CONFLICT(peer_id,entity_id) DO UPDATE SET pending_generation=NULL");
+      for (const change of body.changes)
+        if (change.entityType === "note" && change.changeKind !== "deleted")
+          remember.run(body.sourcePeer, change.entityId, change.entityId);
+    }
     req.log.info({ syncBatch: "push", entities: body.changes.length, serializedBytes, applied, rejected: rejected.length }, "applied sync batch");
     return { applied, rejected };
   });

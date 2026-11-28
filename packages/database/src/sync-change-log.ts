@@ -34,11 +34,17 @@ export function recordChange(
       "INSERT INTO sync_change_log (entity_type, entity_id, change_kind, created_at) VALUES (?,?,?,?)",
     )
     .run(entityType, entityId, changeKind, createdAt);
-  if (entityType === "note" && changeKind === "deleted") {
-    sqlite.prepare(
-      `UPDATE sync_tombstones SET deleted_at=?, change_log_id=last_insert_rowid()
-       WHERE entity_type='note' AND entity_id=? AND NOT EXISTS (SELECT 1 FROM notes WHERE id=?)`,
-    ).run(createdAt, entityId, entityId);
+  if (changeKind === "deleted") {
+    // The change-log row is the deletion receipt. Persistent tombstones were
+    // removed by explicit product policy; snapshots use absence as authority.
+    sqlite
+      .prepare("DELETE FROM sync_tombstones WHERE entity_type=? AND entity_id=?")
+      .run(entityType, entityId);
+    sqlite
+      .prepare(
+        "UPDATE sync_metadata_state SET tombstones_pruned=1,generation=generation+1 WHERE id=1",
+      )
+      .run();
   }
 }
 
@@ -52,8 +58,20 @@ export function recordChanges(
     "INSERT INTO sync_change_log (entity_type, entity_id, change_kind, created_at) VALUES (?,?,?,?)",
   );
   const t = Date.now();
+  const clearTombstone = sqlite.prepare(
+    "DELETE FROM sync_tombstones WHERE entity_type=? AND entity_id=?",
+  );
   sqlite.transaction(() => {
-    for (const c of changes) stmt.run(c.entityType, c.entityId, c.changeKind, t);
+    for (const c of changes) {
+      stmt.run(c.entityType, c.entityId, c.changeKind, t);
+      if (c.changeKind === "deleted") clearTombstone.run(c.entityType, c.entityId);
+    }
+    if (changes.some((change) => change.changeKind === "deleted"))
+      sqlite
+        .prepare(
+          "UPDATE sync_metadata_state SET tombstones_pruned=1,generation=generation+1 WHERE id=1",
+        )
+        .run();
   })();
 }
 
@@ -76,12 +94,14 @@ export function getChangesSince(
 /** Get the change-log high-water mark, including acknowledged rows since pruned. */
 export function getMaxChangeId(sqlite: Database.Database): number {
   const row = sqlite
-    .prepare(`
+    .prepare(
+      `
       SELECT MAX(
         COALESCE((SELECT seq FROM sqlite_sequence WHERE name='sync_change_log'), 0),
         COALESCE((SELECT id FROM sync_change_log ORDER BY id DESC LIMIT 1), 0)
       ) maxId
-    `)
+    `,
+    )
     .get() as { maxId: number };
   return row.maxId;
 }
@@ -121,11 +141,24 @@ export function advanceCursor(
   toAdvanceId: number,
 ): { peerId: string; lastAdvanceId: number; advancedAt: number; lastActiveAt: number } {
   const t = Date.now();
+  if (peerId.startsWith("out:")) {
+    sqlite
+      .prepare(
+        `INSERT INTO sync_peer_objects(peer_id,entity_id)
+      SELECT ?,l.entity_id FROM sync_change_log l
+      WHERE l.entity_type='note' AND l.id<=? AND EXISTS(SELECT 1 FROM notes WHERE id=l.entity_id)
+      ON CONFLICT(peer_id,entity_id) DO UPDATE SET pending_generation=NULL`,
+      )
+      .run(peerId.slice(4), toAdvanceId);
+  }
   sqlite
     .prepare(
-      "INSERT INTO sync_cursors (peer_id, last_advance_id, advanced_at, last_active_at) VALUES (?,?,?,?) ON CONFLICT(peer_id) DO UPDATE SET last_advance_id=excluded.last_advance_id, advanced_at=excluded.advanced_at, last_active_at=excluded.last_active_at",
+      `INSERT INTO sync_cursors (peer_id, last_advance_id, advanced_at, last_active_at,last_progress_at) VALUES (?,?,?,?,?)
+       ON CONFLICT(peer_id) DO UPDATE SET
+         last_progress_at=CASE WHEN excluded.last_advance_id>sync_cursors.last_advance_id THEN excluded.advanced_at ELSE COALESCE(sync_cursors.last_progress_at,sync_cursors.advanced_at) END,
+         last_advance_id=excluded.last_advance_id, advanced_at=excluded.advanced_at, last_active_at=excluded.last_active_at`,
     )
-    .run(peerId, toAdvanceId, t, t);
+    .run(peerId, toAdvanceId, t, t, t);
   return { peerId, lastAdvanceId: toAdvanceId, advancedAt: t, lastActiveAt: t };
 }
 
@@ -149,10 +182,7 @@ export function touchPeerActivity(
 }
 
 /** Get a peer's cursor; returns null if never synced. */
-export function getCursor(
-  sqlite: Database.Database,
-  peerId: string,
-): PeerCursor | null {
+export function getCursor(sqlite: Database.Database, peerId: string): PeerCursor | null {
   const row = sqlite
     .prepare(
       "SELECT peer_id peerId,last_advance_id lastAdvanceId,advanced_at advancedAt,COALESCE(last_active_at,advanced_at) lastActiveAt FROM sync_cursors WHERE peer_id=?",
@@ -201,17 +231,23 @@ export function expireInactivePeers(
   const cutoff = now - maxInactiveMs;
   const expired = (
     sqlite
-      .prepare("SELECT peer_id peerId FROM sync_cursors WHERE peer_id NOT LIKE 'in:%' AND peer_id NOT LIKE 'out:%' AND COALESCE(last_active_at,advanced_at) < ?")
-      .all(cutoff) as Array<{ peerId: string }>
+      .prepare(
+        `SELECT peer_id peerId FROM sync_cursors
+        WHERE peer_id NOT LIKE 'in:%' AND peer_id NOT LIKE 'out:%'
+          AND (COALESCE(last_active_at,advanced_at) < ? OR
+            (last_advance_id < ? AND COALESCE(last_progress_at,advanced_at) < ?))`,
+      )
+      .all(cutoff, getMaxChangeId(sqlite), cutoff) as Array<{ peerId: string }>
   ).map((row) => row.peerId);
   if (expired.length === 0) return [];
-  sqlite
-    .prepare("DELETE FROM sync_cursors WHERE peer_id NOT LIKE 'in:%' AND peer_id NOT LIKE 'out:%' AND COALESCE(last_active_at,advanced_at) < ?")
-    .run(cutoff);
+  const remove = sqlite.prepare("DELETE FROM sync_cursors WHERE peer_id=?");
   const gate = sqlite.prepare(
     "INSERT OR IGNORE INTO sync_rebaseline_required (peer_id, reason, created_at) VALUES (?,?,?)",
   );
-  for (const peerId of expired) gate.run(peerId, "peer-inactive", now);
+  for (const peerId of expired) {
+    remove.run(peerId);
+    gate.run(peerId, "peer-inactive-or-stalled", now);
+  }
   return expired;
 }
 
@@ -243,7 +279,9 @@ export function canCompletePeerRebaseline(
 ): boolean {
   return Boolean(
     sqlite
-      .prepare("SELECT 1 FROM sync_rebaseline_required WHERE peer_id=? AND snapshot_max_change_id=?")
+      .prepare(
+        "SELECT 1 FROM sync_rebaseline_required WHERE peer_id=? AND snapshot_max_change_id=?",
+      )
       .get(peerId, cursor),
   );
 }
@@ -263,9 +301,8 @@ export function listRebaselineRequiredPeers(
 
 /** Count of peers currently gated behind a snapshot re-baseline. */
 export function countRebaselineRequired(sqlite: Database.Database): number {
-  return (
-    sqlite.prepare("SELECT COUNT(*) c FROM sync_rebaseline_required").get() as { c: number }
-  ).c;
+  return (sqlite.prepare("SELECT COUNT(*) c FROM sync_rebaseline_required").get() as { c: number })
+    .c;
 }
 
 /** Lowest cursor position that still has to be preserved for an active peer,
@@ -288,20 +325,44 @@ export function activeSyncBoundary(sqlite: Database.Database): number | null {
  * from the snapshot baseline. There is no window in which a peer can resume
  * incrementally from a position that has been pruned away.
  */
-export function pruneChangeLog(
-  sqlite: Database.Database,
-  options: PeerExpiryOptions = {},
-): number {
+export function pruneChangeLog(sqlite: Database.Database, options: PeerExpiryOptions = {}): number {
   let removed = 0;
   const run = () => {
     expireInactivePeers(sqlite, options);
     const boundary = activeSyncBoundary(sqlite);
-    if (boundary === null || boundary <= 0) return;
-    removed = sqlite.prepare("DELETE FROM sync_change_log WHERE id <= ?").run(boundary).changes;
+    if (boundary !== null && boundary > 0)
+      removed = sqlite.prepare("DELETE FROM sync_change_log WHERE id <= ?").run(boundary).changes;
+    removed += compactUnobservedHistory(sqlite, options);
   };
   if (sqlite.inTransaction) run();
   else sqlite.transaction(run)();
   return removed;
+}
+
+/** With no incremental reader, snapshots replace old history. Local upload
+ * positions retain the final pending mutation of each entity, including deletes. */
+export function compactUnobservedHistory(
+  sqlite: Database.Database,
+  options: PeerExpiryOptions = {},
+): number {
+  const remote = sqlite
+    .prepare(
+      "SELECT 1 FROM sync_cursors WHERE peer_id NOT LIKE 'in:%' AND peer_id NOT LIKE 'out:%' LIMIT 1",
+    )
+    .get();
+  if (remote) return 0;
+  const cutoff = (options.now ?? Date.now()) - (options.maxInactiveMs ?? SYNC_PEER_MAX_INACTIVE_MS);
+  const outbound = sqlite
+    .prepare("SELECT 1 FROM sync_cursors WHERE peer_id LIKE 'out:%' LIMIT 1")
+    .get();
+  return sqlite
+    .prepare(
+      outbound
+        ? `DELETE FROM sync_change_log WHERE created_at < ? AND id NOT IN
+        (SELECT MAX(id) FROM sync_change_log GROUP BY entity_type,entity_id)`
+        : "DELETE FROM sync_change_log WHERE created_at < ?",
+    )
+    .run(cutoff).changes;
 }
 
 /** Return only the latest pending mutation for each entity. The result stays
@@ -312,7 +373,9 @@ export function getCoalescedChangesSince(
   cursorId: number,
   limit = 200,
 ): SyncChange[] {
-  return sqlite.prepare(`
+  return sqlite
+    .prepare(
+      `
     SELECT l.id,l.entity_type entityType,l.entity_id entityId,l.change_kind changeKind,l.created_at createdAt
     FROM sync_change_log l
     JOIN (
@@ -324,7 +387,9 @@ export function getCoalescedChangesSince(
       LIMIT ?
     ) latest ON latest.id=l.id
     ORDER BY l.id
-  `).all(cursorId, limit) as SyncChange[];
+  `,
+    )
+    .all(cursorId, limit) as SyncChange[];
 }
 
 export function hasChangesAfter(sqlite: Database.Database, cursorId: number): boolean {

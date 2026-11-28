@@ -912,7 +912,6 @@ export function App({
   } = useMaintenance({
     client,
     locale,
-    deviceAccess,
     isDesktopApp,
   });
 

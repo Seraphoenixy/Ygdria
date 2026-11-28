@@ -20,6 +20,7 @@ export interface AttachmentStorageAdapter {
   deleteStorageFile(storageKey: string): Promise<void> | void;
   /** Returns keys below Ygdria's attachment storage root only. */
   listStorageKeys(): Promise<string[]> | string[];
+  storageModifiedAt?(storageKey: string): Promise<number | undefined> | number | undefined;
 }
 
 export interface AddAttachmentInput {
@@ -34,6 +35,9 @@ export interface AddAttachmentInput {
 }
 
 export class AttachmentService {
+  private pendingStorageKeys = new Set<string>();
+  private cleanupInFlight = new Map<string, Promise<void>>();
+  private cleanupRun: Promise<{ deletedKeys: string[] }> | undefined;
   constructor(
     private store: Store,
     private adapter: AttachmentStorageAdapter,
@@ -117,7 +121,14 @@ export class AttachmentService {
     const storageKey = `attachments/${attachmentId}`;
 
     // Step 1 & 2: 移动临时文件到正式 storage key
-    await this.adapter.moveToStorage(input.tempFilePath, storageKey);
+    this.pendingStorageKeys.add(storageKey);
+    try {
+      await this.cleanupInFlight.get(storageKey)?.catch(() => {});
+      await this.adapter.moveToStorage(input.tempFilePath, storageKey);
+    } catch (error) {
+      this.pendingStorageKeys.delete(storageKey);
+      throw error;
+    }
 
     const t = now();
     try {
@@ -149,6 +160,8 @@ export class AttachmentService {
         this.enqueueCleanup(storageKey, "upload-rollback");
       }
       throw err;
+    } finally {
+      this.pendingStorageKeys.delete(storageKey);
     }
 
     return {
@@ -258,7 +271,7 @@ export class AttachmentService {
   /**
    * Registers scanned orphan files, then attempts all durable cleanup jobs.
    */
-  async cleanOrphanFiles(): Promise<{ deletedKeys: string[] }> {
+  async cleanOrphanFiles(minAgeMs = 0): Promise<{ deletedKeys: string[] }> {
     const physicalKeys = await this.adapter.listStorageKeys();
     const rows = this.store.sqlite
       .prepare("SELECT storage_key storageKey FROM attachments")
@@ -266,20 +279,31 @@ export class AttachmentService {
     const dbKeys = new Set(rows.map((r) => r.storageKey));
 
     for (const key of physicalKeys) {
-      if (key.startsWith("attachments/") && !dbKeys.has(key))
-        this.enqueueCleanup(key, "orphan-scan");
+      if (!key.startsWith("attachments/") || dbKeys.has(key) || this.pendingStorageKeys.has(key)) continue;
+      if (minAgeMs > 0) {
+        const modifiedAt = await this.adapter.storageModifiedAt?.(key);
+        if (modifiedAt === undefined || Date.now() - modifiedAt < minAgeMs) continue;
+      }
+      this.enqueueCleanup(key, "orphan-scan");
     }
     return this.runStorageCleanup();
   }
 
-  async runStorageCleanup(): Promise<{ deletedKeys: string[] }> {
+  runStorageCleanup(): Promise<{ deletedKeys: string[] }> {
+    if (!this.cleanupRun)
+      this.cleanupRun = this.drainStorageCleanup().finally(() => { this.cleanupRun = undefined; });
+    return this.cleanupRun;
+  }
+
+  private async drainStorageCleanup(): Promise<{ deletedKeys: string[] }> {
     const jobs = this.store.sqlite
       .prepare(
-        "SELECT id,storage_key storageKey FROM storage_cleanup_jobs WHERE completed_at IS NULL ORDER BY created_at",
+        "SELECT id,storage_key storageKey FROM storage_cleanup_jobs WHERE completed_at IS NULL ORDER BY attempts,created_at LIMIT 200",
       )
       .all() as { id: string; storageKey: string }[];
     const deletedKeys: string[] = [];
     for (const job of jobs) {
+      if (this.pendingStorageKeys.has(job.storageKey)) continue;
       const exists = this.store.sqlite
         .prepare("SELECT 1 FROM attachments WHERE storage_key=?")
         .get(job.storageKey);
@@ -290,7 +314,9 @@ export class AttachmentService {
         continue;
       }
       try {
-        await this.adapter.deleteStorageFile(job.storageKey);
+        const cleanup = Promise.resolve(this.adapter.deleteStorageFile(job.storageKey));
+        this.cleanupInFlight.set(job.storageKey, cleanup);
+        await cleanup;
         this.store.sqlite
           .prepare("UPDATE storage_cleanup_jobs SET completed_at=?,last_error=NULL WHERE id=?")
           .run(now(), job.id);
@@ -299,6 +325,8 @@ export class AttachmentService {
         this.store.sqlite
           .prepare("UPDATE storage_cleanup_jobs SET attempts=attempts+1,last_error=? WHERE id=?")
           .run(error instanceof Error ? error.message : String(error), job.id);
+      } finally {
+        this.cleanupInFlight.delete(job.storageKey);
       }
     }
     return { deletedKeys };
@@ -307,7 +335,9 @@ export class AttachmentService {
   private enqueueCleanup(storageKey: string, reason: string) {
     this.store.sqlite
       .prepare(
-        "INSERT OR IGNORE INTO storage_cleanup_jobs (id,storage_key,reason,attempts,created_at) VALUES (?,?,?,?,?)",
+        `INSERT INTO storage_cleanup_jobs (id,storage_key,reason,attempts,created_at) VALUES (?,?,?,?,?)
+         ON CONFLICT(storage_key) DO UPDATE SET completed_at=NULL,attempts=0,last_error=NULL,created_at=excluded.created_at,reason=excluded.reason
+         WHERE storage_cleanup_jobs.completed_at IS NOT NULL`,
       )
       .run(id(), storageKey, reason, 0, now());
   }

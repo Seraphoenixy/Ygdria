@@ -178,10 +178,10 @@ export class MaintenanceRunner {
       const removedUndoSnapshots = prunePlacementDeletions(sqlite);
 
       // Step 1b: Bound the replication metadata. This expires silent peers,
-      // prunes the change log up to the boundary the surviving peers still
-      // need, drops tombstones every active peer has acknowledged, and retires
-      // completed attachment cleanup jobs past their audit window. Nothing
-      // unacknowledged is ever removed — a backlog is reported, not deleted.
+      // prunes acknowledged history, clears compatibility tombstones
+      // immediately, and retires completed attachment cleanup jobs past their
+      // audit window. Deletion events remain until history compaction or the
+      // peer re-baselines through protocol 2.
       const syncMaintenance = runSyncDataMaintenance(sqlite);
       const syncStats = collectSyncMaintenanceStats(sqlite);
       if (syncMaintenance.expiredPeers.length > 0) {

@@ -85,6 +85,20 @@ export function SettingsPage({
     const saved = readSettings();
     return !desktopManaged && activeServerUrl ? { ...saved, syncServerUrl: activeServerUrl } : saved;
   });
+  const [retentionError, setRetentionError] = useState<string>();
+  const retentionEdited = useRef(false);
+  const retentionWrite = useRef(Promise.resolve());
+  useEffect(() => {
+    let cancelled = false;
+    retentionEdited.current = false;
+    void client.retentionPolicy().then((policy) => {
+      if (cancelled || retentionEdited.current) return;
+      setSettings((current) => ({ ...current, revisionLimit: policy.revisionLimit,
+        trashRetentionDays: policy.trashRetentionMs / 86_400_000, trashRetentionUnit: "days",
+        attachmentRetentionDays: policy.attachmentRetentionMs / 86_400_000, attachmentRetentionUnit: "days" }));
+    }).catch((error: unknown) => { if (!cancelled) setRetentionError(String(error)); });
+    return () => { cancelled = true; };
+  }, [client]);
   const syncUrlEditingRef = useRef(false);
   useEffect(() => {
     if (desktopManaged || !activeServerUrl || syncUrlEditingRef.current) return;
@@ -106,6 +120,16 @@ export function SettingsPage({
     const updated = { ...settings, ...next };
     setSettings(updated);
     writeSettings(updated);
+    const duration = { seconds: 1_000, minutes: 60_000, hours: 3_600_000, days: 86_400_000 };
+    if (["revisionLimit", "trashRetentionDays", "trashRetentionUnit", "attachmentRetentionDays", "attachmentRetentionUnit"].some((key) => key in next)) {
+      retentionEdited.current = true;
+      const policy = { revisionLimit: updated.revisionLimit,
+        trashRetentionMs: Math.round(updated.trashRetentionDays * duration[updated.trashRetentionUnit]),
+        attachmentRetentionMs: Math.round(updated.attachmentRetentionDays * duration[updated.attachmentRetentionUnit]),
+      };
+      retentionWrite.current = retentionWrite.current.then(() => client.setRetentionPolicy(policy))
+        .then(() => setRetentionError(undefined)).catch((error: unknown) => setRetentionError(String(error)));
+    }
   };
   const reconnectMobileEndpoint = () => {
     if (!canEditSyncServerUrl) return;
@@ -121,6 +145,7 @@ export function SettingsPage({
 
   return <article className="settings-page">
       <h1>{t(locale, "settingsTitle")}</h1>
+      {retentionError && <p role="alert">{retentionError}</p>}
       <h2 id="settings-general" className="settings-category">{t(locale, "settingsGeneral")}</h2>
       <section id="settings-language" className="settings-section">
         <h3>{t(locale, "settingsLanguage")}</h3>

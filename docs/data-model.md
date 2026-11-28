@@ -2,6 +2,14 @@
 
 ## 1. 概览
 
+迁移 v19 创建 `maintenance_policy`，保存单条服务端保留策略；创建 `sync_metadata_state`，记录墓碑是否已被回收，从而执行协议升级检查；创建 `sync_peer_objects(peer_id, entity_id)`，记录本地副本曾从指定远端取得或向其确认的笔记标识。来源表不参与同步，随 SQLite 备份恢复。来源记录用于限定快照缺席删除范围，避免删除从未上传的新笔记；已不存在的本地笔记对应来源行会在维护时移除。
+
+`sync_cursors.last_progress_at` 仅在游标实际向前推进时刷新，与每次请求刷新的 `last_active_at` 分开。远端积压游标超过 90 天不推进时需要重新建立基线；本地 `in:` 与 `out:` 位置保留，以维护离线修改。
+
+迁移 v20 增加 `sync_metadata_state.generation` 和 `sync_peer_objects.pending_generation`。每次墓碑回收推进压缩代次。缺席且未确认的创建在该代次被复制为新标识，防止确认丢失后的旧标识被重新上传；同一代次重试保留该副本，确认上传或收到远端对象后清除待确认标记。
+
+迁移 v21 立即删除遗留墓碑并移除墓碑写入触发器。此后的永久删除只写 `sync_change_log` 的 `deleted` 事件；同一事务内清除兼容墓碑，并推进 `sync_metadata_state.generation`。完整快照以笔记缺席表示永久删除，不发送墓碑。
+
 Ygdria 采用 SQLite。当前运行模型有 10 张由 Drizzle Schema 定义的普通业务表与 1 张 FTS5 虚拟表：`notes`、`settings`、`placements`、`relations`、`revisions`、`attachments`、`storage_cleanup_jobs`、`placement_deletions`、`sync_cursors`、`sync_change_log`；另有 `sync_tombstones` 由迁移 SQL（`CREATE TABLE IF NOT EXISTS`）直接创建，不属于 Drizzle 业务表（见 §3）；FTS 虚拟表为 `notes_fts`。
 
 时间均以 Unix epoch 毫秒（`INTEGER`）保存；对外 API 转换为 ISO 8601 字符串。所有业务 ID 使用 UUID（`TEXT`）。
@@ -15,7 +23,7 @@ notes（笔记内容与属性）
 
 settings          知识库级配置
 sync_cursors      同步 peer 游标维护
-sync_tombstones   同步删除墓碑（让对端区分"未创建"与"已删除"）
+sync_tombstones   v21 起保留的兼容表结构；永久删除不以墓碑表示
 notes_fts         从 notes 投影出的全文搜索索引（external-content FTS5）
 ```
 
@@ -136,7 +144,7 @@ notes_fts         从 notes 投影出的全文搜索索引（external-content FT
 
 唯一索引 `relations_unique(source_note_id, relation_type, target_note_id)` 防止重复关系；`relations_target_idx(target_note_id)` 支持反向查询“哪些笔记指向我”。
 
-> **同步状态（2026-08-02 起已实现）**：`relations` 现已接入增量同步协议。领域层 `RelationService` 在创建/删除时写入 `sync_change_log`（`entity_type='relation'`），删除由 `sync_tombstone_relation_delete` 触发器自动写墓碑。接收端 `applySyncChanges` 对 `relation` 分支使用 `INSERT OR IGNORE` 保证幂等，并通过 `NOT EXISTS sync_tombstones(entity_type='relation' AND deleted_at >= created_at)` 防止已删除关系的“复活”（与 `setting` 分支同构）。快照 `fullSnapshotChanges` 与基线重建 `rebuildSyncBaseline` 均已包含 relations。关系无 `updated_at`，语义不可变，因此 upsert 不更新时间戳。系统笔记（根、回收站、日历）不得作为关系端点。
+> **同步状态（2026-08-02 起已实现）**：`relations` 接入增量同步协议。领域层 `RelationService` 在创建/删除时写入 `sync_change_log`（`entity_type='relation'`）；删除事件本身是删除凭证，v21 起不再写墓碑。接收端 `applySyncChanges` 对 `relation` 分支使用 `INSERT OR IGNORE` 保证幂等，并以变更日志边界拒绝已删除关系的旧创建记录。快照 `fullSnapshotChanges` 与基线重建 `rebuildSyncBaseline` 均已包含 relations。关系无 `updated_at`，语义不可变，因此 upsert 不更新时间戳。系统笔记（根、回收站、日历）不得作为关系端点。
 
 ### `revisions`
 
@@ -230,7 +238,7 @@ GROUP BY f.id HAVING COUNT(*) > 1;
 
 ### `sync_tombstones`
 
-多端同步用的删除墓碑表。它不是业务表，也不进 FTS；作用是让同步对端区分"某条记录从未在本端创建"与"某条记录本端曾创建但已被删除"，避免旧快照复活已删除数据。
+同步兼容表。v21 前用于记录删除墓碑；v21 起迁移会清空全部行并移除写入触发器。当前永久删除由 `sync_change_log` 的 `deleted` 事件表达，完整快照则通过实体缺席表达删除。该表不参与 FTS。
 
 | 字段          | SQLite 类型 / 约束                  | 含义                                                                 |
 | ------------- | ----------------------------------- | -------------------------------------------------------------------- |
@@ -238,7 +246,7 @@ GROUP BY f.id HAVING COUNT(*) > 1;
 | `entity_id`   | `TEXT NOT NULL`                     | 实体 ID。                                                |
 | `deleted_at`  | `INTEGER NOT NULL`                 | 删除时间戳（毫秒）。                                                 |
 
-主键 `(entity_type, entity_id)`。墓碑由数据库触发器维护——每次 `DELETE` 在 `sync_tombstones` 写入（或更新）一条墓碑，每次 `INSERT` 删除对应墓碑。这保证任何写入路径（包括级联删除和未来外部调用者）都会产生墓碑。`POST /api/v1/sync/push` 合并变更时按墓碑时间戳过滤掉已删除记录；撤销 placement 删除或恢复回收站笔记会触发 `INSERT`，从而在下一次同步时清除对应墓碑。
+主键 `(entity_type, entity_id)`。v21 起不再由触发器维护，正常删除路径在写入删除日志后立即清除同名兼容墓碑。客户端和同步服务读取 `sync_change_log` 判断删除边界；协议 2 完整快照通过缺席笔记触发本地副本对账。维护任务遇到旧版本遗留行会立即清空并推进压缩代次。
 
 ### `sync_cursors`
 
@@ -311,7 +319,7 @@ clone 模型中，“删除位置”和“删除笔记”是不同动作：
 
 永久删除笔记还会通过 `notes_fts_delete_on_note_delete` 触发器清理 FTS 投影。若附件不再被任何笔记正文引用，服务端会删除该附件元数据并创建 `storage_cleanup_jobs` 任务；仍被其他笔记引用的附件和物理文件会保留。后台任务负责可靠地删除孤立物理文件。系统根和回收站笔记、placement 都不可删除、移动、重命名或作为普通 clone 使用；普通笔记也不能通过移动 placement 的方式直接放入回收站，必须使用“移入回收站”命令。
 
-永久删除笔记（单条 `purge` 或批量 `purgeTrash`）会把被删笔记写入 `sync_change_log`（`changeKind = "deleted"`），使回收站清空能跨设备传播，而不是只在执行那台设备上消失。**只有笔记实体已从发送端数据库清除时**，接收端才会收到无正文的 `note` + `deleted` 墓碑，此时 `applySyncChanges` 按本地状态分流：若本地该笔记**已在回收站**（`deleted_at` 非空），则直接硬删本地——`placements` / `relations` / `revisions` 都有 `ON DELETE CASCADE`，会一并级联清除——让两台设备数据库尽快一致；若本地该笔记**仍在使用中**（罕见冲突：本端恢复过、对端已清空），则保持软删（移回收站、可恢复），不静默销毁已恢复内容。
+永久删除笔记（单条 `purge` 或批量 `purgeTrash`）会把被删笔记写入 `sync_change_log`（`changeKind = "deleted"`），使回收站清空能跨设备传播，而不是只在执行那台设备上消失。**只有笔记实体已从发送端数据库清除时**，接收端才会收到 `data: null` 的 `note` + `deleted` 删除事件；发送端不保留墓碑。`applySyncChanges` 按本地状态分流：若本地该笔记**已在回收站**（`deleted_at` 非空），则直接硬删本地——`placements` / `relations` / `revisions` 都有 `ON DELETE CASCADE`，会一并级联清除——让两台设备数据库尽快一致；若本地该笔记**仍在使用中**（罕见冲突：本端恢复过、对端已清空），则保持软删（移回收站、可恢复），不静默销毁已恢复内容。
 
 仍在回收站中、尚未被永久清理的笔记不再以墓碑传输：增量同步与全量快照在输出时都会把软删除日志解析为**当前完整状态**——`note` + `updated`，携带 `deletedAt`、正文与附件引用——走与普通笔记相同的 `updatedAt` last-write-wins 合并路径。接收端接受后移除该笔记的活动树位置（记录 `placement` + `deleted`）并自建本地回收站位置（回收站位置仍不写同步日志）；重复传输不会把软删除误当成永久清理，较新的本地恢复也不会被较旧的软删除覆盖。全量快照包含回收站中的笔记，但不包含各端自行生成的回收站位置。因此「清空回收站」会在各端一致地清空。
 
@@ -336,7 +344,7 @@ PRAGMA foreign_keys = ON;
 
 WAL 改善读写并发；外键阻止 placement、relation、revision 关联指向不存在的实体。所有从属外键都显式使用 `ON DELETE CASCADE`，不依赖 SQLite 默认的 `NO ACTION`。`applyMigrations()` 是幂等迁移：新库自动建表，显式 `migrate` 命令也可安全重复执行。
 
-旧数据迁移会补齐 `notes` 中的正文、哈希、纯文本和属性 JSON，并从旧 `contents`、`properties` 表回填数据；同时创建系统根与回收站，并将旧的顶层 placement 收拢到根下。历史数据库可能保留不再使用的 `markdown_cache` 列，但新代码不会读取或写入它，Markdown 会从解码后的 `content_data` 按需生成。旧版 `attachments.note_id` 会迁移至正文 JSON 引用，旧 `attachments.hash` 会回填至 `content_hash`；随后附件表会重建，移除旧的单 note 外键，确保共享附件不会随任一笔记被级联删除。`storage_cleanup_jobs` 会以 `CREATE TABLE IF NOT EXISTS` 新增，不影响既有附件。`sync_tombstones` 与其触发器同样以 `CREATE TABLE IF NOT EXISTS` / `CREATE TRIGGER IF NOT EXISTS` 安装。因为 SQLite 不能用 `ALTER TABLE` 为已有外键追加 `ON DELETE`，迁移会保留数据后重建 placement、relation 和 revision 表，以写入明确的级联约束。后续 Schema 调整需要同步更新 Drizzle Schema、迁移 SQL、领域服务、FTS 投影及 Markdown 转换逻辑。
+旧数据迁移会补齐 `notes` 中的正文、哈希、纯文本和属性 JSON，并从旧 `contents`、`properties` 表回填数据；同时创建系统根与回收站，并将旧的顶层 placement 收拢到根下。历史数据库可能保留不再使用的 `markdown_cache` 列，但新代码不会读取或写入它，Markdown 会从解码后的 `content_data` 按需生成。旧版 `attachments.note_id` 会迁移至正文 JSON 引用，旧 `attachments.hash` 会回填至 `content_hash`；随后附件表会重建，移除旧的单 note 外键，确保共享附件不会随任一笔记被级联删除。`storage_cleanup_jobs` 会以 `CREATE TABLE IF NOT EXISTS` 新增，不影响既有附件。`sync_tombstones` 兼容表由既有迁移创建，v21 清空并移除其写入触发器。因为 SQLite 不能用 `ALTER TABLE` 为已有外键追加 `ON DELETE`，迁移会保留数据后重建 placement、relation 和 revision 表，以写入明确的级联约束。后续 Schema 调整需要同步更新 Drizzle Schema、迁移 SQL、领域服务、FTS 投影及 Markdown 转换逻辑。
 
 ## 8. 完整性检查与修复
 

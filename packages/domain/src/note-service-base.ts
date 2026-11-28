@@ -5,6 +5,7 @@ import {
   encodeDocumentContent,
   recordChange,
   recordChanges,
+  pruneNoteRevisions,
   replaceNoteLinks,
   type ContentCodec,
   type createDatabase,
@@ -469,6 +470,7 @@ export class NoteServiceBase {
             t,
           );
         recordChange(this.store.sqlite, "revision", revisionId, "created");
+        pruneNoteRevisions(this.store.sqlite, noteId);
         const rawContent = nextType === "code" ? code : JSON.stringify(document);
         const stored = encodeDocumentContent(rawContent);
         const oldPropsJson =
@@ -552,6 +554,7 @@ export class NoteServiceBase {
                 t,
               );
             recordChange(this.store.sqlite, "revision", revisionId, "created");
+            pruneNoteRevisions(this.store.sqlite, noteId);
           }
           const stored = encodeDocumentContent(code);
           const updated = this.store.sqlite
@@ -604,6 +607,7 @@ export class NoteServiceBase {
             )
             .run(revisionId, noteId, previous.data, previous.codec, contentHash(oldDocument), t);
           recordChange(this.store.sqlite, "revision", revisionId, "created");
+          pruneNoteRevisions(this.store.sqlite, noteId);
         }
         const stored = encodeDocumentContent(JSON.stringify(document));
         const oldRow = this.store.sqlite

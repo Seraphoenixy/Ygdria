@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
-import { decodeStoredContent, recordChange, type ContentCodec } from "@ygdria/database";
+import { createHash, randomUUID } from "node:crypto";
+import { decodeStoredContent, recordChange, replaceNoteLinks, type ContentCodec } from "@ygdria/database";
 import { markdownToTiptap, tiptapToMarkdown } from "@ygdria/editor/markdown";
 import {
   CALENDAR_PLACEMENT_ID,
+  CALENDAR_NOTE_ID,
   TAG_MAX_COUNT,
   TAG_MAX_LENGTH,
   SYSTEM_ROOT_NOTE_ID,
@@ -135,6 +136,67 @@ function externalSectionRange(document: NoteContent, headingPath: string[]) {
 }
 
 export class NoteService extends PlacementService {
+  /** Snapshot absence applies only to identities previously held by this peer.
+   * Offline edits are copied under a fresh identity before permanent deletion. */
+  reconcileRemoteNotes(peer: string, presentIds: string[], recoverySuffix: string, generation = 0) {
+    const sqlite = this.store.sqlite;
+    const present = new Set(presentIds);
+    const recovered: string[] = [];
+    let removed = 0;
+    sqlite.transaction(() => {
+      const known = sqlite.prepare("SELECT entity_id id,pending_generation pendingGeneration FROM sync_peer_objects WHERE peer_id=?").all(peer) as Array<{ id: string; pendingGeneration: number | null }>;
+      const origins = new Map(known.map((row) => [row.id, row]));
+      const candidates = generation > 0
+        ? sqlite.prepare("SELECT id FROM notes").all() as Array<{ id: string }>
+        : known;
+      const cursor = sqlite.prepare("SELECT last_advance_id seq FROM sync_cursors WHERE peer_id=?").get(`out:${peer}`) as { seq: number } | undefined;
+      for (const { id } of candidates) {
+        if (present.has(id) || [SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID].includes(id)) continue;
+        const origin = origins.get(id);
+        if (generation > 0 && origin?.pendingGeneration === generation) continue;
+        const note = sqlite.prepare("SELECT title,is_protected isProtected,deleted_at deletedAt,type FROM notes WHERE id=?").get(id) as { title: string; isProtected: number; deletedAt: number | null; type: string } | undefined;
+        if (!note) { sqlite.prepare("DELETE FROM sync_peer_objects WHERE peer_id=? AND entity_id=?").run(peer, id); continue; }
+        const pending = sqlite.prepare("SELECT 1 FROM sync_change_log WHERE entity_type='note' AND entity_id=? AND id>? LIMIT 1").get(id, cursor?.seq ?? 0);
+        if (pending || (generation > 0 && (!origin || origin.pendingGeneration !== null))) {
+          const replacement = randomUUID();
+          const timestamp = Date.now();
+          const suffix = recoverySuffix ? ` ${recoverySuffix}` : "";
+          const title = suffix && !note.title.endsWith(suffix) ? note.title + suffix : note.title;
+          sqlite.prepare(`INSERT INTO notes(id,title,type,content_data,content_codec,content_size,content_hash,plain_text,is_protected,properties_json,version,deleted_at,created_at,updated_at)
+            SELECT ?,?,type,content_data,content_codec,content_size,content_hash,plain_text,is_protected,properties_json,1,?,?,? FROM notes WHERE id=?`)
+            .run(replacement, title, note.deletedAt, timestamp, timestamp, id);
+          sqlite.prepare("INSERT INTO placements(id,note_id,parent_placement_id,position,created_at,updated_at) VALUES(?,?,?,2147483647,?,?)")
+            .run(randomUUID(), replacement, note.deletedAt === null ? SYSTEM_ROOT_PLACEMENT_ID : SYSTEM_TRASH_PLACEMENT_ID, timestamp, timestamp);
+          if (!note.isProtected && note.deletedAt === null) this.index(replacement);
+          const content = sqlite.prepare("SELECT content_data data,content_codec codec FROM notes WHERE id=?").get(replacement) as { data: Buffer; codec: ContentCodec };
+          if (!note.isProtected && note.type !== "code") replaceNoteLinks(sqlite, replacement, content.data, content.codec);
+          const revisions = sqlite.prepare("SELECT id FROM revisions WHERE note_id=?").all(id) as Array<{ id: string }>;
+          for (const revision of revisions) {
+            const revisionId = randomUUID();
+            sqlite.prepare("INSERT INTO revisions(id,note_id,content_data,content_codec,content_hash,created_at) SELECT ?,?,content_data,content_codec,content_hash,created_at FROM revisions WHERE id=?")
+              .run(revisionId, replacement, revision.id);
+            recordChange(sqlite, "revision", revisionId, "created");
+          }
+          recordChange(sqlite, "note", replacement, "created");
+          const placement = sqlite.prepare("SELECT id FROM placements WHERE note_id=?").get(replacement) as { id: string };
+          recordChange(sqlite, "placement", placement.id, "created");
+          recovered.push(replacement);
+          if (generation > 0)
+            sqlite.prepare("INSERT INTO sync_peer_objects(peer_id,entity_id,pending_generation) VALUES(?,?,?)").run(peer, replacement, generation);
+        }
+        const children = sqlite.prepare("SELECT id FROM placements WHERE parent_placement_id IN (SELECT id FROM placements WHERE note_id=?)").all(id) as Array<{ id: string }>;
+        for (const child of children) {
+          sqlite.prepare("UPDATE placements SET parent_placement_id=?,updated_at=? WHERE id=?").run(SYSTEM_ROOT_PLACEMENT_ID, Date.now(), child.id);
+          recordChange(sqlite, "placement", child.id, "updated");
+        }
+        if (note.deletedAt === null) this.remove(id);
+        this.purge(id);
+        sqlite.prepare("DELETE FROM sync_peer_objects WHERE peer_id=? AND entity_id=?").run(peer, id);
+        removed++;
+      }
+    })();
+    return { removed, recovered };
+  }
   private externalNodeFromRow(row: ExternalTreeNode): ExternalTreeNode {
     return {
       ...row,

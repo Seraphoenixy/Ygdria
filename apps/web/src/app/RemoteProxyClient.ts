@@ -50,12 +50,14 @@ export class RemoteProxyClient {
     init?: { method?: string; body?: string | ArrayBuffer; headers?: Record<string, string> },
   ): Promise<unknown> {
     const method = init?.method ?? "GET";
+    const headers = { ...init?.headers };
+    if (path.startsWith("/api/v1/sync/")) headers["X-Ygdria-Sync-Protocol"] = "2";
     let response: RemoteResponse;
     try {
       response = await (async () => {
         for (let attempt = 0; ; attempt += 1) {
           try {
-            return await window.ygdria!.remote!.request({ method, path, body: init?.body, headers: init?.headers });
+            return await window.ygdria!.remote!.request({ method, path, body: init?.body, headers });
           } catch (error) {
             if (
               method !== "GET" ||
@@ -170,7 +172,7 @@ export class RemoteProxyClient {
     const peer = peerId ? `&peerId=${encodeURIComponent(peerId)}` : "";
     const sessionParam = session ? `&session=${encodeURIComponent(session)}` : "";
     return this.request(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}${peer}${sessionParam}`) as Promise<{
-      cursor: number; hasMore: boolean; maxChangeId: number;
+      cursor: number; hasMore: boolean; maxChangeId: number; authoritative?: boolean; generation?: number;
       changes: Array<{ changeId: number; entityType: string; entityId: string; changeKind: string; createdAt: number; data: Record<string, unknown> | null }>;
     }>;
   }

@@ -72,9 +72,9 @@ function syncTo(sqlite: Database.Database, peerId: string, cursor: number, activ
 }
 
 function changeLogIds(sqlite: Database.Database): number[] {
-  return (sqlite.prepare("SELECT id FROM sync_change_log ORDER BY id").all() as { id: number }[]).map(
-    (r) => r.id,
-  );
+  return (
+    sqlite.prepare("SELECT id FROM sync_change_log ORDER BY id").all() as { id: number }[]
+  ).map((r) => r.id);
 }
 
 /** Append `count` change-log rows and return the ids they were given. */
@@ -89,21 +89,12 @@ function seedChanges(sqlite: Database.Database, count: number): number[] {
   return ids;
 }
 
-/**
- * Delete a setting so the AFTER DELETE trigger writes a real tombstone, then
- * pin its `deleted_at` so retention windows are deterministic.
- */
+/** Record a permanent setting deletion exactly as a client would. */
 function deleteSetting(sqlite: Database.Database, key: string, deletedAt = NOW) {
   sqlite.prepare("INSERT INTO settings (key,value,updated_at) VALUES (?,?,?)").run(key, "v", NOW);
   sqlite.prepare("DELETE FROM settings WHERE key=?").run(key);
-  sqlite
-    .prepare("UPDATE sync_tombstones SET deleted_at=? WHERE entity_type='setting' AND entity_id=?")
-    .run(deletedAt, key);
-  return sqlite
-    .prepare(
-      "SELECT change_log_id changeLogId,deleted_at deletedAt FROM sync_tombstones WHERE entity_type='setting' AND entity_id=?",
-    )
-    .get(key) as { changeLogId: number; deletedAt: number };
+  recordChange(sqlite, "setting", key, "deleted", deletedAt);
+  return { changeLogId: getMaxChangeId(sqlite), deletedAt };
 }
 
 function tombstoneCount(sqlite: Database.Database) {
@@ -112,7 +103,13 @@ function tombstoneCount(sqlite: Database.Database) {
 
 function insertCleanupJob(
   sqlite: Database.Database,
-  job: { id: string; key: string; attempts?: number; completedAt?: number | null; createdAt?: number },
+  job: {
+    id: string;
+    key: string;
+    attempts?: number;
+    completedAt?: number | null;
+    createdAt?: number;
+  },
 ) {
   sqlite
     .prepare(
@@ -136,16 +133,21 @@ function insertCleanupJob(
 describe("migration v12 compatibility", () => {
   it("adds the peer-activity and tombstone-boundary columns without dropping any", () => {
     const sqlite = freshDb();
-    const cursorCols = (sqlite.prepare("PRAGMA table_info(sync_cursors)").all() as { name: string }[])
-      .map((c) => c.name);
+    const cursorCols = (
+      sqlite.prepare("PRAGMA table_info(sync_cursors)").all() as { name: string }[]
+    ).map((c) => c.name);
     const tombstoneCols = (
       sqlite.prepare("PRAGMA table_info(sync_tombstones)").all() as { name: string }[]
     ).map((c) => c.name);
 
     expect(cursorCols).toContain("last_active_at");
     expect(tombstoneCols).toContain("change_log_id");
-    expect(cursorCols).toEqual(expect.arrayContaining(["peer_id", "last_advance_id", "advanced_at"]));
-    expect(tombstoneCols).toEqual(expect.arrayContaining(["entity_type", "entity_id", "deleted_at"]));
+    expect(cursorCols).toEqual(
+      expect.arrayContaining(["peer_id", "last_advance_id", "advanced_at"]),
+    );
+    expect(tombstoneCols).toEqual(
+      expect.arrayContaining(["entity_type", "entity_id", "deleted_at"]),
+    );
   });
 
   it("treats an upgraded row with no activity timestamp as active at its last advance", () => {
@@ -162,17 +164,17 @@ describe("migration v12 compatibility", () => {
     expect(collectSyncMaintenanceStats(sqlite, { now: NOW }).peers.active).toBe(1);
   });
 
-  it("never prunes a legacy tombstone that has no recorded boundary", () => {
+  it("deletes every legacy tombstone without an age or acknowledgement gate", () => {
     const sqlite = freshDb();
     sqlite
       .prepare(
         "INSERT INTO sync_tombstones (entity_type,entity_id,deleted_at,change_log_id) VALUES ('note','orphan',?,NULL)",
       )
-      .run(NOW - 365 * DAY);
+      .run(NOW);
     syncTo(sqlite, "peer-a", 999_999);
 
-    expect(pruneSyncTombstones(sqlite, { now: NOW, tombstoneMinRetentionMs: 0 })).toBe(0);
-    expect(collectSyncMaintenanceStats(sqlite, { now: NOW }).tombstones.withoutBoundary).toBe(1);
+    expect(pruneSyncTombstones(sqlite, { now: NOW })).toBe(1);
+    expect(collectSyncMaintenanceStats(sqlite, { now: NOW }).tombstones.rows).toBe(0);
   });
 });
 
@@ -197,7 +199,9 @@ describe("peer activity and expiry", () => {
     const sqlite = freshDb();
     syncTo(sqlite, "abandoned", 7, NOW - 120 * DAY);
 
-    expect(expireInactivePeers(sqlite, { now: NOW, maxInactiveMs: 90 * DAY })).toEqual(["abandoned"]);
+    expect(expireInactivePeers(sqlite, { now: NOW, maxInactiveMs: 90 * DAY })).toEqual([
+      "abandoned",
+    ]);
     // A missing cursor is precisely the signal the client uses to switch from
     // /sync/changes to /sync/snapshot — nothing is lost, nothing is merged.
     expect(getCursor(sqlite, "abandoned")).toBeNull();
@@ -300,236 +304,49 @@ describe("change log pruning", () => {
 // Tombstone pruning
 // ---------------------------------------------------------------------------
 
-describe("tombstone pruning", () => {
-  it("records the change-log position that carries the deletion", () => {
+describe("immediate permanent deletion", () => {
+  it("clears the tombstone while retaining the deletion change-log row", () => {
     const sqlite = freshDb();
-    const ids = seedChanges(sqlite, 3);
+    const deleted = deleteSetting(sqlite, "theme");
 
-    const tombstone = deleteSetting(sqlite, "theme");
-
-    // The boundary is the id the deletion's own change-log row will take.
-    expect(tombstone.changeLogId).toBe(ids[ids.length - 1] + 1);
-    recordChange(sqlite, "setting", "theme", "deleted", NOW);
-    expect(getMaxChangeId(sqlite)).toBe(tombstone.changeLogId);
-  });
-
-  it("retains permanent note tombstones for snapshots after all peers acknowledged the log", () => {
-    const sqlite = freshDb();
-    const [head] = seedChanges(sqlite, 1);
-    sqlite.prepare(
-      "INSERT INTO sync_tombstones (entity_type,entity_id,deleted_at,change_log_id) VALUES ('note','purged',?,?)",
-    ).run(NOW - 400 * DAY, head);
-    syncTo(sqlite, "caught-up", head);
-    const options = { now: NOW, tombstoneMinRetentionMs: 0 };
-
-    expect(collectSyncMaintenanceStats(sqlite, options).tombstones.prunableRows).toBe(0);
-    const result = runSyncDataMaintenance(sqlite, options);
-    expect(result.removedChangeLogRows).toBeGreaterThan(0);
-    expect(result.removedTombstones).toBe(0);
-    expect(tombstoneCount(sqlite)).toBe(1);
-    expect(getMaxChangeId(sqlite)).toBe(head);
-
-    const expired = runSyncDataMaintenance(sqlite, { ...options, now: NOW + 400 * DAY });
-    expect(expired.expiredPeers).toEqual(["caught-up"]);
-    expect(expired.removedTombstones).toBe(0);
-    expect(tombstoneCount(sqlite)).toBe(1);
-  });
-
-  it("keeps a tombstone until every peer has crossed its boundary", () => {
-    const sqlite = freshDb();
-    seedChanges(sqlite, 3);
-    const tombstone = deleteSetting(sqlite, "theme", NOW - 400 * DAY);
-    recordChange(sqlite, "setting", "theme", "deleted", NOW);
-
-    syncTo(sqlite, "fast", tombstone.changeLogId);
-    syncTo(sqlite, "slow", tombstone.changeLogId - 1);
-
-    // The slow peer has not seen the deletion yet: dropping the tombstone now
-    // would let it resurrect the entity on its next push.
-    expect(pruneSyncTombstones(sqlite, { now: NOW, tombstoneMinRetentionMs: 0 })).toBe(0);
-    expect(tombstoneCount(sqlite)).toBe(1);
-  });
-
-  it("keeps an acknowledged tombstone that is younger than the retention floor", () => {
-    const sqlite = freshDb();
-    const tombstone = deleteSetting(sqlite, "theme", NOW - 5 * DAY);
-    syncTo(sqlite, "fast", tombstone.changeLogId + 10);
-
-    expect(pruneSyncTombstones(sqlite, { now: NOW, tombstoneMinRetentionMs: 30 * DAY })).toBe(0);
-    expect(tombstoneCount(sqlite)).toBe(1);
-  });
-
-  it("prunes once the boundary is acknowledged and the floor has elapsed", () => {
-    const sqlite = freshDb();
-    const tombstone = deleteSetting(sqlite, "theme", NOW - 60 * DAY);
-    syncTo(sqlite, "fast", tombstone.changeLogId + 10);
-
-    expect(pruneSyncTombstones(sqlite, { now: NOW, tombstoneMinRetentionMs: 30 * DAY })).toBe(1);
     expect(tombstoneCount(sqlite)).toBe(0);
+    expect(
+      sqlite
+        .prepare("SELECT change_kind kind FROM sync_change_log WHERE id=?")
+        .get(deleted.changeLogId),
+    ).toEqual({ kind: "deleted" });
+    expect(
+      sqlite
+        .prepare(
+          "SELECT tombstones_pruned pruned,generation generation FROM sync_metadata_state WHERE id=1",
+        )
+        .get(),
+    ).toEqual(expect.objectContaining({ pruned: 1 }));
   });
 
-  it("prunes nothing when no cursor remains, even for an ancient tombstone", () => {
+  it("clears legacy tombstones immediately during maintenance regardless of cursor age", () => {
     const sqlite = freshDb();
-    deleteSetting(sqlite, "theme", NOW - 900 * DAY);
+    syncTo(sqlite, "behind", 0, NOW);
+    sqlite
+      .prepare(
+        "INSERT INTO sync_tombstones(entity_type,entity_id,deleted_at,change_log_id) VALUES('setting','old',?,1)",
+      )
+      .run(NOW);
 
-    // "Nobody is listening" is not evidence that everybody has heard.
-    expect(pruneSyncTombstones(sqlite, { now: NOW, tombstoneMinRetentionMs: 0 })).toBe(0);
-    expect(tombstoneCount(sqlite)).toBe(1);
-  });
-
-  it("unlocks pruning when the last peer is expired, because expiry gates it", () => {
-    const sqlite = freshDb();
-    const tombstone = deleteSetting(sqlite, "theme", NOW - 900 * DAY);
-    // The peer never saw the deletion: its cursor sits before the boundary.
-    syncTo(sqlite, "stale", tombstone.changeLogId - 1, NOW - 400 * DAY);
-
-    const result = runSyncDataMaintenance(sqlite, {
-      now: NOW,
-      peerMaxInactiveMs: 90 * DAY,
-      tombstoneMinRetentionMs: 30 * DAY,
-    });
-
-    expect(result.expiredPeers).toEqual(["stale"]);
-    // The gate is what makes this safe. The expired device can no longer pull
-    // or push incrementally; when it returns it must rebuild from the
-    // snapshot, which simply has no such entity. Nothing can resurrect, so the
-    // tombstone has no one left to protect against.
-    expect(result.rebaselineRequiredPeers).toBe(1);
+    const result = runSyncDataMaintenance(sqlite, { now: NOW, tombstoneMinRetentionMs: 365 * DAY });
     expect(result.removedTombstones).toBe(1);
     expect(tombstoneCount(sqlite)).toBe(0);
-    expect(isPeerRebaselineRequired(sqlite, "stale")).toBe(true);
-  });
-
-  it("resets the boundary when an entity is deleted, re-created and deleted again", () => {
-    const sqlite = freshDb();
-    const first = deleteSetting(sqlite, "theme", NOW - 900 * DAY);
-    seedChanges(sqlite, 5);
-    const second = deleteSetting(sqlite, "theme", NOW - 900 * DAY);
-
-    expect(second.changeLogId).toBeGreaterThan(first.changeLogId);
-    // A peer that only reached the first deletion must not prune the new one.
-    syncTo(sqlite, "slow", first.changeLogId);
-    expect(pruneSyncTombstones(sqlite, { now: NOW, tombstoneMinRetentionMs: 0 })).toBe(0);
-    expect(tombstoneCount(sqlite)).toBe(1);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Re-baseline gate
-// ---------------------------------------------------------------------------
-
-describe("re-baseline gate", () => {
-  it("remembers an expired peer instead of forgetting it", () => {
-    const sqlite = freshDb();
-    syncTo(sqlite, "abandoned", 7, NOW - 120 * DAY);
-
-    expect(expireInactivePeers(sqlite, { now: NOW, maxInactiveMs: 90 * DAY })).toEqual(["abandoned"]);
-
-    // The cursor is dropped so nothing is ever pruned against a stale
-    // position, but the peer's identity and its obligation survive: the gate
-    // is what the server enforces on every later pull and push.
-    expect(getCursor(sqlite, "abandoned")).toBeNull();
-    expect(isPeerRebaselineRequired(sqlite, "abandoned")).toBe(true);
-    expect(countRebaselineRequired(sqlite)).toBe(1);
-    expect(listRebaselineRequiredPeers(sqlite)).toEqual([
-      { peerId: "abandoned", reason: "peer-inactive", since: NOW },
-    ]);
-  });
-
-  it("never gates a peer that is still reachable", () => {
-    const sqlite = freshDb();
-    syncTo(sqlite, "desktop", 3, NOW - 200 * DAY);
-    // Caught up, so it never advances — but it is still talking to us.
-    touchPeerActivity(sqlite, "desktop", NOW - 1 * DAY);
-
-    expect(expireInactivePeers(sqlite, { now: NOW, maxInactiveMs: 90 * DAY })).toEqual([]);
-    expect(isPeerRebaselineRequired(sqlite, "desktop")).toBe(false);
-    expect(countRebaselineRequired(sqlite)).toBe(0);
-  });
-
-  it("clears the gate once the peer confirms its snapshot cursor", () => {
-    const sqlite = freshDb();
-    seedChanges(sqlite, 5);
-    syncTo(sqlite, "returning", 2, NOW - 200 * DAY);
-    expireInactivePeers(sqlite, { now: NOW, maxInactiveMs: 90 * DAY });
-    expect(isPeerRebaselineRequired(sqlite, "returning")).toBe(true);
-
-    // The server must first observe a complete snapshot. Advancing alone may
-    // not release the gate, otherwise an old peer could forge the confirmation.
-    const head = getMaxChangeId(sqlite);
-    expect(canCompletePeerRebaseline(sqlite, "returning", head)).toBe(false);
-    markPeerSnapshotCompleted(sqlite, "returning", head);
-    expect(canCompletePeerRebaseline(sqlite, "returning", head)).toBe(true);
-    const cursor = advanceCursor(sqlite, "returning", head);
-    clearPeerRebaseline(sqlite, "returning");
-
-    expect(isPeerRebaselineRequired(sqlite, "returning")).toBe(false);
-    expect(countRebaselineRequired(sqlite)).toBe(0);
-    expect(cursor.lastAdvanceId).toBe(head);
-    expect(getCursor(sqlite, "returning")).toMatchObject({ lastAdvanceId: head });
-  });
-
-  it("gates a peer again if it goes silent after re-baselining", () => {
-    const sqlite = freshDb();
-    syncTo(sqlite, "flaky", 4, NOW - 200 * DAY);
-    expireInactivePeers(sqlite, { now: NOW, maxInactiveMs: 90 * DAY });
-    // Re-baselines, then disappears for another two hundred days.
-    syncTo(sqlite, "flaky", 9, NOW - 200 * DAY);
-    expect(isPeerRebaselineRequired(sqlite, "flaky")).toBe(false);
-
-    expect(expireInactivePeers(sqlite, { now: NOW, maxInactiveMs: 90 * DAY })).toEqual(["flaky"]);
-    expect(isPeerRebaselineRequired(sqlite, "flaky")).toBe(true);
-    expect(countRebaselineRequired(sqlite)).toBe(1);
-  });
-
-  it("keeps a tombstone an active peer has not acknowledged, even beside a gated one", () => {
-    const sqlite = freshDb();
-    const tombstone = deleteSetting(sqlite, "theme", NOW - 900 * DAY);
-    syncTo(sqlite, "stale", tombstone.changeLogId - 1, NOW - 400 * DAY);
-    // Still here, still behind the deletion: it has to receive the tombstone.
-    syncTo(sqlite, "live", tombstone.changeLogId - 1, NOW - 1 * DAY);
-
-    const result = runSyncDataMaintenance(sqlite, {
-      now: NOW,
-      peerMaxInactiveMs: 90 * DAY,
-      tombstoneMinRetentionMs: 30 * DAY,
-    });
-
-    expect(result.expiredPeers).toEqual(["stale"]);
-    expect(result.rebaselineRequiredPeers).toBe(1);
-    expect(result.removedTombstones).toBe(0);
-    expect(tombstoneCount(sqlite)).toBe(1);
-  });
-
-  it("applies the retention floor to gated peers too", () => {
-    const sqlite = freshDb();
-    deleteSetting(sqlite, "theme", NOW - 5 * DAY);
-    syncTo(sqlite, "stale", 1, NOW - 400 * DAY);
-
-    const result = runSyncDataMaintenance(sqlite, {
-      now: NOW,
-      peerMaxInactiveMs: 90 * DAY,
-      tombstoneMinRetentionMs: 30 * DAY,
-    });
-
-    // Defence in depth: the gate removes the resurrection risk, the floor
-    // still buys time to notice a mistake.
-    expect(result.rebaselineRequiredPeers).toBe(1);
-    expect(result.removedTombstones).toBe(0);
-    expect(tombstoneCount(sqlite)).toBe(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Attachment cleanup jobs
-// ---------------------------------------------------------------------------
 
 describe("storage cleanup job retention", () => {
   it("retires completed jobs past the audit window", () => {
     const sqlite = freshDb();
     insertCleanupJob(sqlite, { id: "j1", key: "attachments/a", completedAt: NOW - 60 * DAY });
 
-    expect(pruneCompletedStorageCleanupJobs(sqlite, { now: NOW, storageJobRetentionMs: 30 * DAY })).toBe(1);
+    expect(
+      pruneCompletedStorageCleanupJobs(sqlite, { now: NOW, storageJobRetentionMs: 30 * DAY }),
+    ).toBe(1);
     expect(sqlite.prepare("SELECT COUNT(*) c FROM storage_cleanup_jobs").get()).toEqual({ c: 0 });
   });
 
@@ -537,7 +354,9 @@ describe("storage cleanup job retention", () => {
     const sqlite = freshDb();
     insertCleanupJob(sqlite, { id: "j1", key: "attachments/a", completedAt: NOW - 5 * DAY });
 
-    expect(pruneCompletedStorageCleanupJobs(sqlite, { now: NOW, storageJobRetentionMs: 30 * DAY })).toBe(0);
+    expect(
+      pruneCompletedStorageCleanupJobs(sqlite, { now: NOW, storageJobRetentionMs: 30 * DAY }),
+    ).toBe(0);
   });
 
   it("never removes pending or failing jobs, however old", () => {
@@ -550,11 +369,15 @@ describe("storage cleanup job retention", () => {
       createdAt: NOW - 900 * DAY,
     });
 
-    expect(pruneCompletedStorageCleanupJobs(sqlite, { now: NOW, storageJobRetentionMs: 0 })).toBe(0);
+    expect(pruneCompletedStorageCleanupJobs(sqlite, { now: NOW, storageJobRetentionMs: 0 })).toBe(
+      0,
+    );
     // Retry semantics are untouched: both rows still match the runner's
     // "completed_at IS NULL" query.
     expect(
-      sqlite.prepare("SELECT COUNT(*) c FROM storage_cleanup_jobs WHERE completed_at IS NULL").get(),
+      sqlite
+        .prepare("SELECT COUNT(*) c FROM storage_cleanup_jobs WHERE completed_at IS NULL")
+        .get(),
     ).toEqual({ c: 2 });
   });
 
@@ -566,7 +389,9 @@ describe("storage cleanup job retention", () => {
 
     expect(() => insertCleanupJob(sqlite, { id: "j2", key: "attachments/a" })).not.toThrow();
     expect(
-      sqlite.prepare("SELECT COUNT(*) c FROM storage_cleanup_jobs WHERE completed_at IS NULL").get(),
+      sqlite
+        .prepare("SELECT COUNT(*) c FROM storage_cleanup_jobs WHERE completed_at IS NULL")
+        .get(),
     ).toEqual({ c: 1 });
   });
 });
@@ -597,8 +422,8 @@ describe("runSyncDataMaintenance", () => {
 
     expect(result).toMatchObject({
       expiredPeers: ["stale"],
-      removedChangeLogRows: BASELINE_CHANGE_ROWS + 8,
-      removedTombstones: 1,
+      removedChangeLogRows: BASELINE_CHANGE_ROWS + 9,
+      removedTombstones: 0,
       removedStorageCleanupJobs: 1,
       syncBoundary: ids[ids.length - 1],
     });
@@ -669,25 +494,21 @@ describe("collectSyncMaintenanceStats", () => {
 
   // Seeding 50k rows (the warn threshold itself) is CPU-bound and legitimately
   // slower than the default 5s budget when the whole workspace tests in parallel.
-  it(
-    "warns about an unacknowledged backlog instead of deleting it",
-    () => {
-      const sqlite = freshDb();
-      seedChanges(sqlite, SYNC_CHANGE_LOG_WARN_ROWS);
-      // The peer exists but has barely consumed anything, so the entire backlog
-      // is still required for it to catch up.
-      syncTo(sqlite, "slow", 1);
+  it("warns about an unacknowledged backlog instead of deleting it", () => {
+    const sqlite = freshDb();
+    seedChanges(sqlite, SYNC_CHANGE_LOG_WARN_ROWS);
+    // The peer exists but has barely consumed anything, so the entire backlog
+    // is still required for it to catch up.
+    syncTo(sqlite, "slow", 1);
 
-      const stats = collectSyncMaintenanceStats(sqlite, { now: NOW });
+    const stats = collectSyncMaintenanceStats(sqlite, { now: NOW });
 
-      expect(stats.warnings).toContain("change-log-backlog");
-      expect(stats.warnings).toContain("change-log-blocked-by-idle-peer");
-      // Capacity protection reports; it never drops unconsumed history.
-      expect(stats.changeLog.rows).toBe(SYNC_CHANGE_LOG_WARN_ROWS + BASELINE_CHANGE_ROWS);
-      expect(stats.changeLog.prunableRows).toBe(1);
-    },
-    30_000,
-  );
+    expect(stats.warnings).toContain("change-log-backlog");
+    expect(stats.warnings).toContain("change-log-blocked-by-idle-peer");
+    // Capacity protection reports; it never drops unconsumed history.
+    expect(stats.changeLog.rows).toBe(SYNC_CHANGE_LOG_WARN_ROWS + BASELINE_CHANGE_ROWS);
+    expect(stats.changeLog.prunableRows).toBe(1);
+  }, 30_000);
 
   it("flags a pending cleanup backlog", () => {
     const sqlite = freshDb();
@@ -709,7 +530,7 @@ describe("collectSyncMaintenanceStats", () => {
     expect(collectSyncMaintenanceStats(sqlite, { now: NOW }).warnings).toEqual([]);
   });
 
-  it("counts gated peers and reports their tombstones as prunable", () => {
+  it("counts gated peers without retaining a tombstone", () => {
     const sqlite = freshDb();
     const tombstone = deleteSetting(sqlite, "theme", NOW - 900 * DAY);
     syncTo(sqlite, "gated", tombstone.changeLogId - 1, NOW - 400 * DAY);
@@ -725,14 +546,14 @@ describe("collectSyncMaintenanceStats", () => {
     // that one device owes a snapshot rebuild.
     expect(stats.peers).toMatchObject({ total: 0, active: 0, expired: 0, rebaselineRequired: 1 });
     expect(stats.tombstones).toMatchObject({
-      rows: 1,
-      prunableRows: 1,
+      rows: 0,
+      prunableRows: 0,
       rebaselineRequiredPeers: 1,
       retainedForRebaseline: 0,
     });
   });
 
-  it("attributes a held-back tombstone to the peer that has not acknowledged it", () => {
+  it("does not hold a tombstone for an unacknowledged peer", () => {
     const sqlite = freshDb();
     const tombstone = deleteSetting(sqlite, "theme", NOW - 900 * DAY);
     syncTo(sqlite, "live", tombstone.changeLogId - 1, NOW - 1 * DAY);
@@ -743,16 +564,13 @@ describe("collectSyncMaintenanceStats", () => {
       tombstoneMinRetentionMs: 30 * DAY,
     });
 
-    // Old enough to go, but still needed: this is the number to look at when
-    // the tombstone table stops shrinking.
     expect(stats.tombstones).toMatchObject({
-      rows: 1,
+      rows: 0,
       prunableRows: 0,
       rebaselineRequiredPeers: 0,
-      retainedForRebaseline: 1,
+      retainedForRebaseline: 0,
     });
-    // Reporting never deletes.
-    expect(tombstoneCount(sqlite)).toBe(1);
+    expect(tombstoneCount(sqlite)).toBe(0);
   });
 
   it("promises exactly what a maintenance pass would actually delete", () => {
@@ -801,7 +619,9 @@ describe("upgrading a v11 database", () => {
     const ids = seedChanges(sqlite, 10);
     downgradeToV11(sqlite);
     // Exactly the rows a v11 installation would be carrying.
-    sqlite.prepare("INSERT INTO settings (key,value,updated_at) VALUES (?,?,?)").run("theme", "dark", NOW);
+    sqlite
+      .prepare("INSERT INTO settings (key,value,updated_at) VALUES (?,?,?)")
+      .run("theme", "dark", NOW);
     sqlite
       .prepare("INSERT INTO sync_cursors (peer_id,last_advance_id,advanced_at) VALUES (?,?,?)")
       .run("legacy-desktop", ids[3], NOW - 10 * DAY);
@@ -813,8 +633,12 @@ describe("upgrading a v11 database", () => {
     applyMigrations(sqlite);
 
     // Business data is untouched.
-    expect((sqlite.prepare("SELECT COUNT(*) c FROM notes").get() as { c: number }).c).toBe(notesBefore);
-    expect(sqlite.prepare("SELECT value FROM settings WHERE key='theme'").get()).toEqual({ value: "dark" });
+    expect((sqlite.prepare("SELECT COUNT(*) c FROM notes").get() as { c: number }).c).toBe(
+      notesBefore,
+    );
+    expect(sqlite.prepare("SELECT value FROM settings WHERE key='theme'").get()).toEqual({
+      value: "dark",
+    });
     expect(changeLogIds(sqlite)).toEqual(expect.arrayContaining(ids));
 
     // The cursor survives, credited with its last advance, so the upgrade
@@ -826,30 +650,31 @@ describe("upgrading a v11 database", () => {
     });
     expect(expireInactivePeers(sqlite, { now: NOW, maxInactiveMs: 90 * DAY })).toEqual([]);
 
-    // The tombstone survives and is given a deliberately pessimistic boundary
-    // at the current head, so it is held until every peer has caught up.
-    const tombstone = sqlite
-      .prepare(
-        "SELECT deleted_at deletedAt,change_log_id changeLogId FROM sync_tombstones WHERE entity_type='setting' AND entity_id='removed'",
-      )
-      .get() as { deletedAt: number; changeLogId: number };
-    expect(tombstone.deletedAt).toBe(NOW - 400 * DAY);
-    expect(tombstone.changeLogId).toBeGreaterThan(getMaxChangeId(sqlite));
-    expect(pruneSyncTombstones(sqlite, { now: NOW, tombstoneMinRetentionMs: 0 })).toBe(0);
+    // Migration v21 retires the legacy tombstone immediately while preserving
+    // the cursor and all business rows.
+    expect(tombstoneCount(sqlite)).toBe(0);
+    expect(pruneSyncTombstones(sqlite, { now: NOW })).toBe(0);
 
     // And the gate exists, empty: nobody is retroactively told to re-baseline.
     expect(countRebaselineRequired(sqlite)).toBe(0);
   });
 
-  it("re-installs the tombstone boundary triggers", () => {
+  it("does not recreate permanent-deletion tombstone triggers", () => {
     const sqlite = freshDb();
     seedChanges(sqlite, 4);
     downgradeToV11(sqlite);
 
     applyMigrations(sqlite);
 
-    const tombstone = deleteSetting(sqlite, "theme", NOW - 900 * DAY);
-    expect(tombstone.changeLogId).toBe(getMaxChangeId(sqlite) + 1);
+    deleteSetting(sqlite, "theme", NOW - 900 * DAY);
+    expect(tombstoneCount(sqlite)).toBe(0);
+    expect(
+      sqlite
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'sync_tombstone_%'",
+        )
+        .all(),
+    ).toEqual([]);
   });
 
   it("is idempotent — re-running the upgrade changes nothing", () => {
@@ -861,8 +686,6 @@ describe("upgrading a v11 database", () => {
     applyMigrations(sqlite);
 
     expect(getCursor(sqlite, "desktop")).toMatchObject({ lastAdvanceId: 3 });
-    expect(
-      sqlite.prepare("SELECT COUNT(*) c FROM schema_migrations").get(),
-    ).toEqual({ c: 7 });
+    expect(sqlite.prepare("SELECT COUNT(*) c FROM schema_migrations").get()).toEqual({ c: 10 });
   });
 });

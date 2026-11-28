@@ -38,7 +38,7 @@ Drizzle / better-sqlite3 → SQLite（WAL + FTS5）
                     protected_session_{salt,verifier,timeout_ms}
    notes / revisions 存储采用 BLOB + codec（identity / zstd-v1 / ciphertext-v1）
    sync_change_log 表按自增 id 有序记录每次实体变更，供增量同步使用
-   sync_tombstones 表通过触发器记录每条实体的删除，供多端同步使用
+   sync_change_log 的 deleted 事件记录永久删除；协议 2 快照以实体缺席表达删除
    sync_cursors 表维护每个 peer 的游标（lastAdvanceId），游标为 0 时表示无历史同步
 ```
 
@@ -88,7 +88,7 @@ HTTPS 远端服务（形态 B）
 ```text
 apps/server      HTTP adapter、静态资源托管、进程生命周期、设备认证 hook（SRP challenge/verify、Devices 服务）、增量同步端点、维护任务调度
 packages/domain  NoteService（笔记、树、克隆、保存、搜索、受保护笔记）、AttachmentService、PlacementService（撤销/恢复、回收站管理）、Devices（内存态设备凭据 + 5 天闲置超时）
-packages/database SQLite 连接、WAL、Schema、迁移 SQL、doctor 与 FTS 维护、备份与恢复、sync_change_log / sync_cursors / sync_tombstones 维护
+packages/database SQLite 连接、WAL、Schema、迁移 SQL、doctor 与 FTS 维护、备份与恢复、sync_change_log / sync_cursors / 删除边界维护
 packages/editor  Markdown 转换、纯文本提取、Tiptap 编辑与静态渲染
 packages/shared  Zod 契约、跨端类型、系统常量（含 SRP_USERNAME / ACCESS_SECRET_CONTEXT / PBKDF2 迭代次数 / DEVICE_TOKEN_IDLE_TIMEOUT_MS 等认证常量）
 packages/api-client 浏览器与移动端共用的 HTTP 请求封装（携带本地令牌与设备令牌、authConfig / SRP challenge / verify 调用）
@@ -281,7 +281,7 @@ Electron 的 Renderer 不开放 Node integration、文件系统、数据库连�
 
 ### 5.3 同步与多端访问
 
-Ygdria 提供**基于游标的增量同步**（`/api/v1/sync/changes|push|advance|cursor`），不是 CRDT，也不做细粒度多人实时协作。首选的多端模式是多客户端连接同一个常驻服务器进程（单一 SQLite 权威库），并发由乐观版本号 `expectedVersion` / `If-Match` 控制，冲突返回 `409`。增量同步面向离线搬运、定期备份与多端合并：服务端在 `sync_change_log` 表中按自增 id 有序记录每次实体变更，客户端用游标拉取增量并按 last-write-wins 时间戳合并；删除由 `sync_tombstones` 表的墓碑表达，避免旧数据复活。它不处理字段级冲突，不适合双向高频同步。设备令牌不跨库迁移（纯内存），受保护笔记因客户端加密而天然可随增量同步迁移。详见 [auth-and-sync.md](auth-and-sync.md#5-同步机制)。
+Ygdria 提供**基于游标的增量同步**（`/api/v1/sync/changes|push|advance|cursor`），不是 CRDT，也不做细粒度多人实时协作。首选的多端模式是多客户端连接同一个常驻服务器进程（单一 SQLite 权威库），并发由乐观版本号 `expectedVersion` / `If-Match` 控制，冲突返回 `409`。增量同步面向离线搬运、定期备份与多端合并：服务端在 `sync_change_log` 表中按自增 id 有序记录每次实体变更，客户端用游标拉取增量并按 last-write-wins 时间戳合并；永久删除保留 `deleted` 事件，协议 2 完整快照以实体缺席传播删除。它不处理字段级冲突，不适合双向高频同步。设备令牌不跨库迁移（纯内存），受保护笔记因客户端加密而天然可随增量同步迁移。详见 [auth-and-sync.md](auth-and-sync.md#5-同步机制)。
 
 ## 6. 主题、设计令牌与样式系统
 

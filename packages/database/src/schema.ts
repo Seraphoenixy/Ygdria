@@ -170,6 +170,7 @@ export const syncCursors = sqliteTable(
      *  holding back pruning and loses its cursor, which forces its next sync
      *  through the snapshot baseline. */
     lastActiveAt: integer("last_active_at", { mode: "timestamp_ms" }),
+    lastProgressAt: integer("last_progress_at", { mode: "timestamp_ms" }),
   },
   (table) => [index("sync_cursors_last_active_idx").on(table.lastActiveAt)],
 );

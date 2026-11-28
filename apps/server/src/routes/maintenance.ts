@@ -3,6 +3,8 @@ import { collectSyncMaintenanceStats, listPeerCursors, listRebaselineRequiredPee
 import type { MaintenanceRunner } from "../maintenance.js";
 import { securityLog } from "../security/rate-limit.js";
 import { SYNC_PEER_MAX_INACTIVE_MS } from "@ygdria/shared";
+import { readRetentionPolicy, writeRetentionPolicy, type RetentionPolicy } from "@ygdria/database";
+import { httpError } from "../http/errors.js";
 
 export interface MaintenanceRouteDeps {
   maintenance: MaintenanceRunner;
@@ -11,6 +13,18 @@ export interface MaintenanceRouteDeps {
 
 export function registerMaintenanceRoutes(app: FastifyInstance, deps: MaintenanceRouteDeps) {
   const { maintenance, sqlite } = deps;
+
+  app.get("/api/v1/maintenance/retention", async () => readRetentionPolicy(sqlite));
+  app.put("/api/v1/maintenance/retention", async (req) => {
+    try {
+      writeRetentionPolicy(sqlite, req.body as RetentionPolicy);
+    } catch (error) {
+      if (error instanceof RangeError || error instanceof TypeError)
+        throw httpError(400, "Invalid retention policy");
+      throw error;
+    }
+    return readRetentionPolicy(sqlite);
+  });
 
   app.post("/api/v1/maintenance/database", async (req) => {
     const rebuildFts = String((req.query as { rebuildFts?: string }).rebuildFts ?? "") === "true";

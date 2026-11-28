@@ -1,16 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import type { YgdriaClient } from "@ygdria/api-client";
 import type { Locale } from "../lib/i18n";
 import { t } from "../lib/i18n";
-import { readSettings } from "../features/settings/settingsStore";
-
-const SETTINGS_DURATION_MS = {
-  seconds: 1_000,
-  minutes: 60_000,
-  hours: 3_600_000,
-  days: 86_400_000,
-} as const;
-
 function formatBytes(bytes: number, locale: Locale) {
   if (bytes < 1024) return `${bytes} B`;
   const units = ["KB", "MB", "GB", "TB"];
@@ -26,14 +17,12 @@ function formatBytes(bytes: number, locale: Locale) {
 export interface UseMaintenanceOptions {
   client: YgdriaClient;
   locale: Locale;
-  deviceAccess: string;
   isDesktopApp: boolean;
 }
 
 export function useMaintenance({
   client,
   locale,
-  deviceAccess,
   isDesktopApp,
 }: UseMaintenanceOptions) {
   const [clearingExcessRevisions, setClearingExcessRevisions] = useState(false);
@@ -45,27 +34,6 @@ export function useMaintenance({
   >("compact");
   const [testingSyncConnection, setTestingSyncConnection] = useState(false);
   const [syncConnectionMessage, setSyncConnectionMessage] = useState<string>();
-
-  // Auto cleanup: purge expired trash and clear unused attachments
-  useEffect(() => {
-    if (deviceAccess !== "ready") return;
-    const cleanExpired = () => {
-      const settings = readSettings();
-      const trashAge =
-        Math.max(0, settings.trashRetentionDays) *
-        SETTINGS_DURATION_MS[settings.trashRetentionUnit];
-      const attachmentAge =
-        Math.max(0, settings.attachmentRetentionDays) *
-        SETTINGS_DURATION_MS[settings.attachmentRetentionUnit];
-      const current = Date.now();
-      if (trashAge > 0) void client.purgeTrash(current - trashAge).catch(() => {});
-      if (attachmentAge > 0)
-        void client.clearUnusedAttachments(current - attachmentAge, false).catch(() => {});
-    };
-    cleanExpired();
-    const timer = window.setInterval(cleanExpired, 60_000);
-    return () => window.clearInterval(timer);
-  }, [client, deviceAccess]);
 
   const clearExcessRevisions = useCallback(
     (limit: number) => {

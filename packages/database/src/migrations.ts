@@ -109,21 +109,28 @@ const MIGRATIONS: Migration[] = [
   //     is never traded away for disk space.
   {
     version: 12,
-    description: "Track peer activity and tombstone acknowledgement boundaries for safe sync pruning",
+    description:
+      "Track peer activity and tombstone acknowledgement boundaries for safe sync pruning",
     checksum: STABLE_CHECKSUMS[12],
     up(sqlite) {
       const cursorColumns = new Set(
-        (sqlite.prepare("PRAGMA table_info(sync_cursors)").all() as { name: string }[]).map((c) => c.name),
+        (sqlite.prepare("PRAGMA table_info(sync_cursors)").all() as { name: string }[]).map(
+          (c) => c.name,
+        ),
       );
       if (!cursorColumns.has("last_active_at")) {
         sqlite.exec("ALTER TABLE sync_cursors ADD COLUMN last_active_at integer");
       }
       // Existing peers are credited with their last successful advance so an
       // upgrade never retroactively expires a device that is still in use.
-      sqlite.exec("UPDATE sync_cursors SET last_active_at=advanced_at WHERE last_active_at IS NULL");
+      sqlite.exec(
+        "UPDATE sync_cursors SET last_active_at=advanced_at WHERE last_active_at IS NULL",
+      );
 
       const tombstoneColumns = new Set(
-        (sqlite.prepare("PRAGMA table_info(sync_tombstones)").all() as { name: string }[]).map((c) => c.name),
+        (sqlite.prepare("PRAGMA table_info(sync_tombstones)").all() as { name: string }[]).map(
+          (c) => c.name,
+        ),
       );
       if (!tombstoneColumns.has("change_log_id")) {
         sqlite.exec("ALTER TABLE sync_tombstones ADD COLUMN change_log_id integer");
@@ -185,10 +192,14 @@ const MIGRATIONS: Migration[] = [
     checksum: STABLE_CHECKSUMS[14],
     up(sqlite) {
       const columns = new Set(
-        (sqlite.prepare("PRAGMA table_info(sync_rebaseline_required)").all() as { name: string }[]).map((c) => c.name),
+        (
+          sqlite.prepare("PRAGMA table_info(sync_rebaseline_required)").all() as { name: string }[]
+        ).map((c) => c.name),
       );
       if (!columns.has("snapshot_max_change_id"))
-        sqlite.exec("ALTER TABLE sync_rebaseline_required ADD COLUMN snapshot_max_change_id integer");
+        sqlite.exec(
+          "ALTER TABLE sync_rebaseline_required ADD COLUMN snapshot_max_change_id integer",
+        );
     },
   },
   // Version 15: project internal body links (noteReference nodes) into a
@@ -210,9 +221,13 @@ const MIGRATIONS: Migration[] = [
         CREATE INDEX IF NOT EXISTS note_links_target_idx ON note_links(target_note_id);
       `);
       const rows = sqlite
-        .prepare("SELECT id, content_data contentData, content_codec contentCodec FROM notes WHERE is_protected=0 AND type<>'code'")
+        .prepare(
+          "SELECT id, content_data contentData, content_codec contentCodec FROM notes WHERE is_protected=0 AND type<>'code'",
+        )
         .all() as Array<{ id: string; contentData: Buffer; contentCodec: ContentCodec }>;
-      const insert = sqlite.prepare("INSERT OR IGNORE INTO note_links (note_id,target_note_id) VALUES (?,?)");
+      const insert = sqlite.prepare(
+        "INSERT OR IGNORE INTO note_links (note_id,target_note_id) VALUES (?,?)",
+      );
       for (const row of rows)
         for (const target of readNoteLinkTargets(row.contentData, row.contentCodec))
           insert.run(row.id, target);
@@ -250,6 +265,93 @@ const MIGRATIONS: Migration[] = [
         ON CONFLICT (entity_type, entity_id) DO UPDATE SET
           deleted_at=MAX(sync_tombstones.deleted_at, excluded.deleted_at),
           change_log_id=excluded.change_log_id;
+      `);
+    },
+  },
+  {
+    version: 19,
+    description: "Persist server retention policy and actual peer progress",
+    checksum: "f6b7a91ce245d803",
+    up(sqlite) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS maintenance_policy (
+          id integer primary key CHECK(id=1),
+          revision_limit integer not null DEFAULT 3 CHECK(revision_limit>=-1),
+          trash_retention_ms integer not null DEFAULT 604800000 CHECK(trash_retention_ms>=0),
+          attachment_retention_ms integer not null DEFAULT 0 CHECK(attachment_retention_ms>=0)
+        );
+        INSERT OR IGNORE INTO maintenance_policy(id,revision_limit,trash_retention_ms)
+        SELECT 1,
+          CASE WHEN EXISTS(SELECT 1 FROM revisions) OR EXISTS(SELECT 1 FROM notes WHERE id NOT IN ('${SYSTEM_ROOT_NOTE_ID}','${SYSTEM_TRASH_NOTE_ID}','${CALENDAR_NOTE_ID}')) THEN -1 ELSE 3 END,
+          CASE WHEN EXISTS(SELECT 1 FROM notes WHERE deleted_at IS NOT NULL) THEN 0 ELSE 604800000 END;
+        CREATE TABLE IF NOT EXISTS sync_peer_objects (
+          peer_id text not null, entity_id text not null,
+          primary key(peer_id,entity_id)
+        );
+        CREATE TABLE IF NOT EXISTS sync_metadata_state (
+          id integer primary key CHECK(id=1), tombstones_pruned integer not null DEFAULT 0
+        );
+        INSERT OR IGNORE INTO sync_metadata_state(id) VALUES(1);
+        INSERT OR IGNORE INTO sync_peer_objects(peer_id,entity_id)
+        SELECT substr(c.peer_id,4),n.id FROM sync_cursors c CROSS JOIN notes n
+        WHERE c.peer_id LIKE 'in:%' AND NOT EXISTS (
+          SELECT 1 FROM sync_change_log l
+          WHERE l.entity_type='note' AND l.entity_id=n.id AND l.change_kind='created'
+            AND l.id>COALESCE((SELECT last_advance_id FROM sync_cursors WHERE peer_id='out:'||substr(c.peer_id,4)),0)
+        );
+      `);
+      const columns = new Set(
+        (sqlite.prepare("PRAGMA table_info(sync_cursors)").all() as { name: string }[]).map(
+          (c) => c.name,
+        ),
+      );
+      if (!columns.has("last_progress_at"))
+        sqlite.exec("ALTER TABLE sync_cursors ADD COLUMN last_progress_at integer");
+      sqlite.exec(
+        "UPDATE sync_cursors SET last_progress_at=advanced_at WHERE last_progress_at IS NULL",
+      );
+    },
+  },
+  {
+    version: 20,
+    description: "Track compaction generations and unacknowledged recovery identities",
+    checksum: "e4d23c1879a60fb5",
+    up(sqlite) {
+      const peerColumns = new Set(
+        (sqlite.prepare("PRAGMA table_info(sync_peer_objects)").all() as { name: string }[]).map(
+          (column) => column.name,
+        ),
+      );
+      if (!peerColumns.has("pending_generation"))
+        sqlite.exec("ALTER TABLE sync_peer_objects ADD COLUMN pending_generation integer");
+      const stateColumns = new Set(
+        (sqlite.prepare("PRAGMA table_info(sync_metadata_state)").all() as { name: string }[]).map(
+          (column) => column.name,
+        ),
+      );
+      if (!stateColumns.has("generation"))
+        sqlite.exec(
+          "ALTER TABLE sync_metadata_state ADD COLUMN generation integer not null DEFAULT 0",
+        );
+      sqlite.exec(
+        "UPDATE sync_metadata_state SET generation=1 WHERE tombstones_pruned=1 AND generation=0",
+      );
+    },
+  },
+  {
+    version: 21,
+    description: "Delete permanent-deletion tombstones immediately",
+    checksum: "8e93c4a6d21f0b57",
+    up(sqlite) {
+      sqlite.exec(`
+        DROP TRIGGER IF EXISTS sync_tombstone_placement_delete;
+        DROP TRIGGER IF EXISTS sync_tombstone_note_delete;
+        DROP TRIGGER IF EXISTS sync_tombstone_relation_delete;
+        DROP TRIGGER IF EXISTS sync_tombstone_attachment_delete;
+        DROP TRIGGER IF EXISTS sync_tombstone_setting_delete;
+        UPDATE sync_metadata_state SET tombstones_pruned=1,generation=generation+1
+          WHERE id=1 AND EXISTS(SELECT 1 FROM sync_tombstones);
+        DELETE FROM sync_tombstones;
       `);
     },
   },
@@ -296,7 +398,7 @@ export function applyMigrations(sqlite: Database.Database): void {
       if (existing.checksum !== checksum) {
         throw new Error(
           `Migration v${migration.version} ("${migration.description}") checksum mismatch: ` +
-          `expected ${checksum}, got ${existing.checksum}. The migration has been modified.`,
+            `expected ${checksum}, got ${existing.checksum}. The migration has been modified.`,
         );
       }
       continue; // Already applied and verified.
@@ -306,12 +408,16 @@ export function applyMigrations(sqlite: Database.Database): void {
     sqlite.transaction(() => {
       migration.up(sqlite);
       sqlite
-        .prepare("INSERT INTO schema_migrations (version, description, checksum, applied_at) VALUES (?,?,?,?)")
+        .prepare(
+          "INSERT INTO schema_migrations (version, description, checksum, applied_at) VALUES (?,?,?,?)",
+        )
         .run(migration.version, migration.description, checksum, Date.now());
     })();
   }
   sqlite
-    .prepare("INSERT INTO migration_integrity_metadata (key,value) VALUES ('checksum_format','stable-v1') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    .prepare(
+      "INSERT INTO migration_integrity_metadata (key,value) VALUES ('checksum_format','stable-v1') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    )
     .run();
 }
 
@@ -358,8 +464,14 @@ function bootstrapV11(sqlite: Database.Database) {
   installSystemTree(sqlite);
   installSyncTombstoneBoundaries(sqlite);
   const timestamp = Date.now();
-  sqlite.prepare("INSERT INTO settings (key,value,updated_at) VALUES (?,?,?)").run("content_schema_version", "1", timestamp);
-  sqlite.prepare("INSERT INTO sync_change_log (entity_type,entity_id,change_kind,created_at) VALUES ('setting','content_schema_version','updated',?)").run(timestamp);
+  sqlite
+    .prepare("INSERT INTO settings (key,value,updated_at) VALUES (?,?,?)")
+    .run("content_schema_version", "1", timestamp);
+  sqlite
+    .prepare(
+      "INSERT INTO sync_change_log (entity_type,entity_id,change_kind,created_at) VALUES ('setting','content_schema_version','updated',?)",
+    )
+    .run(timestamp);
 }
 
 /**
@@ -384,13 +496,15 @@ function installSyncTombstoneBoundaries(sqlite: Database.Database) {
       ON CONFLICT(entity_type,entity_id) DO UPDATE SET deleted_at=excluded.deleted_at,change_log_id=excluded.change_log_id;
     END;
   `;
-  sqlite.exec([
-    deleteTrigger("sync_tombstone_placement_delete", "placements", "placement", "id"),
-    deleteTrigger("sync_tombstone_note_delete", "notes", "note", "id"),
-    deleteTrigger("sync_tombstone_relation_delete", "relations", "relation", "id"),
-    deleteTrigger("sync_tombstone_attachment_delete", "attachments", "attachment", "id"),
-    deleteTrigger("sync_tombstone_setting_delete", "settings", "setting", "key"),
-  ].join("\n"));
+  sqlite.exec(
+    [
+      deleteTrigger("sync_tombstone_placement_delete", "placements", "placement", "id"),
+      deleteTrigger("sync_tombstone_note_delete", "notes", "note", "id"),
+      deleteTrigger("sync_tombstone_relation_delete", "relations", "relation", "id"),
+      deleteTrigger("sync_tombstone_attachment_delete", "attachments", "attachment", "id"),
+      deleteTrigger("sync_tombstone_setting_delete", "settings", "setting", "key"),
+    ].join("\n"),
+  );
 }
 
 function installSystemTree(sqlite: Database.Database) {
@@ -459,14 +573,30 @@ function installSystemTree(sqlite: Database.Database) {
     .prepare(
       "INSERT OR IGNORE INTO notes (id,title,type,content_data,content_codec,content_size,content_hash,plain_text,properties_json,version,deleted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
-    .run(CALENDAR_NOTE_ID, "日历", "text", encodeDocumentContent(rootContent).data, "identity", Buffer.byteLength(rootContent), contentHash(rootContent), "", "{}", 1, null, t, t);
+    .run(
+      CALENDAR_NOTE_ID,
+      "日历",
+      "text",
+      encodeDocumentContent(rootContent).data,
+      "identity",
+      Buffer.byteLength(rootContent),
+      contentHash(rootContent),
+      "",
+      "{}",
+      1,
+      null,
+      t,
+      t,
+    );
   sqlite
     .prepare(
       "INSERT OR IGNORE INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) VALUES (?,?,?,?,?,?)",
     )
     .run(CALENDAR_PLACEMENT_ID, CALENDAR_NOTE_ID, SYSTEM_ROOT_PLACEMENT_ID, -2, t, t);
   sqlite
-    .prepare("UPDATE placements SET parent_placement_id=NULL WHERE id=? AND parent_placement_id IS NOT NULL")
+    .prepare(
+      "UPDATE placements SET parent_placement_id=NULL WHERE id=? AND parent_placement_id IS NOT NULL",
+    )
     .run(SYSTEM_ROOT_PLACEMENT_ID);
   sqlite
     .prepare(

@@ -40,6 +40,21 @@ export type RequestObservation = { ok: boolean };
 export type RequestObserver = (observation: RequestObservation) => void;
 
 export class YgdriaClient {
+  reconcileSnapshot(peerId: string, presentIds: string[], recoverySuffix: string, generation = 0) {
+    return this.request<{ removed: number; recovered: string[] }>("/api/v1/sync/reconcile", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ peerId, presentIds, recoverySuffix, generation }),
+    });
+  }
+  retentionPolicy() {
+    return this.request<{ revisionLimit: number; trashRetentionMs: number; attachmentRetentionMs: number }>("/api/v1/maintenance/retention");
+  }
+  setRetentionPolicy(policy: { revisionLimit: number; trashRetentionMs: number; attachmentRetentionMs: number }) {
+    return this.request<typeof policy>("/api/v1/maintenance/retention", {
+      method: "PUT", body: JSON.stringify(policy),
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   private requestObserver?: RequestObserver;
   private lastRequestFailed = false;
   constructor(
@@ -86,6 +101,7 @@ export class YgdriaClient {
     const headers: Record<string, string> = {
       ...((init?.headers as Record<string, string>) ?? {}),
     };
+    if (path.startsWith("/api/v1/sync/")) headers["X-Ygdria-Sync-Protocol"] = "2";
     if (path.startsWith("/etapi/")) {
       headers["X-Ygdria-External-Access"] = "1";
     } else {
@@ -224,11 +240,12 @@ export class YgdriaClient {
     syncOrigin?: "remote",
     peerId?: string,
     onRejected?: (rejected: RejectedSyncChange[]) => Promise<void>,
+    sourcePeer?: string,
   ) {
     return pushSyncBatches(changes, async (batch) => {
       // JSON.stringify drops an undefined peerId, so the envelope matches the
       // peerless shape exactly when no peer id is given.
-      const json = JSON.stringify({ changes: batch, peerId });
+      const json = JSON.stringify({ changes: batch, peerId, sourcePeer });
       let body: BodyInit = json;
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -272,7 +289,7 @@ export class YgdriaClient {
     const peer = peerId ? `&peerId=${encodeURIComponent(peerId)}` : "";
     const sessionParam = session ? `&session=${encodeURIComponent(session)}` : "";
     return this.request<{
-      cursor: number; hasMore: boolean; maxChangeId: number;
+      cursor: number; hasMore: boolean; maxChangeId: number; authoritative?: boolean; generation?: number;
       changes: Array<{ changeId: number; entityType: string; entityId: string; changeKind: string; createdAt: number; data: Record<string, unknown> | null }>;
     }>(`/api/v1/sync/snapshot?cursor=${cursor}&limit=${limit}${metadataOnly ? "&metadataOnly=1" : ""}${peer}${sessionParam}`);
   }

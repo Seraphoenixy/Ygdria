@@ -46,6 +46,7 @@ function SyncConflictCard({
   const [liveTheirs, setLiveTheirs] = useState<TheirsSnapshot | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [resolving, setResolving] = useState<ResolvedSide | null>(null);
+  const [resolveError, setResolveError] = useState<string | null>(null);
   const theirs: TheirsSnapshot | null = hasSnapshot
     ? { version: conflict.theirsVersion, content: conflict.theirsContent, title: conflict.theirsTitle }
     : liveTheirs;
@@ -70,6 +71,7 @@ function SyncConflictCard({
   const resolve = async (side: ResolvedSide) => {
     if (resolving) return;
     setResolving(side);
+    setResolveError(null);
     try {
       // Protected notes are encrypted end-to-end: the plaintext is never on the
       // server, so we cannot re-upload a recovered edit. The local DB already
@@ -87,8 +89,9 @@ function SyncConflictCard({
         await client.updateNote(conflict.noteId, body);
       }
       onResolve(conflict.noteId);
-    } catch {
+    } catch (error) {
       setResolving(null);
+      setResolveError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -186,6 +189,11 @@ function SyncConflictCard({
           </button>
         </div>
       </footer>
+      {resolveError ? (
+        <p className="revision-error" role="alert">
+          {t(locale, "syncConflictResolveFailed")} {resolveError}
+        </p>
+      ) : null}
     </article>
   );
 }

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, unlink, copyFile, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, unlink, copyFile, rm, stat } from "node:fs/promises";
 import { resolve, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AttachmentStorageAdapter } from "@ygdria/domain";
@@ -51,11 +51,12 @@ export function createAttachmentStorage(
     },
     async deleteStorageFile(storageKey) {
       const target = resolve(attachmentRoot, storageKey.replace(/^attachments\//, ""));
-      try {
-        await rm(target, { force: true });
-      } catch {
-        /* already gone */
-      }
+      await rm(target, { force: true });
+    },
+    async storageModifiedAt(storageKey) {
+      const target = resolve(attachmentRoot, storageKey.replace(/^attachments\//, ""));
+      try { return (await stat(target)).mtimeMs; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
     },
     async listStorageKeys() {
       const walk = async (directory: string, prefix = ""): Promise<string[]> => {

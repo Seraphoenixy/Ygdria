@@ -3,17 +3,33 @@ import {
   decodeStoredContent,
   getMaxChangeId,
   recordChange,
+  pruneNoteRevisions,
   replaceNoteLinks,
   NEXT_CHANGE_LOG_ID_SQL,
   type ChangeKind,
   type ContentCodec,
   type SqliteDatabase,
 } from "@ygdria/database";
-import { orderSyncChanges, SYNC_MAX_CLOCK_SKEW_MS, SYNC_SNAPSHOT_EXPIRED, attachmentIdsFromSerializedDocument, CALENDAR_NOTE_ID, CALENDAR_PLACEMENT_ID, SYSTEM_ROOT_NOTE_ID, SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_NOTE_ID, SYSTEM_TRASH_PLACEMENT_ID } from "@ygdria/shared";
+import {
+  orderSyncChanges,
+  SYNC_MAX_CLOCK_SKEW_MS,
+  SYNC_SNAPSHOT_EXPIRED,
+  attachmentIdsFromSerializedDocument,
+  CALENDAR_NOTE_ID,
+  CALENDAR_PLACEMENT_ID,
+  SYSTEM_ROOT_NOTE_ID,
+  SYSTEM_ROOT_PLACEMENT_ID,
+  SYSTEM_TRASH_NOTE_ID,
+  SYSTEM_TRASH_PLACEMENT_ID,
+} from "@ygdria/shared";
 import { isSensitiveSettingKey } from "../http/settings.js";
 
 const SYSTEM_NOTE_IDS = new Set([SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID]);
-const SYSTEM_PLACEMENT_IDS = new Set([SYSTEM_ROOT_PLACEMENT_ID, SYSTEM_TRASH_PLACEMENT_ID, CALENDAR_PLACEMENT_ID]);
+const SYSTEM_PLACEMENT_IDS = new Set([
+  SYSTEM_ROOT_PLACEMENT_ID,
+  SYSTEM_TRASH_PLACEMENT_ID,
+  CALENDAR_PLACEMENT_ID,
+]);
 
 export type SyncSqlite = SqliteDatabase;
 
@@ -29,10 +45,14 @@ export type SyncEntityChange = {
 const NOTE_COLS =
   "id,title,type,content_data,content_codec,content_size,content_hash,plain_text,is_protected,properties_json,version,deleted_at,archived_at,created_at,updated_at";
 const ATTACHMENT_COLS = "id,filename,content_hash contentHash";
-const PLACEMENT_COLS = "id,note_id noteId,parent_placement_id parentPlacementId,position,created_at createdAt,updated_at updatedAt";
-const ATTACHMENT_FULL_COLS = "id,filename,mime_type mimeType,size,storage_key storageKey,content_hash contentHash,created_at createdAt";
-const REVISION_COLS = "id,note_id noteId,content_data contentData,content_codec contentCodec,content_hash contentHash,created_at createdAt";
-const RELATION_COLS = "id,source_note_id sourceNoteId,target_note_id targetNoteId,relation_type relationType,created_at createdAt";
+const PLACEMENT_COLS =
+  "id,note_id noteId,parent_placement_id parentPlacementId,position,created_at createdAt,updated_at updatedAt";
+const ATTACHMENT_FULL_COLS =
+  "id,filename,mime_type mimeType,size,storage_key storageKey,content_hash contentHash,created_at createdAt";
+const REVISION_COLS =
+  "id,note_id noteId,content_data contentData,content_codec contentCodec,content_hash contentHash,created_at createdAt";
+const RELATION_COLS =
+  "id,source_note_id sourceNoteId,target_note_id targetNoteId,relation_type relationType,created_at createdAt";
 
 function sqlInParams(ids: string[]): string {
   return ids.map(() => "?").join(",");
@@ -50,7 +70,11 @@ function selectInChunks<T>(
   const rows: T[] = [];
   for (let start = 0; start < ids.length; start += SQLITE_IN_CHUNK_SIZE) {
     const chunk = ids.slice(start, start + SQLITE_IN_CHUNK_SIZE);
-    rows.push(...sqlite.prepare(`SELECT ${columns} FROM ${table} WHERE ${key} IN (${sqlInParams(chunk)})`).all(...chunk) as T[]);
+    rows.push(
+      ...(sqlite
+        .prepare(`SELECT ${columns} FROM ${table} WHERE ${key} IN (${sqlInParams(chunk)})`)
+        .all(...chunk) as T[]),
+    );
   }
   return rows;
 }
@@ -78,7 +102,7 @@ type AttachmentRow = { id: string; filename: string; contentHash: string };
 /**
  * Resolve a list of SyncChange entries into full entity snapshots for the
  * incremental sync response. Returns the current state of each entity.
- * Deleted entities are returned as tombstones.
+ * Permanently deleted entities are returned as deletion events.
  *
  * Uses batch queries grouped by entity type instead of per-row queries,
  * and batch-fetches attachment references for all notes in a single query.
@@ -142,7 +166,10 @@ export function resolveChangeEntities(
     const allAttachmentIds = new Set<string>();
     for (const row of noteMap.values()) {
       if (row.is_protected) continue;
-      for (const id of attachmentIdsFromStoredContent(row.content_data, row.content_codec as ContentCodec))
+      for (const id of attachmentIdsFromStoredContent(
+        row.content_data,
+        row.content_codec as ContentCodec,
+      ))
         allAttachmentIds.add(id);
     }
     const attachmentMap = new Map<string, AttachmentRow>();
@@ -160,21 +187,40 @@ export function resolveChangeEntities(
         const attachmentRefs = row.is_protected
           ? []
           : attachmentIdsFromStoredContent(row.content_data, row.content_codec as ContentCodec)
-            .map((id) => attachmentMap.get(id))
-            .filter((v): v is AttachmentRow => Boolean(v));
+              .map((id) => attachmentMap.get(id))
+              .filter((v): v is AttachmentRow => Boolean(v));
         data = {
-          id: row.id, title: row.title, type: row.type,
-          ...(includeNoteContent ? { contentData: Buffer.from(row.content_data).toString("base64") } : {}),
-          contentCodec: row.content_codec, contentSize: row.content_size, contentHash: row.content_hash,
+          id: row.id,
+          title: row.title,
+          type: row.type,
+          ...(includeNoteContent
+            ? { contentData: Buffer.from(row.content_data).toString("base64") }
+            : {}),
+          contentCodec: row.content_codec,
+          contentSize: row.content_size,
+          contentHash: row.content_hash,
           ...(includeNoteContent ? { plainText: row.plain_text } : {}),
-          propertiesJson: row.properties_json, isProtected: Boolean(row.is_protected),
-          version: row.version, deletedAt: row.deleted_at, archivedAt: row.archived_at,
-          createdAt: row.created_at, updatedAt: row.updated_at, attachmentRefs,
+          propertiesJson: row.properties_json,
+          isProtected: Boolean(row.is_protected),
+          version: row.version,
+          deletedAt: row.deleted_at,
+          archivedAt: row.archived_at,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          attachmentRefs,
         };
       }
       result[entry.index] = {
-        changeId: change.id, entityType: "note", entityId: entry.entityId,
-        changeKind: data ? (change.changeKind === "deleted" ? "updated" : change.changeKind) : "deleted", createdAt: change.createdAt, data,
+        changeId: change.id,
+        entityType: "note",
+        entityId: entry.entityId,
+        changeKind: data
+          ? change.changeKind === "deleted"
+            ? "updated"
+            : change.changeKind
+          : "deleted",
+        createdAt: change.createdAt,
+        data,
       };
     }
   }
@@ -182,25 +228,40 @@ export function resolveChangeEntities(
   // Batch query placements
   const placementBucket = byType.get("placement");
   if (placementBucket) {
-    const liveIds = placementBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
+    const liveIds = placementBucket
+      .filter((e) => e.changeKind !== "deleted")
+      .map((e) => e.entityId);
     const placementMap = new Map<string, Record<string, unknown>>();
     if (liveIds.length > 0) {
-      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "placements", PLACEMENT_COLS);
+      const rows = selectInChunks<Record<string, unknown>>(
+        sqlite,
+        liveIds,
+        "placements",
+        PLACEMENT_COLS,
+      );
       for (const row of rows) placementMap.set(row.id as string, row);
     }
     for (const entry of placementBucket) {
       const change = filtered[entry.index];
       if (entry.changeKind === "deleted") {
         result[entry.index] = {
-          changeId: change.id, entityType: "placement", entityId: entry.entityId,
-          changeKind: "deleted", createdAt: change.createdAt, data: null,
+          changeId: change.id,
+          entityType: "placement",
+          entityId: entry.entityId,
+          changeKind: "deleted",
+          createdAt: change.createdAt,
+          data: null,
         };
         continue;
       }
       const data = placementMap.get(entry.entityId) ?? null;
       result[entry.index] = {
-        changeId: change.id, entityType: "placement", entityId: entry.entityId,
-        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+        changeId: change.id,
+        entityType: "placement",
+        entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted",
+        createdAt: change.createdAt,
+        data,
       };
     }
   }
@@ -212,13 +273,19 @@ export function resolveChangeEntities(
       const change = filtered[entry.index];
       if (entry.changeKind === "deleted") {
         result[entry.index] = {
-          changeId: change.id, entityType: "placement-order", entityId: entry.entityId,
-          changeKind: "deleted", createdAt: change.createdAt, data: null,
+          changeId: change.id,
+          entityType: "placement-order",
+          entityId: entry.entityId,
+          changeKind: "deleted",
+          createdAt: change.createdAt,
+          data: null,
         };
         continue;
       }
       const version = sqlite
-        .prepare("SELECT updated_at updatedAt FROM placement_order_versions WHERE parent_placement_id=?")
+        .prepare(
+          "SELECT updated_at updatedAt FROM placement_order_versions WHERE parent_placement_id=?",
+        )
         .get(entry.entityId) as { updatedAt: number } | undefined;
       let data: Record<string, unknown> | null = null;
       if (version) {
@@ -227,13 +294,22 @@ export function resolveChangeEntities(
             .prepare(
               "SELECT id FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id",
             )
-            .all(entry.entityId, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID) as Array<{ id: string }>
+            .all(
+              entry.entityId,
+              SYSTEM_ROOT_NOTE_ID,
+              SYSTEM_TRASH_NOTE_ID,
+              CALENDAR_NOTE_ID,
+            ) as Array<{ id: string }>
         ).map((row) => row.id);
         data = { parentPlacementId: entry.entityId, placementIds, updatedAt: version.updatedAt };
       }
       result[entry.index] = {
-        changeId: change.id, entityType: "placement-order", entityId: entry.entityId,
-        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+        changeId: change.id,
+        entityType: "placement-order",
+        entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted",
+        createdAt: change.createdAt,
+        data,
       };
     }
   }
@@ -244,22 +320,34 @@ export function resolveChangeEntities(
     const liveIds = attBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
     const attMap = new Map<string, Record<string, unknown>>();
     if (liveIds.length > 0) {
-      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "attachments", ATTACHMENT_FULL_COLS);
+      const rows = selectInChunks<Record<string, unknown>>(
+        sqlite,
+        liveIds,
+        "attachments",
+        ATTACHMENT_FULL_COLS,
+      );
       for (const row of rows) attMap.set(row.id as string, row);
     }
     for (const entry of attBucket) {
       const change = filtered[entry.index];
       if (entry.changeKind === "deleted") {
         result[entry.index] = {
-          changeId: change.id, entityType: "attachment", entityId: entry.entityId,
-          changeKind: "deleted", createdAt: change.createdAt, data: null,
+          changeId: change.id,
+          entityType: "attachment",
+          entityId: entry.entityId,
+          changeKind: "deleted",
+          createdAt: change.createdAt,
+          data: null,
         };
         continue;
       }
       const row = attMap.get(entry.entityId);
       result[entry.index] = {
-        changeId: change.id, entityType: "attachment", entityId: entry.entityId,
-        changeKind: row ? change.changeKind : "deleted", createdAt: change.createdAt,
+        changeId: change.id,
+        entityType: "attachment",
+        entityId: entry.entityId,
+        changeKind: row ? change.changeKind : "deleted",
+        createdAt: change.createdAt,
         data: row ? { ...row, dataBase64: "" } : null,
       };
     }
@@ -271,7 +359,12 @@ export function resolveChangeEntities(
     const liveIds = revBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
     const revMap = new Map<string, Record<string, unknown>>();
     if (liveIds.length > 0) {
-      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "revisions", REVISION_COLS);
+      const rows = selectInChunks<Record<string, unknown>>(
+        sqlite,
+        liveIds,
+        "revisions",
+        REVISION_COLS,
+      );
       for (const row of rows) {
         revMap.set(row.id as string, {
           ...row,
@@ -283,15 +376,23 @@ export function resolveChangeEntities(
       const change = filtered[entry.index];
       if (entry.changeKind === "deleted") {
         result[entry.index] = {
-          changeId: change.id, entityType: "revision", entityId: entry.entityId,
-          changeKind: "deleted", createdAt: change.createdAt, data: null,
+          changeId: change.id,
+          entityType: "revision",
+          entityId: entry.entityId,
+          changeKind: "deleted",
+          createdAt: change.createdAt,
+          data: null,
         };
         continue;
       }
       const data = revMap.get(entry.entityId) ?? null;
       result[entry.index] = {
-        changeId: change.id, entityType: "revision", entityId: entry.entityId,
-        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+        changeId: change.id,
+        entityType: "revision",
+        entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted",
+        createdAt: change.createdAt,
+        data,
       };
     }
   }
@@ -302,22 +403,36 @@ export function resolveChangeEntities(
     const liveIds = settingBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
     const settingMap = new Map<string, Record<string, unknown>>();
     if (liveIds.length > 0) {
-      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "settings", "key,value,updated_at updatedAt", "key");
+      const rows = selectInChunks<Record<string, unknown>>(
+        sqlite,
+        liveIds,
+        "settings",
+        "key,value,updated_at updatedAt",
+        "key",
+      );
       for (const row of rows) settingMap.set(row.key as string, row);
     }
     for (const entry of settingBucket) {
       const change = filtered[entry.index];
       if (entry.changeKind === "deleted") {
         result[entry.index] = {
-          changeId: change.id, entityType: "setting", entityId: entry.entityId,
-          changeKind: "deleted", createdAt: change.createdAt, data: null,
+          changeId: change.id,
+          entityType: "setting",
+          entityId: entry.entityId,
+          changeKind: "deleted",
+          createdAt: change.createdAt,
+          data: null,
         };
         continue;
       }
       const data = settingMap.get(entry.entityId) ?? null;
       result[entry.index] = {
-        changeId: change.id, entityType: "setting", entityId: entry.entityId,
-        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+        changeId: change.id,
+        entityType: "setting",
+        entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted",
+        createdAt: change.createdAt,
+        data,
       };
     }
   }
@@ -328,22 +443,35 @@ export function resolveChangeEntities(
     const liveIds = relBucket.filter((e) => e.changeKind !== "deleted").map((e) => e.entityId);
     const relMap = new Map<string, Record<string, unknown>>();
     if (liveIds.length > 0) {
-      const rows = selectInChunks<Record<string, unknown>>(sqlite, liveIds, "relations", RELATION_COLS);
+      const rows = selectInChunks<Record<string, unknown>>(
+        sqlite,
+        liveIds,
+        "relations",
+        RELATION_COLS,
+      );
       for (const row of rows) relMap.set(row.id as string, row);
     }
     for (const entry of relBucket) {
       const change = filtered[entry.index];
       if (entry.changeKind === "deleted") {
         result[entry.index] = {
-          changeId: change.id, entityType: "relation", entityId: entry.entityId,
-          changeKind: "deleted", createdAt: change.createdAt, data: null,
+          changeId: change.id,
+          entityType: "relation",
+          entityId: entry.entityId,
+          changeKind: "deleted",
+          createdAt: change.createdAt,
+          data: null,
         };
         continue;
       }
       const data = relMap.get(entry.entityId) ?? null;
       result[entry.index] = {
-        changeId: change.id, entityType: "relation", entityId: entry.entityId,
-        changeKind: data ? change.changeKind : "deleted", createdAt: change.createdAt, data,
+        changeId: change.id,
+        entityType: "relation",
+        entityId: entry.entityId,
+        changeKind: data ? change.changeKind : "deleted",
+        createdAt: change.createdAt,
+        data,
       };
     }
   }
@@ -356,33 +484,87 @@ export function attachmentIdsFromStoredContent(data: Buffer, codec: ContentCodec
 }
 
 export function fullSnapshotChanges(sqlite: SyncSqlite) {
-  const changes: Array<{ id: number; entityType: string; entityId: string; changeKind: string; createdAt: number }> = [];
+  const changes: Array<{
+    id: number;
+    entityType: string;
+    entityId: string;
+    changeKind: string;
+    createdAt: number;
+  }> = [];
   let id = 0;
-  for (const row of sqlite.prepare("SELECT id,updated_at updatedAt FROM notes ORDER BY created_at,id").all() as Array<{ id: string; updatedAt: number }>)
-    changes.push({ id: ++id, entityType: "note", entityId: row.id, changeKind: "updated", createdAt: row.updatedAt });
-  const purgedNotes = sqlite.prepare(
-    `SELECT t.entity_id entityId, t.deleted_at deletedAt FROM sync_tombstones t
-     WHERE t.entity_type='note' AND NOT EXISTS (SELECT 1 FROM notes WHERE id=t.entity_id)
-     ORDER BY t.entity_id`,
-  ).all() as Array<{ entityId: string; deletedAt: number }>;
-  for (const row of purgedNotes)
-    changes.push({ id: ++id, entityType: "note", entityId: row.entityId, changeKind: "deleted", createdAt: row.deletedAt });
-  const pending = new Map((sqlite.prepare("SELECT id,parent_placement_id parentPlacementId,updated_at updatedAt FROM placements WHERE parent_placement_id IS NULL OR parent_placement_id != ?").all(SYSTEM_TRASH_PLACEMENT_ID) as Array<{ id: string; parentPlacementId: string | null; updatedAt: number }>).map((row) => [row.id, row]));
+  for (const row of sqlite
+    .prepare("SELECT id,updated_at updatedAt FROM notes ORDER BY created_at,id")
+    .all() as Array<{ id: string; updatedAt: number }>)
+    changes.push({
+      id: ++id,
+      entityType: "note",
+      entityId: row.id,
+      changeKind: "updated",
+      createdAt: row.updatedAt,
+    });
+  const pending = new Map(
+    (
+      sqlite
+        .prepare(
+          "SELECT id,parent_placement_id parentPlacementId,updated_at updatedAt FROM placements WHERE parent_placement_id IS NULL OR parent_placement_id != ?",
+        )
+        .all(SYSTEM_TRASH_PLACEMENT_ID) as Array<{
+        id: string;
+        parentPlacementId: string | null;
+        updatedAt: number;
+      }>
+    ).map((row) => [row.id, row]),
+  );
   while (pending.size) {
     let progressed = false;
     for (const [placementId, row] of pending) {
       if (row.parentPlacementId && pending.has(row.parentPlacementId)) continue;
-      changes.push({ id: ++id, entityType: "placement", entityId: placementId, changeKind: "updated", createdAt: row.updatedAt });
-      pending.delete(placementId); progressed = true;
+      changes.push({
+        id: ++id,
+        entityType: "placement",
+        entityId: placementId,
+        changeKind: "updated",
+        createdAt: row.updatedAt,
+      });
+      pending.delete(placementId);
+      progressed = true;
     }
-    if (!progressed) throw Object.assign(new Error("Placement hierarchy contains a cycle"), { statusCode: 409 });
+    if (!progressed)
+      throw Object.assign(new Error("Placement hierarchy contains a cycle"), { statusCode: 409 });
   }
-  for (const row of sqlite.prepare("SELECT id,created_at createdAt FROM revisions ORDER BY created_at,id").all() as Array<{ id: string; createdAt: number }>)
-    changes.push({ id: ++id, entityType: "revision", entityId: row.id, changeKind: "created", createdAt: row.createdAt });
-  for (const row of sqlite.prepare("SELECT id,source_note_id sourceNoteId,target_note_id targetNoteId,relation_type relationType,created_at createdAt FROM relations ORDER BY created_at,id").all() as Array<{ id: string; createdAt: number }>)
-    changes.push({ id: ++id, entityType: "relation", entityId: row.id, changeKind: "created", createdAt: row.createdAt });
-  for (const row of sqlite.prepare("SELECT key,updated_at updatedAt FROM settings ORDER BY key").all() as Array<{ key: string; updatedAt: number }>)
-    if (!isSensitiveSettingKey(row.key)) changes.push({ id: ++id, entityType: "setting", entityId: row.key, changeKind: "updated", createdAt: row.updatedAt });
+  for (const row of sqlite
+    .prepare("SELECT id,created_at createdAt FROM revisions ORDER BY created_at,id")
+    .all() as Array<{ id: string; createdAt: number }>)
+    changes.push({
+      id: ++id,
+      entityType: "revision",
+      entityId: row.id,
+      changeKind: "created",
+      createdAt: row.createdAt,
+    });
+  for (const row of sqlite
+    .prepare(
+      "SELECT id,source_note_id sourceNoteId,target_note_id targetNoteId,relation_type relationType,created_at createdAt FROM relations ORDER BY created_at,id",
+    )
+    .all() as Array<{ id: string; createdAt: number }>)
+    changes.push({
+      id: ++id,
+      entityType: "relation",
+      entityId: row.id,
+      changeKind: "created",
+      createdAt: row.createdAt,
+    });
+  for (const row of sqlite
+    .prepare("SELECT key,updated_at updatedAt FROM settings ORDER BY key")
+    .all() as Array<{ key: string; updatedAt: number }>)
+    if (!isSensitiveSettingKey(row.key))
+      changes.push({
+        id: ++id,
+        entityType: "setting",
+        entityId: row.key,
+        changeKind: "updated",
+        createdAt: row.updatedAt,
+      });
   return changes;
 }
 
@@ -550,7 +732,9 @@ export const snapshotCache = new SnapshotCache();
  * outside the existing sync protocol. Placements must follow their parent so
  * a fresh receiver never violates its parent_placement_id foreign key. */
 export function rebuildSyncBaseline(sqlite: SyncSqlite) {
-  const noteIds = (sqlite.prepare("SELECT id FROM notes").all() as Array<{ id: string }>).map((row) => row.id);
+  const noteIds = (sqlite.prepare("SELECT id FROM notes").all() as Array<{ id: string }>).map(
+    (row) => row.id,
+  );
   const placementRows = sqlite
     .prepare("SELECT id,parent_placement_id parentPlacementId FROM placements")
     .all() as Array<{ id: string; parentPlacementId: string | null }>;
@@ -569,8 +753,12 @@ export function rebuildSyncBaseline(sqlite: SyncSqlite) {
       break;
     }
   }
-  const revisionIds = (sqlite.prepare("SELECT id FROM revisions").all() as Array<{ id: string }>).map((row) => row.id);
-  const relationIds = (sqlite.prepare("SELECT id FROM relations").all() as Array<{ id: string }>).map((row) => row.id);
+  const revisionIds = (
+    sqlite.prepare("SELECT id FROM revisions").all() as Array<{ id: string }>
+  ).map((row) => row.id);
+  const relationIds = (
+    sqlite.prepare("SELECT id FROM relations").all() as Array<{ id: string }>
+  ).map((row) => row.id);
   const settingIds = (sqlite.prepare("SELECT key FROM settings").all() as Array<{ key: string }>)
     .map((row) => row.key)
     .filter((key) => !isSensitiveSettingKey(key));
@@ -581,7 +769,13 @@ export function rebuildSyncBaseline(sqlite: SyncSqlite) {
     for (const id of relationIds) recordChange(sqlite, "relation", id, "created");
     for (const id of settingIds) recordChange(sqlite, "setting", id, "updated");
   })();
-  return { notes: noteIds.length, placements: placementIds.length, revisions: revisionIds.length, relations: relationIds.length, settings: settingIds.length };
+  return {
+    notes: noteIds.length,
+    placements: placementIds.length,
+    revisions: revisionIds.length,
+    relations: relationIds.length,
+    settings: settingIds.length,
+  };
 }
 
 /** Keep the external-content FTS projection consistent when sync bypasses the
@@ -606,11 +800,28 @@ export function addNoteToSearchIndex(sqlite: SyncSqlite, noteId: string) {
     .run(noteId);
 }
 
+function entityDeletedAtOrAfter(
+  sqlite: SyncSqlite,
+  entityType: string,
+  entityId: string,
+  timestamp: number,
+): boolean {
+  const row = sqlite
+    .prepare(
+      "SELECT MAX(created_at) deletedAt FROM sync_change_log WHERE entity_type=? AND entity_id=? AND change_kind='deleted'",
+    )
+    .get(entityType, entityId) as { deletedAt: number | null };
+  return row.deletedAt !== null && row.deletedAt >= timestamp;
+}
+
 export function noteWouldAcceptSyncUpdate(sqlite: SyncSqlite, noteId: string, timestamp: number) {
   const current = sqlite
     .prepare("SELECT updated_at updatedAt FROM notes WHERE id=?")
     .get(noteId) as { updatedAt: number } | undefined;
-  return !current || timestamp > current.updatedAt;
+  return (
+    !entityDeletedAtOrAfter(sqlite, "note", noteId, timestamp) &&
+    (!current || timestamp > current.updatedAt)
+  );
 }
 
 /**
@@ -619,10 +830,7 @@ export function noteWouldAcceptSyncUpdate(sqlite: SyncSqlite, noteId: string, ti
  * normally rejected by last-write-wins, but an identical snapshot is not a
  * conflict: it is an idempotent replay and must not reach the conflict UI.
  */
-function noteMatchesSyncSnapshot(
-  sqlite: SyncSqlite,
-  data: Record<string, unknown>,
-): boolean {
+function noteMatchesSyncSnapshot(sqlite: SyncSqlite, data: Record<string, unknown>): boolean {
   if (typeof data.id !== "string" || typeof data.contentData !== "string") return false;
   const local = sqlite
     .prepare(
@@ -649,32 +857,41 @@ function noteMatchesSyncSnapshot(
     | undefined;
   return Boolean(
     local &&
-      local.title === data.title &&
-      local.type === data.type &&
-      local.contentData.equals(Buffer.from(data.contentData, "base64")) &&
-      local.contentCodec === data.contentCodec &&
-      local.contentSize === data.contentSize &&
-      local.contentHash === data.contentHash &&
-      local.plainText === data.plainText &&
-      Boolean(local.isProtected) === data.isProtected &&
-      local.propertiesJson === data.propertiesJson &&
-      local.version === data.version &&
-      local.deletedAt === data.deletedAt &&
-      local.archivedAt === data.archivedAt &&
-      local.createdAt === data.createdAt &&
-      local.updatedAt === data.updatedAt,
+    local.title === data.title &&
+    local.type === data.type &&
+    local.contentData.equals(Buffer.from(data.contentData, "base64")) &&
+    local.contentCodec === data.contentCodec &&
+    local.contentSize === data.contentSize &&
+    local.contentHash === data.contentHash &&
+    local.plainText === data.plainText &&
+    Boolean(local.isProtected) === data.isProtected &&
+    local.propertiesJson === data.propertiesJson &&
+    local.version === data.version &&
+    local.deletedAt === data.deletedAt &&
+    local.archivedAt === data.archivedAt &&
+    local.createdAt === data.createdAt &&
+    local.updatedAt === data.updatedAt,
   );
 }
 
-export function cleanupUnreferencedSyncAttachments(sqlite: SyncSqlite, candidates: Set<string>, recordOutbound: boolean) {
+export function cleanupUnreferencedSyncAttachments(
+  sqlite: SyncSqlite,
+  candidates: Set<string>,
+  recordOutbound: boolean,
+) {
   if (candidates.size === 0) return;
   const referenced = new Set<string>();
   const notes = sqlite
-    .prepare("SELECT content_data contentData,content_codec contentCodec FROM notes WHERE is_protected=0 AND type<>'code'")
+    .prepare(
+      "SELECT content_data contentData,content_codec contentCodec FROM notes WHERE is_protected=0 AND type<>'code'",
+    )
     .all() as Array<{ contentData: Buffer; contentCodec: ContentCodec }>;
   try {
     for (const note of notes)
-      for (const attachmentId of attachmentIdsFromStoredContent(note.contentData, note.contentCodec))
+      for (const attachmentId of attachmentIdsFromStoredContent(
+        note.contentData,
+        note.contentCodec,
+      ))
         referenced.add(attachmentId);
   } catch {
     return;
@@ -687,7 +904,9 @@ export function cleanupUnreferencedSyncAttachments(sqlite: SyncSqlite, candidate
     if (!candidates.has(attachment.id) || referenced.has(attachment.id)) continue;
     sqlite.prepare("DELETE FROM attachments WHERE id=?").run(attachment.id);
     sqlite
-      .prepare("INSERT OR IGNORE INTO storage_cleanup_jobs(id,storage_key,reason,attempts,created_at) VALUES (?,?,?,?,?)")
+      .prepare(
+        "INSERT OR IGNORE INTO storage_cleanup_jobs(id,storage_key,reason,attempts,created_at) VALUES (?,?,?,?,?)",
+      )
       .run(randomUUID(), attachment.storageKey, "sync-reference-removed", 0, timestamp);
     if (recordOutbound) recordChange(sqlite, "attachment", attachment.id, "deleted");
   }
@@ -706,11 +925,17 @@ export type RejectedSyncChange = {
 /** Apply peer records with strict timestamp comparison so echoed records do
  * not create an endless sync loop. Attachments themselves are copied through
  * the by-hash endpoint after their owning note has been accepted. */
-export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[], recordOutbound = true): { applied: number; rejected: RejectedSyncChange[] } {
+export function applySyncChanges(
+  sqlite: SyncSqlite,
+  changes: SyncEntityChange[],
+  recordOutbound = true,
+): { applied: number; rejected: RejectedSyncChange[] } {
   let applied = 0;
   const rejected: RejectedSyncChange[] = [];
   const attachmentCleanupCandidates = new Set<string>();
-  type NoteAttachments = Pick<NoteRow, "content_data" | "is_protected" | "type"> & { content_codec: ContentCodec };
+  type NoteAttachments = Pick<NoteRow, "content_data" | "is_protected" | "type"> & {
+    content_codec: ContentCodec;
+  };
   const collectAttachments = (note: NoteAttachments | undefined) => {
     if (!note || note.is_protected || note.type === "code") return;
     try {
@@ -720,7 +945,12 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
       // Keep attachments when their source content cannot be decoded.
     }
   };
-  const logChange = (entityType: string, entityId: string, changeKind: ChangeKind, createdAt?: number) => {
+  const logChange = (
+    entityType: string,
+    entityId: string,
+    changeKind: ChangeKind,
+    createdAt?: number,
+  ) => {
     if (recordOutbound) recordChange(sqlite, entityType, entityId, changeKind, createdAt);
   };
   const ordered = orderSyncChanges(changes);
@@ -742,9 +972,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
     for (const change of ordered) {
       if (change.entityType === "setting" && isSensitiveSettingKey(change.entityId)) continue;
       const timestamp = capped(
-        Number(
-          change.createdAt ?? (change.data as { updatedAt?: number } | null)?.updatedAt ?? 0,
-        ),
+        Number(change.createdAt ?? (change.data as { updatedAt?: number } | null)?.updatedAt ?? 0),
       );
       if (!Number.isSafeInteger(timestamp) || timestamp < 0) continue;
       if (change.entityType === "attachment" && change.changeKind === "deleted") {
@@ -755,27 +983,30 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
         continue;
       }
       if (change.entityType === "note") {
+        // System notes are provisioned locally by each database (root, trash,
+        // calendar) and cannot be edited or deleted through the note API, so a
+        // snapshot copy of them must never become a mergeable record.
+        if (SYSTEM_NOTE_IDS.has(change.entityId)) continue;
         if (change.changeKind === "deleted") {
-          if (SYSTEM_NOTE_IDS.has(change.entityId) || !noteWouldAcceptSyncUpdate(sqlite, change.entityId, timestamp)) continue;
+          if (
+            !noteWouldAcceptSyncUpdate(sqlite, change.entityId, timestamp)
+          )
+            continue;
           const existing = sqlite
             .prepare("SELECT deleted_at deletedAt FROM notes WHERE id=?")
             .get(change.entityId) as { deletedAt: number | null } | undefined;
           if (!existing || existing.deletedAt !== null) {
             if (existing) {
-              const deleted = sqlite.prepare(
-                "DELETE FROM notes WHERE id=? RETURNING content_data,content_codec,is_protected,type",
-              ).get(change.entityId) as NoteAttachments;
+              const deleted = sqlite
+                .prepare(
+                  "DELETE FROM notes WHERE id=? RETURNING content_data,content_codec,is_protected,type",
+                )
+                .get(change.entityId) as NoteAttachments;
               collectAttachments(deleted);
             }
-            // Keep the source timestamp, including when the note is already absent.
-            // A stale create arriving after the deletion must still be rejected.
-            const recorded = sqlite.prepare(
-              `INSERT INTO sync_tombstones(entity_type,entity_id,deleted_at,change_log_id)
-               VALUES ('note',?,?,NULL)
-               ON CONFLICT(entity_type,entity_id) DO UPDATE SET deleted_at=excluded.deleted_at, change_log_id=NULL
-               WHERE excluded.deleted_at > sync_tombstones.deleted_at OR ?`,
-            ).run(change.entityId, timestamp, existing ? 1 : 0);
-            if (existing || recorded.changes) {
+            // The change log is the only deletion boundary. The product
+            // requires the tombstone table to be empty after permanent deletion.
+            if (existing) {
               logChange("note", change.entityId, "deleted", timestamp);
               applied += 1;
             }
@@ -798,12 +1029,23 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
             if (!hasTrashPlacement) {
               const position = (
                 sqlite
-                  .prepare("SELECT COALESCE(MAX(position),-1)+1 p FROM placements WHERE parent_placement_id=?")
+                  .prepare(
+                    "SELECT COALESCE(MAX(position),-1)+1 p FROM placements WHERE parent_placement_id=?",
+                  )
                   .get(SYSTEM_TRASH_PLACEMENT_ID) as { p: number }
               ).p;
               sqlite
-                .prepare("INSERT OR IGNORE INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) VALUES (?,?,?,?,?,?)")
-                .run(randomUUID(), change.entityId, SYSTEM_TRASH_PLACEMENT_ID, position, timestamp, timestamp);
+                .prepare(
+                  "INSERT OR IGNORE INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                )
+                .run(
+                  randomUUID(),
+                  change.entityId,
+                  SYSTEM_TRASH_PLACEMENT_ID,
+                  position,
+                  timestamp,
+                  timestamp,
+                );
             }
             logChange("note", change.entityId, "deleted");
             applied += 1;
@@ -825,7 +1067,13 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           const local = sqlite
             .prepare("SELECT updated_at updatedAt, version FROM notes WHERE id=?")
             .get(String(d.id)) as { updatedAt: number; version: number } | undefined;
-          if (local) rejected.push({ entityType: "note", entityId: String(d.id), localUpdatedAt: local.updatedAt, localVersion: local.version });
+          if (local)
+            rejected.push({
+              entityType: "note",
+              entityId: String(d.id),
+              localUpdatedAt: local.updatedAt,
+              localVersion: local.version,
+            });
           continue;
         }
         const previous = sqlite
@@ -833,15 +1081,11 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           .get(String(d.id)) as NoteAttachments | undefined;
         collectAttachments(previous);
         removeNoteFromSearchIndex(sqlite, String(d.id));
-        // The anti-resurrection guard mirrors the `relation` and `setting`
-        // branches: a note that was permanently deleted here leaves a tombstone,
-        // and a peer carrying an older copy must not be able to re-create it.
-        // Without this a device that went silent for months would re-seed every
-        // note the user purged while it was away. A genuinely newer edit
-        // (updatedAt past the deletion) still wins, matching last-write-wins.
+        // The latest delete change-log row is the anti-resurrection boundary.
+        // A genuinely newer edit still wins under last-write-wins.
         const result = sqlite
           .prepare(
-            "INSERT INTO notes (id,title,type,content_data,content_codec,content_size,content_hash,plain_text,is_protected,properties_json,version,deleted_at,archived_at,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM sync_tombstones WHERE entity_type='note' AND entity_id=? AND deleted_at>=?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,type=excluded.type,content_data=excluded.content_data,content_codec=excluded.content_codec,content_size=excluded.content_size,content_hash=excluded.content_hash,plain_text=excluded.plain_text,is_protected=excluded.is_protected,properties_json=excluded.properties_json,version=excluded.version,deleted_at=excluded.deleted_at,archived_at=excluded.archived_at,updated_at=excluded.updated_at WHERE excluded.updated_at > notes.updated_at",
+            "INSERT INTO notes (id,title,type,content_data,content_codec,content_size,content_hash,plain_text,is_protected,properties_json,version,deleted_at,archived_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,type=excluded.type,content_data=excluded.content_data,content_codec=excluded.content_codec,content_size=excluded.content_size,content_hash=excluded.content_hash,plain_text=excluded.plain_text,is_protected=excluded.is_protected,properties_json=excluded.properties_json,version=excluded.version,deleted_at=excluded.deleted_at,archived_at=excluded.archived_at,updated_at=excluded.updated_at WHERE excluded.updated_at > notes.updated_at",
           )
           .run(
             d.id,
@@ -859,11 +1103,14 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
             d.archivedAt,
             d.createdAt,
             d.updatedAt,
-            d.id,
-            d.updatedAt,
           );
         if (result.changes) {
-          replaceNoteLinks(sqlite, String(d.id), Buffer.from(d.contentData, "base64"), d.contentCodec as ContentCodec);
+          replaceNoteLinks(
+            sqlite,
+            String(d.id),
+            Buffer.from(d.contentData, "base64"),
+            d.contentCodec as ContentCodec,
+          );
           if (d.deletedAt === null) {
             const trashPlacements = sqlite
               .prepare("SELECT id FROM placements WHERE note_id=? AND parent_placement_id=?")
@@ -877,19 +1124,38 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           if (typeof d.deletedAt === "number") {
             // Trash placements are local views. Reconcile stale active clones
             // even when a snapshot arrives after their deletion logs were pruned.
-            const placements = sqlite.prepare("SELECT id FROM placements WHERE note_id=? AND (parent_placement_id IS NULL OR parent_placement_id != ?)")
+            const placements = sqlite
+              .prepare(
+                "SELECT id FROM placements WHERE note_id=? AND (parent_placement_id IS NULL OR parent_placement_id != ?)",
+              )
               .all(String(d.id), SYSTEM_TRASH_PLACEMENT_ID) as Array<{ id: string }>;
             for (const placement of placements) {
               sqlite.prepare("DELETE FROM placements WHERE id=?").run(placement.id);
               logChange("placement", placement.id, "deleted");
             }
-            const hasTrashPlacement = sqlite.prepare("SELECT 1 FROM placements WHERE note_id=? AND parent_placement_id=?")
+            const hasTrashPlacement = sqlite
+              .prepare("SELECT 1 FROM placements WHERE note_id=? AND parent_placement_id=?")
               .get(String(d.id), SYSTEM_TRASH_PLACEMENT_ID);
             if (!hasTrashPlacement) {
-              const position = (sqlite.prepare("SELECT COALESCE(MAX(position),-1)+1 p FROM placements WHERE parent_placement_id=?")
-                .get(SYSTEM_TRASH_PLACEMENT_ID) as { p: number }).p;
-              sqlite.prepare("INSERT INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) VALUES (?,?,?,?,?,?)")
-                .run(randomUUID(), String(d.id), SYSTEM_TRASH_PLACEMENT_ID, position, d.deletedAt, d.updatedAt);
+              const position = (
+                sqlite
+                  .prepare(
+                    "SELECT COALESCE(MAX(position),-1)+1 p FROM placements WHERE parent_placement_id=?",
+                  )
+                  .get(SYSTEM_TRASH_PLACEMENT_ID) as { p: number }
+              ).p;
+              sqlite
+                .prepare(
+                  "INSERT INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                )
+                .run(
+                  randomUUID(),
+                  String(d.id),
+                  SYSTEM_TRASH_PLACEMENT_ID,
+                  position,
+                  d.deletedAt,
+                  d.updatedAt,
+                );
             }
           }
           addNoteToSearchIndex(sqlite, String(d.id));
@@ -898,18 +1164,42 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
         }
       } else if (change.entityType === "placement-order") {
         const d = capRecord(change.data as Record<string, unknown> | null);
-        if (!d || typeof d.parentPlacementId !== "string" || !Array.isArray(d.placementIds) || !d.placementIds.every((id) => typeof id === "string") || typeof d.updatedAt !== "number") continue;
-        const accepted = sqlite.prepare(
-          "INSERT INTO placement_order_versions(parent_placement_id,updated_at) VALUES (?,?) ON CONFLICT(parent_placement_id) DO UPDATE SET updated_at=excluded.updated_at WHERE excluded.updated_at > placement_order_versions.updated_at",
-        ).run(d.parentPlacementId, d.updatedAt);
+        if (
+          !d ||
+          typeof d.parentPlacementId !== "string" ||
+          !Array.isArray(d.placementIds) ||
+          !d.placementIds.every((id) => typeof id === "string") ||
+          typeof d.updatedAt !== "number"
+        )
+          continue;
+        const accepted = sqlite
+          .prepare(
+            "INSERT INTO placement_order_versions(parent_placement_id,updated_at) VALUES (?,?) ON CONFLICT(parent_placement_id) DO UPDATE SET updated_at=excluded.updated_at WHERE excluded.updated_at > placement_order_versions.updated_at",
+          )
+          .run(d.parentPlacementId, d.updatedAt);
         if (!accepted.changes) continue;
-        const current = sqlite.prepare("SELECT id FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id")
-          .all(d.parentPlacementId, SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID) as Array<{ id: string }>;
+        const current = sqlite
+          .prepare(
+            "SELECT id FROM placements WHERE parent_placement_id=? AND note_id NOT IN (?,?,?) ORDER BY position,id",
+          )
+          .all(
+            d.parentPlacementId,
+            SYSTEM_ROOT_NOTE_ID,
+            SYSTEM_TRASH_NOTE_ID,
+            CALENDAR_NOTE_ID,
+          ) as Array<{ id: string }>;
         const allowed = new Set(current.map((row) => row.id));
-        const requested = [...new Set(d.placementIds)].filter((id): id is string => typeof id === "string" && allowed.has(id));
+        const requested = [...new Set(d.placementIds)].filter(
+          (id): id is string => typeof id === "string" && allowed.has(id),
+        );
         const requestedSet = new Set(requested);
-        const order = [...requested, ...current.map((row) => row.id).filter((id) => !requestedSet.has(id))];
-        const update = sqlite.prepare("UPDATE placements SET position=?,updated_at=? WHERE id=? AND parent_placement_id=?");
+        const order = [
+          ...requested,
+          ...current.map((row) => row.id).filter((id) => !requestedSet.has(id)),
+        ];
+        const update = sqlite.prepare(
+          "UPDATE placements SET position=?,updated_at=? WHERE id=? AND parent_placement_id=?",
+        );
         order.forEach((id, position) => update.run(position, d.updatedAt, id, d.parentPlacementId));
         logChange("placement-order", d.parentPlacementId, "updated");
         applied += 1;
@@ -926,6 +1216,7 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
         }
         const d = capRecord(change.data as Record<string, unknown> | null);
         if (!d || typeof d.noteId !== "string" || typeof d.updatedAt !== "number") continue;
+        if (entityDeletedAtOrAfter(sqlite, "placement", String(d.id), d.updatedAt)) continue;
         // System placements have immutable note_id and parent_placement_id enforced by
         // `placements_system_cannot_be_moved` (BEFORE UPDATE OF note_id, parent_placement_id).
         // Even an identical value in SET triggers that abort, so only update position/updated_at.
@@ -936,12 +1227,18 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           .prepare(
             `INSERT INTO placements (id,note_id,parent_placement_id,position,created_at,updated_at)
              SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM notes WHERE id=?)
-               AND NOT EXISTS(SELECT 1 FROM sync_tombstones WHERE entity_type='placement' AND entity_id=? AND deleted_at>=?)
              ON CONFLICT(id) DO UPDATE SET ${updateLocation}position=excluded.position,updated_at=excluded.updated_at
              WHERE excluded.updated_at > placements.updated_at`,
           )
-          .run(d.id, d.noteId, d.parentPlacementId ?? null, d.position, d.createdAt, d.updatedAt,
-            d.noteId, d.id, d.updatedAt);
+          .run(
+            d.id,
+            d.noteId,
+            d.parentPlacementId ?? null,
+            d.position,
+            d.createdAt,
+            d.updatedAt,
+            d.noteId,
+          );
         if (result.changes) {
           logChange("placement", String(d.id), "updated");
           applied += 1;
@@ -981,11 +1278,11 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           );
         if (result.changes) {
           logChange("revision", String(d.id), "created");
+          pruneNoteRevisions(sqlite, d.noteId);
           applied += 1;
         }
       } else if (change.entityType === "relation") {
         if (change.changeKind === "deleted") {
-          // The AFTER DELETE trigger writes the sync tombstone automatically.
           const result = sqlite.prepare("DELETE FROM relations WHERE id=?").run(change.entityId);
           if (result.changes) {
             logChange("relation", change.entityId, "deleted");
@@ -1003,12 +1300,11 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           typeof d.createdAt !== "number"
         )
           continue;
-        // INSERT OR IGNORE keeps the edge idempotent; the anti-resurrection
-        // guard refuses to recreate an edge a peer has since deleted, matching
-        // the `setting` branch semantics. Both endpoints must already exist.
+        if (entityDeletedAtOrAfter(sqlite, "relation", String(d.id), d.createdAt)) continue;
+        // The delete change-log boundary prevents old peers from recreating the edge.
         const result = sqlite
           .prepare(
-            "INSERT OR IGNORE INTO relations (id,source_note_id,target_note_id,relation_type,created_at) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM notes WHERE id=?) AND EXISTS(SELECT 1 FROM notes WHERE id=?) AND NOT EXISTS(SELECT 1 FROM sync_tombstones WHERE entity_type='relation' AND entity_id=? AND deleted_at>=?)",
+            "INSERT OR IGNORE INTO relations (id,source_note_id,target_note_id,relation_type,created_at) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM notes WHERE id=?) AND EXISTS(SELECT 1 FROM notes WHERE id=?)",
           )
           .run(
             d.id,
@@ -1018,8 +1314,6 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
             d.createdAt,
             d.sourceNoteId,
             d.targetNoteId,
-            d.id,
-            d.createdAt,
           );
         if (result.changes) {
           logChange("relation", String(d.id), "created");
@@ -1029,14 +1323,6 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
         if (change.changeKind === "deleted") {
           const result = sqlite
             .prepare("DELETE FROM settings WHERE key=? AND updated_at < ?")
-            .run(change.entityId, timestamp);
-          // The recorded boundary is the change-log position that will carry
-          // this deletion onward, so maintenance can later tell whether every
-          // peer has seen it. Without it the tombstone would be unprunable.
-          sqlite
-            .prepare(
-              `INSERT INTO sync_tombstones (entity_type,entity_id,deleted_at,change_log_id) VALUES ('setting',?,?,${NEXT_CHANGE_LOG_ID_SQL}) ON CONFLICT(entity_type,entity_id) DO UPDATE SET deleted_at=excluded.deleted_at,change_log_id=excluded.change_log_id WHERE excluded.deleted_at > sync_tombstones.deleted_at`,
-            )
             .run(change.entityId, timestamp);
           if (result.changes) {
             logChange("setting", change.entityId, "deleted");
@@ -1054,11 +1340,12 @@ export function applySyncChanges(sqlite: SyncSqlite, changes: SyncEntityChange[]
           isSensitiveSettingKey(d.key)
         )
           continue;
+        if (entityDeletedAtOrAfter(sqlite, "setting", d.key, d.updatedAt)) continue;
         const result = sqlite
           .prepare(
-            "INSERT INTO settings (key,value,updated_at) SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM sync_tombstones WHERE entity_type='setting' AND entity_id=? AND deleted_at>=?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at WHERE excluded.updated_at > settings.updated_at",
+            "INSERT INTO settings (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at WHERE excluded.updated_at > settings.updated_at",
           )
-          .run(d.key, d.value, d.updatedAt, d.key, d.updatedAt);
+          .run(d.key, d.value, d.updatedAt);
         if (result.changes) {
           logChange("setting", d.key, "updated");
           applied += 1;

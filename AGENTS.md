@@ -18,7 +18,7 @@
 - `apps/mobile`：Capacitor 壳，复用 `apps/web` 的 SPA 和移动端原生集成。
 - `apps/mcp`：stdio MCP 适配器，只通过本机 ETAPI 的 HTTP 契约访问笔记，不直接依赖领域层或数据库。
 - `packages/domain`：笔记、树/clone、保存、搜索、附件、关系、回收站和受保护笔记等领域服务；`Devices` 是不依赖数据库的纯内存认证服务。
-- `packages/database`：SQLite（WAL + FTS5）、Drizzle、幂等迁移、备份恢复、doctor 及同步日志/游标/墓碑。
+- `packages/database`：SQLite（WAL + FTS5）、Drizzle、幂等迁移、备份恢复、doctor 及同步日志/游标/删除边界。
 - `packages/editor`：Tiptap/ProseMirror 编辑与渲染、Markdown 转换、代码高亮及正文查找替换。
 - `packages/shared`、`packages/api-client`：跨端 Zod 契约/常量与 HTTP/SRP 客户端封装。
 
@@ -26,7 +26,7 @@
 
 - 正文权威格式是 Tiptap JSON；Markdown 是导入、导出、源码视图和 ETAPI 的交换格式，不应重新引入独立的 Markdown 权威缓存。
 - 正文保存使用乐观并发（`expectedVersion`/`If-Match`），正文、修订和 FTS 投影应在同一 SQLite 事务内保持一致。受保护笔记由客户端加密，服务端仅处理密文，不进入 FTS 和普通修订路径。
-- 多端同步基于 `sync_change_log`、`sync_cursors`、`sync_tombstones` 的游标增量机制，并用墓碑防止旧数据复活；不要把它实现成 CRDT 或多人实时协作。
+- 多端同步基于 `sync_change_log`、`sync_cursors` 和协议 2 权威快照的游标增量机制。删除事件保留在变更日志中，永久删除不保留墓碑；快照缺席表示删除，旧客户端返回 426。不要把它实现成 CRDT 或多人实时协作。
 - 独立服务的远端访问必须经 HTTPS 反向代理；桌面渲染进程不直接请求远端，也不得持有明文 `deviceToken`，远端调用由 Electron 主进程完成。
 - MCP 仍是独立 stdio 进程，只能调用 `/etapi/*` 并携带 `X-Ygdria-External-Access: 1`；不得 import `packages/domain` 或 `packages/database` 绕过 ETAPI。
 - TanStack Query 只管理服务端数据和请求状态；Zustand 只管理本地 UI 状态；Tiptap 的实时 ProseMirror 文档留在编辑器内部。

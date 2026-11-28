@@ -39,7 +39,7 @@
 | `GET`          | `/api/v1/attachments/by-hash/:hash/exists` | 按 SHA-256 哈希快速判断附件是否已存在，返回 `{ exists: boolean, id: string \| null }`；同步去重时用于避免重复上传。 |
 | `GET`          | `/api/v1/relations?noteId=`            | 列出某笔记的出向（source=该笔记）与入向（target=该笔记，即反向链接）关系，返回 `{ outgoing: [...], incoming: [...] }`，每项含 `peerTitle`。 |
 | `POST`         | `/api/v1/relations`                    | 创建关系，请求体 `{ sourceNoteId, targetNoteId, relationType }`（`relationType` ∈ `related`/`uses`/`prerequisite`）；重复边返回 `duplicate: true`。自关联、系统笔记端点或不存在的笔记返回 404。 |
-| `DELETE`       | `/api/v1/relations/:id`                | 删除关系（由数据库触发器自动写同步墓碑）。 |
+| `DELETE`       | `/api/v1/relations/:id`                | 删除关系（写入 `deleted` 同步事件并立即清除兼容墓碑）。 |
 | `GET`          | `/api/v1/graph`                        | 知识图谱投影（只读）：非删除、非系统笔记为节点（受保护笔记标题为空串并以 `isProtected` 标记），显式关系（`kind: "relation"`）与正文内链 `[[note:...]]`（`kind: "link"`，受保护笔记密文不可解析故不含其内链）为去重后的边；返回 `{ nodes: [{ id, title, isProtected }], edges: [{ source, target, kind }] }`。 |
 | `POST`         | `/api/v1/placements`                   | 新增 placement，用于 clone，返回 `{ id, noteId, parentPlacementId, position }`。 |
 | `PATCH/DELETE` | `/api/v1/placements/:id`               | 移动（`PATCH`，返回 `{ ok: true }`）或删除（`DELETE`，返回撤销记录 ID）树中的位置。 |
@@ -57,7 +57,7 @@
 | `POST`         | `/api/v1/maintenance/database`         | 后台维护任务：修剪 placement 撤销快照 + `VACUUM` + WAL checkpoint（可选 FTS 重建）。立即返回任务 ID；同一时刻只允许一个任务排队或运行（`409`），15 分钟冷却期内返回 `429`。 |
 | `GET`          | `/api/v1/maintenance/status`           | 查询当前或最近一次维护任务的状态（`queued` / `running` / `succeeded` / `failed`）与结果摘要。 |
 | `POST`         | `/api/v1/maintenance/search-index`     | 后台触发 `notes_fts` 全文索引的完整重建任务，立即返回任务 ID；状态通过 `GET /api/v1/maintenance/status` 查询。 |
-| `GET`          | `/api/v1/maintenance/sync-status`      | 只读容量报告：同步元数据（变更日志、墓碑、peer 游标、存储清理任务、placement 删除记录）的当前行数与保留原因，以及数据库页统计；返回 `{ stats, lastRun, peers }`。 |
+| `GET`          | `/api/v1/maintenance/sync-status`      | 只读容量报告：同步元数据（变更日志、peer 游标、存储清理任务、placement 删除记录及兼容墓碑表）的当前行数与保留原因，以及数据库页统计；返回 `{ stats, lastRun, peers }`。 |
 
 请求参数通过 Zod 校验。错误统一为：
 
@@ -114,6 +114,10 @@
 
 ## 1.2 增量同步
 
+维护策略端点：`GET /api/v1/maintenance/retention` 返回 `{ revisionLimit, trashRetentionMs, attachmentRetentionMs }`；`PUT` 接收同一完整结构并持久化。修订上限为 `-1` 或非负整数，时长为非负整数毫秒，非法请求返回 400。
+
+完整快照返回 `authoritative: true` 及 `generation` 压缩代次。协议 2 客户端通过 `X-Ygdria-Sync-Protocol: 2` 声明支持缺席对账。本地副本在完整快照应用后调用 `POST /api/v1/sync/reconcile`，请求 `{ peerId, presentIds, recoverySuffix, generation }`，其中 `presentIds` 是完整快照的非删除笔记标识，最多 100000 个，响应 `{ removed, recovered }`。`recovered` 是离线修改或未确认创建恢复后的新笔记标识，同一代次重试不重复复制。已认证远端设备无法调用本地对账接口（403）。本地接收远端变更时，可在 `/sync/push` 中携带 `sourcePeer` 记录对象来源。
+
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/v1/sync/changes?cursor=&limit=&maxBytes=&metadataOnly=&peerId=` | 拉取自 `cursor` 之后的变更记录；`limit` 1–500（默认 200），`maxBytes` 64 KiB–16 MiB（默认 4 MiB）控制响应大小上限，`metadataOnly=1` 时不返回笔记正文，`peerId` 用于刷新存活时间与重基线检查；返回 `{ cursor, hasMore, changes, maxChangeId, stats: { serializedBytes, returnedEntities, coalescedChanges } }`。 |
@@ -128,11 +132,11 @@
 
 以上同步端点（含 `snapshot` / `notes/:id/content` / `rebuild`）均属于受保护 API（需设备令牌）。变更记录结构为 `{ changeId, entityType, entityId, changeKind, createdAt, data }`，`entityType` 覆盖 `note` / `placement` / `placement-order` / `relation` / `revision` / `attachment` / `setting`；`changeKind` 为 `created` / `updated` / `deleted`；`data` 在删除时为 `null`，否则为实体快照。对 `note` 而言，无正文的 `deleted` 仅出现在实体已被永久清理之后；仍在回收站中的笔记以 `updated` + 完整状态（含 `deletedAt`）传输。附件文件二进制**不进变更日志**，客户端根据 `attachment.data.contentHash` 调用 `GET /api/v1/attachments/by-hash/:hash` 下载、`POST /api/v1/attachments/by-hash/:hash` 上传，按哈希去重。
 
-`push` 按 `updatedAt` / `createdAt` 时间戳逐记录合并；同一时间戳冲突时按确定性 JSON 序列化顺序选择。`sync_tombstones` 表用于过滤已删除实体，避免旧变更复活数据。**敏感设置不参与同步**：`auth_*`、`protected_session_*`、`server_access_password_*` 前缀的 settings 键既不出现在 `/sync/changes` 的返回中，也无法通过 `/sync/push` 修改——这些键只能通过 `/devices/initialize`、`/protected-session/setup`、`/protected-session/change-password` 等专用端点变更。这避免任何已认证设备通过同步通道覆盖认证材料导致账户接管。
+`push` 按 `updatedAt` / `createdAt` 时间戳逐记录合并；同一时间戳冲突时按确定性 JSON 序列化顺序选择。永久删除由 `sync_change_log` 的 `deleted` 事件表示，协议 2 完整快照以笔记缺席表示删除；v21 起不保留墓碑。**敏感设置不参与同步**：`auth_*`、`protected_session_*`、`server_access_password_*` 前缀的 settings 键既不出现在 `/sync/changes` 的返回中，也无法通过 `/sync/push` 修改——这些键只能通过 `/devices/initialize`、`/protected-session/setup`、`/protected-session/change-password` 等专用端点变更。这避免任何已认证设备通过同步通道覆盖认证材料导致账户接管。
 
 每个 peer 在 `sync_cursors` 表中维护独立的游标记录，游标为 `0` 表示无历史同步。客户端首次同步从快照建立基线。重新认证后，服务端仍会检查旧游标所在的日志区间。
 
-当增量变更日志因过期被 `pruneChangeLog` 修剪、无法从旧游标补拉时，`GET /api/v1/sync/snapshot` 提供全量状态快照作为兜底基线（按 `cursor` 分页，可选 `metadataOnly` 仅取元数据）。快照中的 `note / deleted` 记录来自永久删除墓碑，使用相同的 `push` 合并规则；迁移到一处增量日志已被清空的空白服务器时，客户端应先调用 `POST /api/v1/sync/rebuild` 重建基线游标，再从 `0` 重新拉取。
+当增量变更日志因过期被 `pruneChangeLog` 修剪、无法从旧游标补拉时，`GET /api/v1/sync/snapshot` 提供全量状态快照作为兜底基线（按 `cursor` 分页，可选 `metadataOnly` 仅取元数据）。协议 2 快照不发送永久删除墓碑，客户端根据笔记缺席执行对账；迁移到一处增量日志已被清空的空白服务器时，客户端应先调用 `POST /api/v1/sync/rebuild` 重建基线游标，再从 `0` 重新拉取。
 
 ## 1.3 健康检查与就绪探针
 

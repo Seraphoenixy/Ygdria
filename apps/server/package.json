@@ -18,5 +18,7 @@
     "tsx": "^4.20.3",
     "zod": "^3.24.4"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@ygdria/api-client": "workspace:*"
+  }
 }

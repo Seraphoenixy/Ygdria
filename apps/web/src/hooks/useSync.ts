@@ -8,7 +8,13 @@ import type { Locale } from "../lib/i18n";
 import { t } from "../lib/i18n";
 import { loadRemoteCredential, saveRemoteCredential } from "../lib/credentialStorage";
 import { readSettings } from "../features/settings/settingsStore";
-import { SYNC_REBASELINE_REQUIRED, SYNC_SNAPSHOT_EXPIRED } from "@ygdria/shared";
+import {
+  CALENDAR_NOTE_ID,
+  SYNC_REBASELINE_REQUIRED,
+  SYNC_SNAPSHOT_EXPIRED,
+  SYSTEM_ROOT_NOTE_ID,
+  SYSTEM_TRASH_NOTE_ID,
+} from "@ygdria/shared";
 import { localSyncPeerId, isRebaselineRequiredError } from "../lib/syncIdentity";
 import {
   assertAuthConfigSupported,
@@ -56,6 +62,9 @@ export type SyncConflict = {
 };
 
 const DESKTOP_ONBOARDING_COMPLETE_KEY = "ygdria.desktop-onboarding-complete";
+
+/** Notes provisioned by every database; they are never mergeable content. */
+const SYSTEM_NOTE_IDS = new Set([SYSTEM_ROOT_NOTE_ID, SYSTEM_TRASH_NOTE_ID, CALENDAR_NOTE_ID]);
 
 /** Map in input order while keeping remote sync hydration within a small,
  * bounded connection pool. A snapshot may contain 500 note metadata records;
@@ -218,7 +227,15 @@ export function useSync({
     try {
       const raw = window.localStorage.getItem("ygdria.sync.conflicts");
       const stored = raw ? JSON.parse(raw) : {};
-      return stored && typeof stored === "object" && !Array.isArray(stored) ? stored as Record<string, SyncConflict[]> : {};
+      if (!stored || typeof stored !== "object" || Array.isArray(stored)) return {};
+      // Records written before system notes were excluded from sync can still
+      // name them; those conflicts cannot be resolved through the note API.
+      return Object.fromEntries(
+        Object.entries(stored as Record<string, SyncConflict[]>).map(([peer, list]) => [
+          peer,
+          Array.isArray(list) ? list.filter((item) => !SYSTEM_NOTE_IDS.has(item?.noteId)) : [],
+        ]),
+      );
     } catch {
       return {};
     }
@@ -519,6 +536,10 @@ export function useSync({
       const persistConflict = async (rejected: RejectedSyncChange[], direction: SyncConflictDirection) => {
         for (const change of rejected) {
           if (change.entityType !== "note") continue;
+          // A server that has not been upgraded yet can still report system
+          // notes as rejected; they are provisioned locally and cannot be
+          // resolved through the note API, so they are not user conflicts.
+          if (SYSTEM_NOTE_IDS.has(change.entityId)) continue;
           const conflict = await buildConflict(change, peer, direction);
           const current = syncConflictsByPeerRef.current;
           const byId = new Map((current[peer] ?? []).map((item) => [item.noteId, item]));
@@ -609,14 +630,22 @@ export function useSync({
        */
       const rebaselineFromSnapshotAttempt = async () => {
         const sessionId = crypto.randomUUID();
+        const presentIds: string[] = [];
         let snapshot = await remoteClient.syncSnapshot(0, 500, true, selfPeer, sessionId);
         while (snapshot.changes.length) {
           setSyncProgress(`${t(locale, "syncDownloadBaseline")} · ${snapshot.changes.length}`);
           const hydrated = await hydrateNoteContents(snapshot.changes, remoteClient, sessionId);
-          await client.pushSyncChanges(hydrated, "remote");
+          for (const change of snapshot.changes)
+            if (change.entityType === "note" && change.changeKind !== "deleted") presentIds.push(change.entityId);
+          await client.pushSyncChanges(hydrated, "remote", undefined,
+            (rejected) => persistConflict(rejected, "download"), peer);
           await copyAttachments(snapshot.changes, remoteClient, client, "remote");
           if (!snapshot.hasMore) break;
           snapshot = await remoteClient.syncSnapshot(snapshot.cursor, 500, true, selfPeer, sessionId);
+        }
+        if (snapshot.authoritative) {
+          const result = await client.reconcileSnapshot(peer, presentIds, t(locale, "syncRecoverySuffix"), snapshot.generation ?? 0);
+          if (result.recovered.length) showToast(t(locale, "syncRecoveredNotes", { count: String(result.recovered.length) }));
         }
         await client.advanceSyncCursor(`in:${peer}`, snapshot.maxChangeId);
         await remoteClient.advanceSyncCursor(selfPeer, snapshot.maxChangeId, sessionId);
@@ -679,6 +708,7 @@ export function useSync({
             "remote",
             undefined,
             (rejected) => persistConflict(rejected, "download"),
+            peer,
           );
           await copyAttachments(incoming.changes, remoteClient, client, "remote");
           await client.advanceSyncCursor(`in:${peer}`, incoming.cursor);
